@@ -50,9 +50,17 @@ from pyproj import CRS, Transformer
 import folium
 from streamlit_folium import st_folium
 
+# Streamlit Page Config debe ser la primera llamada de Streamlit
+st.set_page_config(
+    page_title="PNOA to AutoCAD | Ortofotos Georreferenciadas",
+    page_icon="🗺️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 
 # --------------------------------------------------------------------------------------
-# 0. SISTEMA DE RESOLUCIÓN DNS ULTRA-RESILIENTE (DOH FALLBACK)
+# 0. SISTEMA DE RESOLUCIÓN DNS ULTRA-RESILIENTE (DOH FALLBACK PARA IGN)
 # --------------------------------------------------------------------------------------
 if not getattr(socket, "_is_resilient_dns_patched", False):
     _orig_getaddrinfo = socket.getaddrinfo
@@ -67,6 +75,8 @@ if not getattr(socket, "_is_resilient_dns_patched", False):
     ]
 
     def _resolve_host_fallback(hostname: str) -> Optional[str]:
+        if not hostname or "ign.es" not in str(hostname).lower():
+            return None
         if hostname in _dns_cache:
             return _dns_cache[hostname]
         
@@ -1161,10 +1171,4 @@ def render_ui():
 # PUNTO DE ENTRADA PRINCIPAL
 # --------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    st.set_page_config(
-        page_title="PNOA to AutoCAD | Ortofotos Georreferenciadas",
-        page_icon="🗺️",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
     render_ui()
