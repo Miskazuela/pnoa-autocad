@@ -7,11 +7,10 @@ Descripción:
     resolución del Plan Nacional de Ortofotografía Aérea (IGN PNOA) a partir de
     polilíneas cerradas delimitadas en planos CAD (.dxf).
     
-    Genera para cada polígono la tríada de georreferenciación estándar requerida
+    Genera para cada polígono la georreferenciación estándar requerida
     por AutoCAD, AutoCAD Map 3D, Civil 3D y BricsCAD:
       1. {nombre}.tif -> Imagen raster descargada del servicio WMS.
       2. {nombre}.tfw -> Archivo de calibración espacial (World File) con coordenadas exactas.
-      3. {nombre}.prj -> Definición del Sistema de Referencia de Coordenadas (CRS) en formato WKT.
 
     Incluye:
       - Visor cartográfico interactivo (Satélite y PNOA WMS) para verificar la ubicación del DXF.
@@ -49,6 +48,7 @@ from shapely.geometry import Polygon
 from pyproj import CRS, Transformer
 import folium
 from streamlit_folium import st_folium
+from PIL import Image, ImageDraw, ImageChops
 
 # Streamlit Page Config debe ser la primera llamada de Streamlit
 st.set_page_config(
@@ -195,6 +195,27 @@ def load_dxf_document(file_bytes: bytes) -> ezdxf.document.Drawing:
         raise ValueError(f"No fue posible interpretar el archivo DXF: {err}")
 
 
+def get_recommended_resolution(area_m2: float) -> Tuple[float, str, str]:
+    """
+    Calcula la resolución óptima recomendada (m/px) en función del tamaño del área (m²):
+      - < 5.000 m² (< 0.5 ha): 0.25 m/px - Muy Alta (Edificación, solares y detalle máximo)
+      - 5.000 a 25.000 m² (0.5 a 2.5 ha): 0.50 m/px - Alta (Parcelas residenciales / naves)
+      - 25.000 a 150.000 m² (2.5 a 15 ha): 1.00 m/px - Estándar (Urbanizaciones y obras civiles)
+      - 150.000 a 1.000.000 m² (15 a 100 ha): 2.00 m/px - Normal (Grandes fincas rústicas)
+      - > 1.000.000 m² (> 100 ha): 4.00 m/px - Panorámica (Escala comarcal y territorial)
+    """
+    if area_m2 < 5000:
+        return 0.25, "0.25 m/px (Muy Alta)", "Solares y edificación (< 0.5 ha)"
+    elif area_m2 < 25000:
+        return 0.50, "0.50 m/px (Alta)", "Parcelas y naves (0.5 a 2.5 ha)"
+    elif area_m2 < 150000:
+        return 1.00, "1.00 m/px (Estándar)", "Urbanizaciones y obras (2.5 a 15 ha)"
+    elif area_m2 < 1000000:
+        return 2.00, "2.00 m/px (Normal)", "Grandes fincas e infraestructuras (15 a 100 ha)"
+    else:
+        return 4.00, "4.00 m/px (Panorámica)", "Escala territorial (> 100 ha)"
+
+
 def parse_dxf_polygons(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]:
     """
     Extrae todas las polilíneas cerradas (LWPOLYLINE y POLYLINE con closed=True)
@@ -235,19 +256,36 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]
             if width <= 0.001 or height <= 0.001:
                 continue
 
+            # Detectar si la polilínea tiene aristas inclinadas/diagonales
+            is_diagonal = False
+            for i in range(len(pts)):
+                p_prev = pts[i - 1]
+                p_curr = pts[i]
+                dx_edge = abs(p_curr[0] - p_prev[0])
+                dy_edge = abs(p_curr[1] - p_prev[1])
+                if dx_edge > 0.05 and dy_edge > 0.05:
+                    is_diagonal = True
+                    break
+
             clean_layer = sanitize_filename(layer)
             output_name = f"{base_file_prefix}_{clean_layer}_p{polygon_counter}"
+
+            # Calcular resolución recomendada según el tamaño de la superficie
+            rec_res, rec_label, _ = get_recommended_resolution(poly.area)
 
             extracted_polygons.append({
                 "incluir": True,
                 "id": polygon_counter,
                 "capa": layer,
                 "nombre_archivo": output_name,
-                "resolucion_m_px": 1.0,
+                "resolucion_m_px": rec_res,
+                "calidad_sugerida": rec_label,
                 "ancho_m": round(width, 2),
                 "alto_m": round(height, 2),
                 "area_m2": round(poly.area, 2),
                 "num_vertices": len(pts),
+                "tipo_geometria": "📐 Diagonal" if is_diagonal else "⏹️ Ortogonal",
+                "modo_encuadre": "En diagonal (transparente)" if is_diagonal else "Cuadrada (completa)",
                 "bounds": (minx, miny, maxx, maxy),
                 "pts": pts
             })
@@ -467,13 +505,119 @@ def fetch_wms_ortho(
     return resp.content
 
 
+def apply_polygon_mask_to_tiff(
+    tiff_bytes: bytes,
+    bbox_buf: Tuple[float, float, float, float],
+    pts: List[Tuple[float, float]]
+) -> bytes:
+    """
+    Aplica una máscara de transparencia (canal alfa RGBA) a la imagen TIFF descargada,
+    haciendo completamente transparentes los píxeles situados fuera del contorno de la minuta.
+    Esto permite que las minutas en diagonal no tapen el plano en AutoCAD al activar _TRANSPARENCY.
+    """
+    if not pts or len(pts) < 3:
+        return tiff_bytes
+
+    try:
+        img = Image.open(io.BytesIO(tiff_bytes)).convert("RGBA")
+        w, h = img.size
+        minx, miny, maxx, maxy = bbox_buf
+        width_m = maxx - minx
+        height_m = maxy - miny
+
+        if width_m <= 0 or height_m <= 0:
+            return tiff_bytes
+
+        # Proyectar vértices del polígono al espacio de coordenadas de píxeles
+        pixel_coords = [
+            (
+                ((x - minx) / width_m) * w,
+                ((maxy - y) / height_m) * h
+            )
+            for x, y in pts
+        ]
+
+        mask = Image.new("L", (w, h), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.polygon(pixel_coords, fill=255)
+
+        r, g, b, a = img.split()
+        final_alpha = ImageChops.multiply(a, mask)
+        img.putalpha(final_alpha)
+
+        out_io = io.BytesIO()
+        img.save(out_io, format="TIFF", compression="tiff_lzw")
+        return out_io.getvalue()
+    except Exception:
+        # En caso de fallo técnico al aplicar la máscara, preservar la imagen original
+        return tiff_bytes
+
+
+def compute_rotated_bounding_box(
+    pts: List[Tuple[float, float]],
+    buffer_pct: float = 0.04
+) -> Tuple[List[Tuple[float, float]], float, float]:
+    """
+    Calcula el rectángulo mínimo orientado (Oriented Bounding Box) que encierra la minuta,
+    expandido según el buffer porcentual a lo largo de sus ejes principales inclinados.
+    Retorna los 4 vértices del marco en diagonal y sus dimensiones reales (ancho, alto en metros).
+    """
+    poly = Polygon(pts)
+    mrr = poly.minimum_rotated_rectangle
+    coords = list(mrr.exterior.coords)[:-1]
+
+    if len(coords) < 4:
+        minx, miny, maxx, maxy = poly.bounds
+        dx = (maxx - minx) * buffer_pct
+        dy = (maxy - miny) * buffer_pct
+        return [
+            (minx - dx, miny - dy),
+            (maxx + dx, miny - dy),
+            (maxx + dx, maxy + dy),
+            (minx - dx, maxy + dy)
+        ], (maxx - minx) * (1.0 + 2.0 * buffer_pct), (maxy - miny) * (1.0 + 2.0 * buffer_pct)
+
+    cx = sum(c[0] for c in coords) / 4.0
+    cy = sum(c[1] for c in coords) / 4.0
+
+    dx1 = coords[1][0] - coords[0][0]
+    dy1 = coords[1][1] - coords[0][1]
+    l1 = math.hypot(dx1, dy1)
+    u1x, u1y = (dx1 / l1, dy1 / l1) if l1 > 1e-6 else (1.0, 0.0)
+
+    dx2 = coords[2][0] - coords[1][0]
+    dy2 = coords[2][1] - coords[1][1]
+    l2 = math.hypot(dx2, dy2)
+    u2x, u2y = (dx2 / l2, dy2 / l2) if l2 > 1e-6 else (0.0, 1.0)
+
+    h1 = (l1 / 2.0) * (1.0 + 2.0 * buffer_pct)
+    h2 = (l2 / 2.0) * (1.0 + 2.0 * buffer_pct)
+
+    c0 = (cx - h1 * u1x - h2 * u2x, cy - h1 * u1y - h2 * u2y)
+    c1 = (cx + h1 * u1x - h2 * u2x, cy + h1 * u1y - h2 * u2y)
+    c2 = (cx + h1 * u1x + h2 * u2x, cy + h1 * u1y + h2 * u2y)
+    c3 = (cx - h1 * u1x + h2 * u2x, cy - h1 * u1y + h2 * u2y)
+
+    ancho_m = l1 * (1.0 + 2.0 * buffer_pct)
+    alto_m = l2 * (1.0 + 2.0 * buffer_pct)
+
+    return [c0, c1, c2, c3], ancho_m, alto_m
+
+
 # --------------------------------------------------------------------------------------
 # 4. MAPA INTERACTIVO DE CONFIRMACIÓN DE UBICACIÓN
 # --------------------------------------------------------------------------------------
-def generate_preview_map(polygons: List[Dict[str, Any]], crs_str: str) -> Optional[folium.Map]:
+def generate_preview_map(
+    polygons: List[Dict[str, Any]],
+    crs_str: str,
+    buffer_pct: float = 0.04,
+    mode_view: str = "auto"
+) -> Optional[folium.Map]:
     """
     Reproyecta los vértices de los polígonos al sistema WGS 84 (EPSG:4326)
     y crea un mapa interactivo con ortofotografía satelital y capas PNOA.
+    Muestra tanto el contorno de la geometría CAD como el polígono envolvente
+    del encuadre exacto de la imagen de salida TIF resultante (en diagonal o cuadrada).
     """
     if not polygons:
         return None
@@ -490,8 +634,10 @@ def generate_preview_map(polygons: List[Dict[str, Any]], crs_str: str) -> Option
 
     for p in polygons:
         pts = p.get("pts", [])
-        if not pts:
+        bounds = p.get("bounds")
+        if not pts or not bounds:
             continue
+
         latlon_ring = []
         for x, y in pts:
             try:
@@ -503,10 +649,52 @@ def generate_preview_map(polygons: List[Dict[str, Any]], crs_str: str) -> Option
             except Exception:
                 continue
 
+        # Determinar si mostrar el encuadre en diagonal u ortogonal cuadrado
+        p_mode = p.get("modo_encuadre", "En diagonal (transparente)")
+        if mode_view == "diagonal":
+            use_diagonal = True
+        elif mode_view == "cuadrada":
+            use_diagonal = False
+        else:
+            use_diagonal = "diagonal" in str(p_mode).lower()
+
+        if use_diagonal:
+            bbox_corners, width_salida, height_salida = compute_rotated_bounding_box(pts, buffer_pct)
+            encuadre_tipo = "📐 Marco en Diagonal (Orientado)"
+        else:
+            minx, miny, maxx, maxy = bounds
+            dx = (maxx - minx) * buffer_pct
+            dy = (maxy - miny) * buffer_pct
+            bbox_buf = (minx - dx, miny - dy, maxx + dx, maxy + dy)
+            width_salida = bbox_buf[2] - bbox_buf[0]
+            height_salida = bbox_buf[3] - bbox_buf[1]
+            bbox_corners = [
+                (bbox_buf[0], bbox_buf[1]),
+                (bbox_buf[2], bbox_buf[1]),
+                (bbox_buf[2], bbox_buf[3]),
+                (bbox_buf[0], bbox_buf[3])
+            ]
+            encuadre_tipo = "🖼️ Marco Cuadrado (Ortogonal)"
+
+        bbox_latlon = []
+        for x, y in bbox_corners:
+            try:
+                lon, lat = transformer.transform(x, y)
+                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                    bbox_latlon.append([lat, lon])
+                    all_lats.append(lat)
+                    all_lons.append(lon)
+            except Exception:
+                continue
+
         if len(latlon_ring) >= 3:
             converted_polygons.append({
                 "info": p,
                 "locations": latlon_ring,
+                "bbox_locations": bbox_latlon,
+                "width_salida": round(width_salida, 1),
+                "height_salida": round(height_salida, 1),
+                "encuadre_tipo": encuadre_tipo,
                 "center": [sum(pt[0] for pt in latlon_ring)/len(latlon_ring), sum(pt[1] for pt in latlon_ring)/len(latlon_ring)]
             })
 
@@ -549,26 +737,45 @@ def generate_preview_map(polygons: List[Dict[str, Any]], crs_str: str) -> Option
         control=True
     ).add_to(m)
 
-    folium.TileLayer(
-        tiles="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-        attr="&copy; OpenStreetMap contributors &copy; CARTO",
-        name="🌙 Modo Oscuro (CartoDB Dark)",
-        overlay=False,
-        control=True
-    ).add_to(m)
-
     colors = ["#f59e0b", "#06b6d4", "#10b981", "#ec4899", "#8b5cf6", "#3b82f6"]
     for i, poly_item in enumerate(converted_polygons):
         p_info = poly_item["info"]
         col = colors[i % len(colors)]
 
+        # 1. Polígono del Marco de la Imagen de Salida (TIF resultante con buffer)
+        if len(poly_item["bbox_locations"]) == 4:
+            bbox_popup_html = f"""
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.5; min-width: 210px; color: #f8fafc;">
+                <div style="color: {col}; font-size: 14px; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">🖼️ Imagen de Salida TIF #{p_info['id']}</div>
+                <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Archivo:</b> <span style="font-family: monospace;">{p_info['nombre_archivo']}.tif</span></div>
+                <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Encuadre:</b> {poly_item['width_salida']} × {poly_item['height_salida']} m</div>
+                <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Tipo de marco:</b> <span style="color: #38bdf8;">{poly_item['encuadre_tipo']}</span></div>
+                <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Buffer perimetral:</b> {round(buffer_pct * 100)}%</div>
+                <div><b style="color: #94a3b8;">Calidad recomendada:</b> <span style="color: #10b981; font-weight: 600;">{p_info.get('calidad_sugerida', '1.00 m/px')}</span></div>
+            </div>
+            """
+
+            folium.Polygon(
+                locations=poly_item["bbox_locations"],
+                color=col,
+                weight=2,
+                dash_array="6, 6",
+                fill=True,
+                fill_color=col,
+                fill_opacity=0.10,
+                popup=folium.Popup(bbox_popup_html, max_width=320),
+                tooltip=f"🖼️ Salida #{p_info['id']} ({poly_item['encuadre_tipo']}) | {poly_item['width_salida']}m × {poly_item['height_salida']}m"
+            ).add_to(m)
+
+        # 2. Polígono de la Geometría CAD (Minuta interior)
         popup_html = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.5; min-width: 190px; color: #f8fafc;">
-            <div style="color: {col}; font-size: 14px; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">Polígono #{p_info['id']}</div>
+            <div style="color: {col}; font-size: 14px; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">📐 Minuta CAD #{p_info['id']}</div>
             <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Capa CAD:</b> <span style="background: #334155; padding: 1px 5px; border-radius: 4px; font-family: monospace;">{p_info['capa']}</span></div>
             <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Nombre:</b> {p_info['nombre_archivo']}</div>
             <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Dimensiones:</b> {p_info['ancho_m']} × {p_info['alto_m']} m</div>
-            <div><b style="color: #94a3b8;">Área aprox.:</b> <span style="color: #38bdf8; font-weight: 600;">{p_info['area_m2']:,} m²</span> ({(p_info['area_m2']/10000):.2f} ha)</div>
+            <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Área:</b> <span style="color: #38bdf8; font-weight: 600;">{p_info['area_m2']:,} m²</span> ({(p_info['area_m2']/10000):.2f} ha)</div>
+            <div><b style="color: #94a3b8;">Calidad sugerida:</b> <span style="color: #10b981; font-weight: 600;">{p_info.get('calidad_sugerida', '1.00 m/px')}</span></div>
         </div>
         """
 
@@ -580,7 +787,7 @@ def generate_preview_map(polygons: List[Dict[str, Any]], crs_str: str) -> Option
             fill_color=col,
             fill_opacity=0.35,
             popup=folium.Popup(popup_html, max_width=300),
-            tooltip=f"ID #{p_info['id']} | {p_info['capa']} ({p_info['ancho_m']}m × {p_info['alto_m']}m)"
+            tooltip=f"📐 Minuta CAD #{p_info['id']} | {p_info['capa']} ({p_info['ancho_m']}m × {p_info['alto_m']}m)"
         ).add_to(m)
 
         folium.CircleMarker(
@@ -697,7 +904,7 @@ def render_ui():
         "Sistema de Referencia (CRS):",
         options=list(crs_options.keys()),
         index=0,
-        help="Define la proyección cartográfica de tu plano CAD y del archivo .prj generado."
+        help="Define la proyección cartográfica de tu plano CAD para el consumo WMS y calibración espacial."
     )
 
     if crs_options[selected_crs_label] == 0:
@@ -715,14 +922,25 @@ def render_ui():
 
     try:
         pyproj_crs = CRS.from_epsg(epsg_code)
-        wkt_prj_str = pyproj_crs.to_wkt()
         st.sidebar.caption(f"✅ Proyección activa: **{pyproj_crs.name}**")
     except Exception as crs_err:
         st.sidebar.error(f"⚠️ Código EPSG no reconocido: {crs_err}")
-        wkt_prj_str = ""
 
-    # 2. Buffer porcentual de encuadre
-    st.sidebar.subheader("2. Encuadre y Margen")
+    # 2. Buffer porcentual de encuadre y formato de minutas
+    st.sidebar.subheader("2. Encuadre y Minutas en Diagonal")
+    encuadre_mode_global = st.sidebar.radio(
+        "Formato por defecto para minutas:",
+        options=[
+            "✂️ En diagonal (fondo transparente)",
+            "🖼️ Cuadrada cubriendo todo"
+        ],
+        index=0,
+        help=(
+            "• 'En diagonal': Recorta la ortofoto exactamente por el contorno de la minuta dejando el fondo exterior transparente (RGBA). "
+            "Al insertarla en AutoCAD, solo se verá la minuta y no tapará las capas ni los dibujos alrededor.\n"
+            "• 'Cuadrada cubriendo todo': Descarga la ortofoto completa cubriendo toda la caja envolvente con los alrededores."
+        )
+    )
     buffer_slider = st.sidebar.slider(
         "Buffer porcentual (%):",
         min_value=0,
@@ -787,7 +1005,7 @@ def render_ui():
     st.markdown("""
     <div class="main-header">
         <h1>📐 Extractor de Ortofotos PNOA para AutoCAD</h1>
-        <p>Automatización de ortofotos georreferenciadas (PNOA España) en tríada TIF + TFW + PRJ sin necesidad de QGIS ni ArcGIS.</p>
+        <p>Automatización de ortofotos georreferenciadas (PNOA España) en formato TIF + TFW sin necesidad de QGIS ni ArcGIS.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -795,16 +1013,16 @@ def render_ui():
         st.markdown("""
         **Instrucciones para delineantes, topógrafos e ingenieros:**
         1. **Carga tu archivo `.dxf`**: El dibujo debe contener polilíneas cerradas (`LWPOLYLINE` o `POLYLINE`) que delimiten el ámbito de trabajo.
-        2. **Verifica la ubicación en el visor interactivo**: Confirma visualmente que las geometrías caen sobre la ortofoto aérea en la posición real de tu proyecto.
+        2. **Verifica la ubicación en el visor interactivo**: Confirma visualmente que las geometrías caen sobre la ortofoto aérea en la posición real de tu proyecto y revisa el recuadro de salida.
         3. **Personaliza la resolución (m/px)**: Define el nivel de detalle requerido por cada polígono (ej. 0.5 m/px para edificación, 1.0 o 2.0 m/px para obras civiles).
-        4. **Descarga el `.zip`**: Contiene la tríada georreferenciada para cada polígono:
+        4. **Descarga el `.zip`**: Contiene los archivos georreferenciados para cada polígono:
            - **`.tif`**: Imagen ortofoto descargada del servidor WMS del IGN.
            - **`.tfw`**: Archivo *World File* con el tamaño de píxel y coordenadas UTM de la esquina superior izquierda.
-           - **`.prj`**: Archivo de proyección WKT compatible con AutoCAD Map 3D, Civil 3D y QGIS.
         
         **Cómo insertar en AutoCAD en su posición UTM exacta:**
-        - **AutoCAD Map 3D / Civil 3D**: Usa el comando `_MAPIINSERT` (o ve a *Insertar* -> *Imagen ráster*). Al seleccionar los archivos `.tif`, AutoCAD detectará automáticamente los archivos `.tfw` asociados e insertará las ortofotos en sus **coordenadas reales de proyecto**, encajando teselas de mosaico a la perfección.
+        - **AutoCAD Map 3D / Civil 3D**: Usa el comando `_MAPIINSERT` (o ve a *Insertar* -> *Imagen ráster*). Al seleccionar los archivos `.tif`, AutoCAD detectará automáticamente los archivos `.tfw` asociados e insertará las ortofotos en sus **coordenadas reales de proyecto**, encajando teselas de mosaico a la perfección y reconociendo el canal alfa transparente.
         - **AutoCAD Estándar / LT**: Inserta mediante el comando `_IMAGEATTACH` (`ENLAZARIMG`).
+        - **Minutas en diagonal con fondo transparente**: Para que los bordes exteriores no tapen el dibujo en AutoCAD, selecciona la imagen y activa su transparencia ejecutando el comando `_TRANSPARENCY` -> `ACT` (o en la paleta de Propiedades `Ctrl+1`, pon *Transparencia* = *Sí*).
         """)
 
     if "processed_zip_data" not in st.session_state:
@@ -831,7 +1049,7 @@ def render_ui():
     with col_demo:
         st.write("")
         st.write("")
-        btn_demo = st.button("🧪 Probar con DXF de ejemplo", help="Genera un plano DXF con 2 parcelas en Madrid (EPSG:25830)")
+        btn_demo = st.button("🧪 Probar con DXF de ejemplo", help="Genera un plano DXF con parcelas en Madrid (EPSG:25830), incluyendo una minuta en diagonal")
         if btn_demo:
             st.session_state["demo_active"] = True
             st.session_state["processed_zip_data"] = None
@@ -847,21 +1065,26 @@ def render_ui():
         demo_doc = ezdxf.new("R2010")
         demo_msp = demo_doc.modelspace()
         
-        # Parcela 1: Entorno Paseo de la Castellana / Nuevos Ministerios
-        p1 = [(441200, 4478100), (441500, 4478100), (441500, 4478350), (441200, 4478350)]
+        # Parcela 1: Solar urbano en Madrid (Área pequeña < 0.5 ha -> 0.25 m/px Muy Alta)
+        p1 = [(441300, 4478100), (441360, 4478100), (441360, 4478150), (441300, 4478150)]
         poly1 = demo_msp.add_lwpolyline(p1, close=True)
-        poly1.dxf.layer = "PARCELA_NORTE"
+        poly1.dxf.layer = "SOLAR_EDIFICACION"
         
-        # Parcela 2: Entorno Parque del Retiro
-        p2 = [(441800, 4473800), (442150, 4473800), (442150, 4474100), (441800, 4474100)]
+        # Parcela 2: Parcela industrial / nave en Madrid (1.2 ha -> 0.50 m/px Alta)
+        p2 = [(441800, 4473800), (441920, 4473800), (441920, 4473900), (441800, 4473900)]
         poly2 = demo_msp.add_lwpolyline(p2, close=True)
-        poly2.dxf.layer = "PARCELA_SUR"
+        poly2.dxf.layer = "PARCELA_INDUSTRIAL"
+
+        # Parcela 3: Minuta en diagonal (orientada a ~30° en Madrid, 6.0 ha -> 1.00 m/px Estándar)
+        p3 = [(441300, 4476800), (441600, 4476980), (441480, 4477180), (441180, 4477000)]
+        poly3 = demo_msp.add_lwpolyline(p3, close=True)
+        poly3.dxf.layer = "MINUTA_DIAGONAL"
 
         out_str = io.StringIO()
         demo_doc.write(out_str)
         dxf_bytes = out_str.getvalue().encode("utf-8")
         dxf_display_name = "demo_madrid_pnoa.dxf"
-        st.info("💡 Modo de demostración activo: Plano de muestra con 2 parcelas cerradas en Madrid (EPSG:25830).")
+        st.info("💡 Modo de demostración activo: Plano con 3 geometrías en Madrid (EPSG:25830), incluyendo una minuta en diagonal.")
 
     # ----------------------------------------------------------------------------------
     # EXTRACCIÓN Y VISOR CARTOGRÁFICO DE CONFIRMACIÓN
@@ -888,34 +1111,100 @@ def render_ui():
                 col_m3.metric("Proyección", crs_str)
                 col_m4.metric("Buffer aplicado", f"{buffer_slider}%")
 
-                # VISOR CARTOGRÁFICO INTERACTIVO PARA CONFIRMAR UBICACIÓN
-                st.markdown("### 🗺️ Confirmación Visual de Ubicación")
-                st.caption(
-                    "Verifica sobre la fotografía satelital que las polilíneas de tu DXF se sitúan exactamente "
-                    "en el emplazamiento correcto de tu proyecto. Puedes alternar entre la capa Satelital HD y PNOA WMS."
-                )
+                # Inicializar y sincronizar el estado de la tabla antes de renderizar el mapa
+                state_key = f"df_{dxf_display_name}_{len(extracted_polygons)}"
+                if state_key not in st.session_state:
+                    table_data = []
+                    for p in extracted_polygons:
+                        row_copy = dict(p)
+                        row_copy.pop("pts", None)
+                        table_data.append(row_copy)
+                    st.session_state[state_key] = pd.DataFrame(table_data)
 
-                preview_map = generate_preview_map(extracted_polygons, crs_str)
+                active_df = st.session_state[state_key]
+
+                # Sincronizar el modo de encuadre asignado en la tabla hacia los polígonos
+                if not active_df.empty and "modo_encuadre" in active_df.columns:
+                    mode_map = dict(zip(active_df["id"], active_df["modo_encuadre"]))
+                    for p in extracted_polygons:
+                        if p["id"] in mode_map:
+                            p["modo_encuadre"] = mode_map[p["id"]]
+
+                # VISOR CARTOGRÁFICO INTERACTIVO PARA CONFIRMAR UBICACIÓN
+                st.markdown("---")
+                col_map_t, col_map_opt = st.columns([2.7, 2.3])
+                with col_map_t:
+                    st.markdown("### 🗺️ Confirmación Visual de Ubicación y Encuadre de Salida")
+                    st.caption(
+                        "Verifica en el visor interactivo la ubicación de tus geometrías CAD (**contorno sólido**) "
+                        "y el **recuadro de la imagen de salida TIF** que se descargará (**línea discontinua** con buffer)."
+                    )
+                with col_map_opt:
+                    map_view_mode = st.radio(
+                        "📐 Formato de 'Imagen de Salida' a visualizar:",
+                        options=[
+                            "✂️ En diagonal (Orientada)",
+                            "🖼️ Cuadrada (Ortogonal)",
+                            "🎛️ Según selección individual"
+                        ],
+                        index=0 if "diagonal" in encuadre_mode_global.lower() else 1,
+                        horizontal=True,
+                        help=(
+                            "• 'En diagonal (Orientada)': El recuadro de salida gira siguiendo la orientación exacta de la minuta.\n"
+                            "• 'Cuadrada (Ortogonal)': El recuadro de salida se muestra cuadrado/ortogonal envolviendo todo.\n"
+                            "• 'Según selección individual': Cada polígono muestra su marco según lo asignado en la tabla."
+                        )
+                    )
+
+                if "diagonal" in map_view_mode.lower():
+                    chosen_mode = "diagonal"
+                elif "cuadrada" in map_view_mode.lower():
+                    chosen_mode = "cuadrada"
+                else:
+                    chosen_mode = "auto"
+
+                preview_map = generate_preview_map(
+                    extracted_polygons,
+                    crs_str,
+                    buffer_pct=buffer_pct,
+                    mode_view=chosen_mode
+                )
                 if preview_map is not None:
-                    st_folium(preview_map, use_container_width=True, height=460, returned_objects=[])
+                    st_folium(preview_map, use_container_width=True, height=470, returned_objects=[])
                 else:
                     st.info("ℹ️ No fue posible proyectar las geometrías sobre el mapa. Comprueba que el CRS coincida con las coordenadas del plano.")
 
                 # TABLA DE PERSONALIZACIÓN Y RESOLUCIÓN
                 st.markdown("---")
-                st.markdown("### 📋 Personalización de Polígonos y Resolución")
+                st.markdown("### 📋 Personalización de Polígonos y Recomendación de Calidad")
 
-                q1, q2, q3 = st.columns([2, 1.5, 1.5])
+                with st.expander("💡 Guía de Calidad Recomendada de Imagen según el Tamaño del Área", expanded=False):
+                    st.markdown("""
+                    La aplicación analiza el área ($m^2$ y hectáreas) de cada polígono CAD y asigna automáticamente la resolución óptima recomendada para obtener el máximo nivel de detalle sin sobrecargar la memoria ni exceder los límites de descarga del IGN:
+                    
+                    | Superficie de la Geometría | Nivel de Calidad | Resolución Sugerida ($m/px$) | Tipo de Proyecto / Uso Habitual |
+                    | :--- | :--- | :--- | :--- |
+                    | **< 5.000 m²** (< 0.5 ha) | 🌟 **Muy Alta** | `0.25 m/px` | Solares urbanos, parcelas pequeñas, edificación y detalle fino |
+                    | **5.000 a 25.000 m²** (0.5 a 2.5 ha) | 🔍 **Alta** | `0.50 m/px` | Parcelas y naves industriales, urbanizaciones compactas |
+                    | **25.000 a 150.000 m²** (2.5 a 15 ha) | 📐 **Estándar** | `1.00 m/px` | Obras lineales medianas, polígonos, desarrollos urbanísticos |
+                    | **150.000 a 1.000.000 m²** (15 a 100 ha) | 🚜 **Normal** | `2.00 m/px` | Grandes fincas rústicas, parques solares, infraestructuras |
+                    | **> 1.000.000 m²** (> 100 ha) | 🗺️ **Panorámica** | `4.00 m/px` | Escala territorial, términos municipales, cuencas |
+                    
+                    *Nota: Cada fila ha sido inicializada automáticamente con la resolución recomendada. Puedes ajustar los valores a tu gusto de manera individual o por lotes.*
+                    """)
+
+                q1, q2, q3, q4, q5 = st.columns([2.0, 1.1, 1.4, 1.2, 1.5])
                 with q1:
                     preset_res = st.selectbox(
                         "Resolución rápida sugerida:",
                         options=[
                             "Mantener selección individual",
-                            "0.25 m/px - Muy Alta (Detalle máximo)",
-                            "0.50 m/px - Alta (Pequeño)",
-                            "1.00 m/px - Estándar (Mediano)",
-                            "2.00 m/px - Normal (Grandes obras)",
-                            "4.00 m/px - Panorámica (Territorial)"
+                            "🪄 Recomendada según área (Auto)",
+                            "0.25 m/px - Muy Alta (< 0.5 ha)",
+                            "0.50 m/px - Alta (0.5 a 2.5 ha)",
+                            "1.00 m/px - Estándar (2.5 a 15 ha)",
+                            "2.00 m/px - Normal (15 a 100 ha)",
+                            "4.00 m/px - Panorámica (> 100 ha)"
                         ],
                         index=0
                     )
@@ -928,27 +1217,47 @@ def render_ui():
                 with q3:
                     st.write("")
                     st.write("")
+                    btn_apply_rec = st.button("🪄 Calidad sugerida", use_container_width=True, help="Restaura la resolución recomendada según el área en m² de cada polígono")
+
+                with q4:
+                    st.write("")
+                    st.write("")
                     btn_invert_sel = st.button("Alternar selección", use_container_width=True)
 
-                state_key = f"df_{dxf_display_name}_{len(extracted_polygons)}"
-                if state_key not in st.session_state:
-                    table_data = []
-                    for p in extracted_polygons:
-                        row_copy = dict(p)
-                        row_copy.pop("pts", None)
-                        table_data.append(row_copy)
-                    st.session_state[state_key] = pd.DataFrame(table_data)
+                with q5:
+                    st.write("")
+                    st.write("")
+                    btn_toggle_crop = st.button("Alternar encuadre", use_container_width=True, help="Alterna entre 'En diagonal' y 'Cuadrada' para todas las filas")
 
-                active_df = st.session_state[state_key]
+                if btn_apply_rec:
+                    for idx, row in active_df.iterrows():
+                        rec_res, rec_label, _ = get_recommended_resolution(float(row.get("area_m2", 0)))
+                        active_df.at[idx, "resolucion_m_px"] = rec_res
+                        active_df.at[idx, "calidad_sugerida"] = rec_label
+                    st.session_state[state_key] = active_df
+                    st.rerun()
 
                 if btn_apply_all and preset_res != "Mantener selección individual":
-                    val = float(preset_res.split(" ")[0])
-                    active_df["resolucion_m_px"] = val
+                    if "Recomendada" in preset_res:
+                        for idx, row in active_df.iterrows():
+                            rec_res, rec_label, _ = get_recommended_resolution(float(row.get("area_m2", 0)))
+                            active_df.at[idx, "resolucion_m_px"] = rec_res
+                            active_df.at[idx, "calidad_sugerida"] = rec_label
+                    else:
+                        val = float(preset_res.split(" ")[0])
+                        active_df["resolucion_m_px"] = val
                     st.session_state[state_key] = active_df
                     st.rerun()
 
                 if btn_invert_sel:
                     active_df["incluir"] = not active_df["incluir"].all()
+                    st.session_state[state_key] = active_df
+                    st.rerun()
+
+                if btn_toggle_crop and not active_df.empty and "modo_encuadre" in active_df.columns:
+                    first_val = str(active_df["modo_encuadre"].iloc[0])
+                    new_val = "Cuadrada (completa)" if "diagonal" in first_val.lower() else "En diagonal (transparente)"
+                    active_df["modo_encuadre"] = new_val
                     st.session_state[state_key] = active_df
                     st.rerun()
 
@@ -960,15 +1269,37 @@ def render_ui():
                     ),
                     "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
                     "capa": st.column_config.TextColumn("Capa CAD", disabled=True, width="medium"),
-                    "nombre_archivo": st.column_config.TextColumn(
-                        "Nombre Base Archivo",
-                        help="Nombre que recibirán los archivos .tif, .tfw y .prj",
+                    "tipo_geometria": st.column_config.TextColumn(
+                        "Orientación",
+                        help="Indica si la geometría es inclinada (diagonal) u ortogonal",
+                        disabled=True,
+                        width="small"
+                    ),
+                    "modo_encuadre": st.column_config.SelectboxColumn(
+                        "Formato Descarga",
+                        help="Elige si descargar recortada en diagonal (fondo transparente) o cuadrada cubriendo todo",
+                        options=[
+                            "En diagonal (transparente)",
+                            "Cuadrada (completa)"
+                        ],
                         required=True,
-                        width="large"
+                        width="medium"
+                    ),
+                    "area_m2": st.column_config.NumberColumn(
+                        "Área (m²)",
+                        disabled=True,
+                        format="%.1f m²",
+                        help="Superficie total encerrada por la polilínea CAD"
+                    ),
+                    "calidad_sugerida": st.column_config.TextColumn(
+                        "Calidad Sugerida",
+                        help="Resolución recomendada por el sistema según el área de la geometría",
+                        disabled=True,
+                        width="medium"
                     ),
                     "resolucion_m_px": st.column_config.NumberColumn(
                         "Resolución (m/px)",
-                        help="Tamaño de píxel en metros (Opciones: Pequeño 0.5, Mediano 1.0, Normal 2.0, Grande 4.0 o manual)",
+                        help="Tamaño de píxel en metros (Personalizable: Muy Alta 0.25, Alta 0.50, Estándar 1.00, Normal 2.00, Panorámica 4.00 o manual)",
                         min_value=0.1,
                         max_value=20.0,
                         step=0.25,
@@ -976,16 +1307,28 @@ def render_ui():
                         required=True,
                         width="medium"
                     ),
+                    "nombre_archivo": st.column_config.TextColumn(
+                        "Nombre Base Archivo",
+                        help="Nombre que recibirán los archivos .tif y .tfw",
+                        required=True,
+                        width="large"
+                    ),
                     "ancho_m": st.column_config.NumberColumn("Ancho (m)", disabled=True, format="%.1f m"),
                     "alto_m": st.column_config.NumberColumn("Alto (m)", disabled=True, format="%.1f m"),
-                    "area_m2": st.column_config.NumberColumn("Área (m²)", disabled=True, format="%.1f m²"),
                     "num_vertices": st.column_config.NumberColumn("Vértices", disabled=True),
                     "bounds": None
                 }
 
+                column_order = [
+                    "incluir", "id", "capa", "tipo_geometria", "modo_encuadre",
+                    "area_m2", "calidad_sugerida", "resolucion_m_px",
+                    "nombre_archivo", "ancho_m", "alto_m", "num_vertices"
+                ]
+
                 edited_df = st.data_editor(
                     active_df,
                     column_config=column_config,
+                    column_order=column_order,
                     hide_index=True,
                     use_container_width=True,
                     num_rows="fixed",
@@ -997,14 +1340,38 @@ def render_ui():
                 st.info(f"📍 **{len(selected_rows)}** polígono(s) seleccionado(s) para descarga.")
 
                 # ------------------------------------------------------------------------------
-                # BOTÓN DE DESCARGA Y PROCESAMIENTO WMS
+                # OPCIONES DE ENCUADRE Y BOTÓN DE DESCARGA WMS
                 # ------------------------------------------------------------------------------
+                st.markdown("#### 📐 Formato de Descarga para Minutas")
+                if "diagonal" in map_view_mode.lower():
+                    diag_default_idx = 0
+                elif "cuadrada" in map_view_mode.lower():
+                    diag_default_idx = 1
+                else:
+                    diag_default_idx = 2
+
+                download_crop_mode = st.radio(
+                    "Elige cómo descargar las ortofotos de las minutas:",
+                    options=[
+                        "✂️ En diagonal (Recorte transparente según la minuta - no tapa en AutoCAD)",
+                        "🖼️ Cuadrada cubriendo todo (Imagen ortogonal completa con entorno)",
+                        "🎛️ Usar selección individual de la tabla"
+                    ],
+                    index=diag_default_idx,
+                    horizontal=True,
+                    help=(
+                        "• 'En diagonal': Hace transparente el área exterior al polígono para no tapar el dibujo en AutoCAD.\n"
+                        "• 'Cuadrada cubriendo todo': Descarga la imagen envolvente completa sin recortar.\n"
+                        "• 'Usar selección individual de la tabla': Respeta lo asignado en la columna 'Formato Descarga' de cada polígono."
+                    )
+                )
+
                 st.write("")
                 btn_process = st.button(
                     "🚀 Descargar Ortofotos y Generar Georreferenciación",
                     type="primary",
                     use_container_width=True,
-                    disabled=(len(selected_rows) == 0 or not wkt_prj_str)
+                    disabled=(len(selected_rows) == 0)
                 )
 
                 if btn_process:
@@ -1022,6 +1389,7 @@ def render_ui():
                     summary_log = []
                     used_names = set()
                     total_count = len(selected_rows)
+                    polygons_by_id = {p["id"]: p for p in extracted_polygons}
 
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                         for idx, row in enumerate(selected_rows):
@@ -1030,6 +1398,15 @@ def render_ui():
                             clean_base = sanitize_filename(row["nombre_archivo"])
                             pixel_size = float(row["resolucion_m_px"])
                             bounds = row["bounds"]
+
+                            poly_info = polygons_by_id.get(row.get("id"), {})
+                            poly_pts = poly_info.get("pts", [])
+
+                            # Determinar si aplicar recorte en diagonal
+                            if "individual" in download_crop_mode.lower():
+                                apply_diagonal_crop = "diagonal" in str(row.get("modo_encuadre", "")).lower()
+                            else:
+                                apply_diagonal_crop = "diagonal" in download_crop_mode.lower()
 
                             # Determinar tareas de descarga (única o teselas)
                             if "mosaico" in large_area_mode.lower():
@@ -1059,8 +1436,9 @@ def render_ui():
                                     counter += 1
                                 used_names.add(final_name)
 
+                                format_desc = "en diagonal (transparente)" if apply_diagonal_crop else "cuadrada completa"
                                 status_text.markdown(
-                                    f"⏳ **Descargando [{idx + 1}/{total_count}]:** `{final_name}.tif` "
+                                    f"⏳ **Descargando [{idx + 1}/{total_count}]:** `{final_name}.tif` [{format_desc}] "
                                     f"({job['ancho_px']} × {job['alto_px']} px, res: {abs(job['pixel_x']):.2f} m/px)..."
                                 )
 
@@ -1075,19 +1453,27 @@ def render_ui():
                                         alto_px=job["alto_px"]
                                     )
 
+                                    if apply_diagonal_crop and poly_pts:
+                                        img_bytes = apply_polygon_mask_to_tiff(
+                                            tiff_bytes=img_bytes,
+                                            bbox_buf=job["bbox_buf"],
+                                            pts=poly_pts
+                                        )
+
                                     zf.writestr(f"{final_name}.tif", img_bytes)
                                     zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
-                                    zf.writestr(f"{final_name}.prj", wkt_prj_str.encode("utf-8"))
 
                                     size_kb = len(img_bytes) / 1024.0
                                     scaled_note = " (ajustado al límite del IGN)" if job.get("scaled", False) else ""
+                                    mode_note = " [✂️ Recorte diagonal transparente]" if apply_diagonal_crop else " [🖼️ Cuadrada completa]"
                                     log_expander.success(
                                         f"✅ [{final_name}] Descargado ({job['ancho_px']} × {job['alto_px']} px, "
-                                        f"{size_kb:.1f} KB, res: {abs(job['pixel_x']):.3f} m/px){scaled_note}"
+                                        f"{size_kb:.1f} KB, res: {abs(job['pixel_x']):.3f} m/px){scaled_note}{mode_note}"
                                     )
 
                                     summary_log.append({
                                         "Archivo": final_name,
+                                        "Formato": "✂️ En diagonal (transparente)" if apply_diagonal_crop else "🖼️ Cuadrada completa",
                                         "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
                                         "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
                                         "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px",
@@ -1101,6 +1487,7 @@ def render_ui():
                                     log_expander.error(f"❌ [{final_name}] Error: {err_msg}")
                                     summary_log.append({
                                         "Archivo": final_name,
+                                        "Formato": "✂️ En diagonal" if apply_diagonal_crop else "🖼️ Cuadrada",
                                         "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
                                         "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
                                         "Resolución Real": "-",
@@ -1137,9 +1524,16 @@ def render_ui():
         with c1:
             st.success("🎉 **¡Paquete de georreferenciación generado exitosamente!**")
             st.markdown(
-                "El paquete ZIP contiene los archivos **`.tif` + `.tfw` + `.prj`** listos para ser "
+                "El paquete ZIP contiene los archivos **`.tif` + `.tfw`** listos para ser "
                 "insertados en AutoCAD mediante `_MAPIINSERT` o `_IMAGEATTACH`."
             )
+            has_diagonal = any("diagonal" in str(item.get("Formato", "")).lower() for item in st.session_state.get("processed_summary", []))
+            if has_diagonal:
+                st.info(
+                    "💡 **Minutas en diagonal con fondo transparente en AutoCAD:**\n\n"
+                    "- **AutoCAD Map 3D / Civil 3D**: Al usar `_MAPIINSERT`, AutoCAD reconoce automáticamente el canal alfa de transparencia.\n"
+                    "- **AutoCAD Estándar / LT**: Selecciona la imagen insertada y activa la propiedad de transparencia ejecutando el comando `_TRANSPARENCY` -> `ACT` (o en la paleta de Propiedades `Ctrl+1` -> *Transparencia* = *Sí*). Así los bordes exteriores no taparán tu plano."
+                )
             st.download_button(
                 label="📥 Descargar Paquete ZIP para AutoCAD",
                 data=st.session_state["processed_zip_data"],

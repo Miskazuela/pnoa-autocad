@@ -2,10 +2,15 @@
 
 Aplicación web desarrollada en **Streamlit** para automatizar la extracción de ortofotografías aéreas de máxima resolución del **PNOA (Plan Nacional de Ortofotografía Aérea - IGN España)** a partir de polilíneas cerradas de planos CAD (**DXF**).
 
-Genera directamente para cada polígono la tríada de georreferenciación estándar para **AutoCAD, AutoCAD Map 3D, Civil 3D y BricsCAD**:
-- `.tif`: Imagen aérea raster descargada del servicio WMS INSPIRE del IGN.
+Genera directamente para cada polígono los archivos georreferenciados para **AutoCAD, AutoCAD Map 3D, Civil 3D y BricsCAD**:
+- `.tif`: Imagen aérea raster descargada del servicio WMS INSPIRE del IGN (con soporte de canal alfa transparente para minutas en diagonal).
 - `.tfw`: Archivo de calibración espacial (*World File*) con las coordenadas de georreferenciación exactas.
-- `.prj`: Definición de proyección cartográfica en formato WKT.
+
+### ✨ Novedades y Capacidades Avanzadas:
+- **📐 Soporte para Minutas en Diagonal**: Detecta geometrías inclinadas y permite elegir si descargar la ortofoto recortada en diagonal con fondo transparente (para no tapar capas de AutoCAD con `_TRANSPARENCY`) o cuadrada/ortogonal completa con el entorno.
+- **🗺️ Visor de Ubicación con Encuadre Dinámico**: Muestra en el mapa el polígono de salida exacto; al seleccionar formato en diagonal el recuadro gira siguiendo la inclinación de la minuta, y al elegir formato cuadrado se adapta ortogonalmente.
+- **🪄 Recomendación Inteligente de Calidad por Área**: Calcula la resolución óptima ($m/px$) analizando la superficie de cada polígono (< 0.5 ha = 0.25 m/px, 0.5 a 2.5 ha = 0.50 m/px, 2.5 a 15 ha = 1.00 m/px, etc.).
+- **📦 Salida Limpia**: Solo descarga los productos necesarios (`.tif` + `.tfw`).
 
 ---
 
