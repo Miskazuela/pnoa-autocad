@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary downloads and raster files
+*.tif
+*.tfw
+*.prj
+*.zip
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE and OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Streamlit credentials / secrets
+.streamlit/secrets.toml
