@@ -60,9 +60,9 @@ st.set_page_config(
 
 
 # --------------------------------------------------------------------------------------
-# 0. SISTEMA DE RESOLUCIÓN DNS ULTRA-RESILIENTE (DOH FALLBACK PARA IGN)
+# 0. SISTEMA DE RESOLUCIÓN DNS ULTRA-RESILIENTE (DOH FALLBACK PARA IGN EN WINDOWS)
 # --------------------------------------------------------------------------------------
-if not getattr(socket, "_is_resilient_dns_patched", False):
+if os.name == "nt" and not getattr(socket, "_is_resilient_dns_patched", False):
     _orig_getaddrinfo = socket.getaddrinfo
     _dns_cache: Dict[str, str] = {}
     _KNOWN_IGN_IPS = [
@@ -1170,5 +1170,4 @@ def render_ui():
 # --------------------------------------------------------------------------------------
 # PUNTO DE ENTRADA PRINCIPAL
 # --------------------------------------------------------------------------------------
-if __name__ == "__main__":
-    render_ui()
+render_ui()
