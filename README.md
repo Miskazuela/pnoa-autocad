@@ -1,15 +1,22 @@
-# 📐 PNOA to AutoCAD | Extractor de Ortofotos Georreferenciadas
+# 📐 Cartografía & PNOA to AutoCAD | Extractor Georreferenciado Oficial
 
-Aplicación web desarrollada en **Streamlit** para automatizar la extracción de ortofotografías aéreas de máxima resolución del **PNOA (Plan Nacional de Ortofotografía Aérea - IGN España)** a partir de polilíneas cerradas de planos CAD (**DXF**).
+Aplicación web desarrollada en **Streamlit** para automatizar la extracción de cartografía oficial y ortofotografías aéreas de máxima resolución de España a partir de polilíneas cerradas de planos CAD (**DXF**).
 
-Genera directamente para cada polígono los archivos georreferenciados para **AutoCAD, AutoCAD Map 3D, Civil 3D y BricsCAD**:
-- `.tif`: Imagen aérea raster descargada del servicio WMS INSPIRE del IGN (con soporte de canal alfa transparente para minutas en diagonal).
-- `.tfw`: Archivo de calibración espacial (*World File*) con las coordenadas de georreferenciación exactas.
+Permite descargar e insertar en **AutoCAD, AutoCAD Map 3D, Civil 3D y BricsCAD**:
+- **🇪🇸 Ortofoto Aérea PNOA (IGN)**: Fotografías aéreas y satelitales de máxima nitidez.
+- **🗺️ Mapa Ráster IGN (MTN25 / MTN50 Topográfico)**: Cartografía topográfica oficial con curvas de nivel, toponimia y altitudes (`https://www.ign.es/wmts/mapa-raster`).
+- **🏔️ Modelo Digital del Terreno - Relieve (MDT / LiDAR)**: Sombreado continuo de pendientes y relieve.
+- **⚙️ Personalizado**: Conexión a cualquier servicio WMS 1.3.0 oficial o autonómico.
 
-### ✨ Novedades y Capacidades Avanzadas:
-- **📐 Soporte para Minutas en Diagonal**: Detecta geometrías inclinadas y permite elegir si descargar la ortofoto recortada en diagonal con fondo transparente (para no tapar capas de AutoCAD con `_TRANSPARENCY`) o cuadrada/ortogonal completa con el entorno.
-- **🗺️ Visor de Ubicación con Encuadre Dinámico**: Muestra en el mapa el polígono de salida exacto; al seleccionar formato en diagonal el recuadro gira siguiendo la inclinación de la minuta, y al elegir formato cuadrado se adapta ortogonalmente.
+Genera directamente para cada polígono los archivos estándar:
+- `.tif`: Imagen raster descargada del servicio oficial en máxima resolución y nitidez nativa.
+- `.tfw`: Archivo de calibración espacial (*World File*) con las coordenadas UTM exactas de georreferenciación.
+
+### ✨ Características Principales:
+- **🗺️ Catálogo Multicartográfico del IGN**: Elige entre Ortofoto PNOA, Mapa Topográfico Ráster MTN o Relieve MDT con un solo clic.
 - **🪄 Recomendación Inteligente de Calidad por Área**: Calcula la resolución óptima ($m/px$) analizando la superficie de cada polígono (< 0.5 ha = 0.25 m/px, 0.5 a 2.5 ha = 0.50 m/px, 2.5 a 15 ha = 1.00 m/px, etc.).
+- **🗺️ Visor de Ubicación con Encuadre de Salida**: Muestra en el mapa interactivo tanto la geometría CAD como el recuadro rectangular exacto de la imagen TIF que se descargará con el buffer perimetral, permitiendo conmutar entre satélite, PNOA, mapa ráster y relieve.
+- **✂️ Recorte de Minutas en AutoCAD (`DELIMIMG`)**: La aplicación entrega el ráster ortogonal puro y nítido. Para recortarlo por una minuta inclinada en AutoCAD, se utiliza el comando nativo `_IMAGECLIP` (`DELIMIMG`), ajustándose al polígono sin perder calidad ni lidiar con fondos negros.
 - **📦 Salida Limpia**: Solo descarga los productos necesarios (`.tif` + `.tfw`).
 
 ---

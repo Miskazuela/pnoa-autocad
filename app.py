@@ -75,7 +75,8 @@ if os.name == "nt" and not getattr(socket, "_is_resilient_dns_patched", False):
     ]
 
     def _resolve_host_fallback(hostname: str) -> Optional[str]:
-        if not hostname or "ign.es" not in str(hostname).lower():
+        host_lower = str(hostname).lower()
+        if not hostname or ("ign.es" not in host_lower and "idee.es" not in host_lower):
             return None
         if hostname in _dns_cache:
             return _dns_cache[hostname]
@@ -216,7 +217,7 @@ def get_recommended_resolution(area_m2: float) -> Tuple[float, str, str]:
         return 4.00, "4.00 m/px (Panorámica)", "Escala territorial (> 100 ha)"
 
 
-def parse_dxf_polygons(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]:
+def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pnoa") -> List[Dict[str, Any]]:
     """
     Extrae todas las polilíneas cerradas (LWPOLYLINE y POLYLINE con closed=True)
     del espacio modelo del DXF y calcula su Bounding Box, área y vértices.
@@ -256,19 +257,9 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]
             if width <= 0.001 or height <= 0.001:
                 continue
 
-            # Detectar si la polilínea tiene aristas inclinadas/diagonales
-            is_diagonal = False
-            for i in range(len(pts)):
-                p_prev = pts[i - 1]
-                p_curr = pts[i]
-                dx_edge = abs(p_curr[0] - p_prev[0])
-                dy_edge = abs(p_curr[1] - p_prev[1])
-                if dx_edge > 0.05 and dy_edge > 0.05:
-                    is_diagonal = True
-                    break
-
             clean_layer = sanitize_filename(layer)
-            output_name = f"{base_file_prefix}_{clean_layer}_p{polygon_counter}"
+            clean_tag = sanitize_filename(service_tag)
+            output_name = f"{base_file_prefix}_{clean_tag}_{clean_layer}_p{polygon_counter}"
 
             # Calcular resolución recomendada según el tamaño de la superficie
             rec_res, rec_label, _ = get_recommended_resolution(poly.area)
@@ -284,8 +275,6 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]
                 "alto_m": round(height, 2),
                 "area_m2": round(poly.area, 2),
                 "num_vertices": len(pts),
-                "tipo_geometria": "📐 Diagonal" if is_diagonal else "⏹️ Ortogonal",
-                "modo_encuadre": "En diagonal (transparente)" if is_diagonal else "Cuadrada (completa)",
                 "bounds": (minx, miny, maxx, maxy),
                 "pts": pts
             })
@@ -298,8 +287,48 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]
 
 
 # --------------------------------------------------------------------------------------
-# 3. CÁLCULO GEOESPACIAL Y CONSUMO WMS (PNOA IGN)
+# 3. CATÁLOGO DE SERVICIOS CARTOGRÁFICOS Y CONSUMO WMS (IGN ESPAÑA)
 # --------------------------------------------------------------------------------------
+SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
+    "pnoa": {
+        "name": "🇪🇸 IGN - Ortofoto Aérea PNOA (Máxima Resolución)",
+        "url": "https://www.ign.es/wms-inspire/pnoa-ma",
+        "layer": "OI.OrthoimageCoverage",
+        "tag": "pnoa",
+        "badge": "Ortofoto PNOA",
+        "description": "Ortofotografías aéreas de España de máxima resolución del PNOA. Ideal para urbanismo, edificación y parcelas.",
+        "folium_name": "🇪🇸 Ortofoto PNOA WMS (IGN)",
+    },
+    "mapa_raster": {
+        "name": "🗺️ IGN - Mapa Ráster / MTN Topográfico Nacional",
+        "url": "https://www.ign.es/wms-inspire/mapa-raster",
+        "layer": "mtn_rasterizado",
+        "tag": "mtn_raster",
+        "badge": "Mapa Ráster MTN",
+        "description": "Cartografía oficial del IGN (MTN25 / MTN50 ráster y escalas derivadas). Ideal para proyectos de ingeniería civil, curvas de nivel y toponimia.",
+        "folium_name": "🗺️ IGN Mapa Ráster MTN Topográfico",
+    },
+    "mdt_relieve": {
+        "name": "🏔️ IGN - Modelo Digital del Terreno (Sombreado Relieve)",
+        "url": "https://servicios.idee.es/wms-inspire/mdt",
+        "layer": "EL.GridCoverage",
+        "tag": "mdt_relieve",
+        "badge": "Relieve MDT",
+        "description": "Sombreado continuo del terreno del IGN derivado de LiDAR y MDT. Perfecto para estudios de pendiente, geotécnicos y geomorfología.",
+        "folium_name": "🏔️ IGN Relieve Sombreado MDT",
+    },
+    "custom": {
+        "name": "⚙️ Personalizado (Servicio WMS propio)",
+        "url": "https://www.ign.es/wms-inspire/pnoa-ma",
+        "layer": "OI.OrthoimageCoverage",
+        "tag": "custom",
+        "badge": "Personalizado",
+        "description": "Introduce manualmente la URL y capa de cualquier servidor WMS 1.3.0 compatible (IGN, CCAA, etc.).",
+        "folium_name": "Servicio WMS Personalizado",
+    }
+}
+
+
 def compute_georeferencing_parameters(
     bounds: Tuple[float, float, float, float],
     buffer_pct: float,
@@ -505,105 +534,6 @@ def fetch_wms_ortho(
     return resp.content
 
 
-def apply_polygon_mask_to_tiff(
-    tiff_bytes: bytes,
-    bbox_buf: Tuple[float, float, float, float],
-    pts: List[Tuple[float, float]]
-) -> bytes:
-    """
-    Aplica una máscara de transparencia (canal alfa RGBA) a la imagen TIFF descargada,
-    haciendo completamente transparentes los píxeles situados fuera del contorno de la minuta.
-    Esto permite que las minutas en diagonal no tapen el plano en AutoCAD al activar _TRANSPARENCY.
-    """
-    if not pts or len(pts) < 3:
-        return tiff_bytes
-
-    try:
-        img = Image.open(io.BytesIO(tiff_bytes)).convert("RGBA")
-        w, h = img.size
-        minx, miny, maxx, maxy = bbox_buf
-        width_m = maxx - minx
-        height_m = maxy - miny
-
-        if width_m <= 0 or height_m <= 0:
-            return tiff_bytes
-
-        # Proyectar vértices del polígono al espacio de coordenadas de píxeles
-        pixel_coords = [
-            (
-                ((x - minx) / width_m) * w,
-                ((maxy - y) / height_m) * h
-            )
-            for x, y in pts
-        ]
-
-        mask = Image.new("L", (w, h), 0)
-        draw = ImageDraw.Draw(mask)
-        draw.polygon(pixel_coords, fill=255)
-
-        r, g, b, a = img.split()
-        final_alpha = ImageChops.multiply(a, mask)
-        img.putalpha(final_alpha)
-
-        out_io = io.BytesIO()
-        img.save(out_io, format="TIFF", compression="tiff_lzw")
-        return out_io.getvalue()
-    except Exception:
-        # En caso de fallo técnico al aplicar la máscara, preservar la imagen original
-        return tiff_bytes
-
-
-def compute_rotated_bounding_box(
-    pts: List[Tuple[float, float]],
-    buffer_pct: float = 0.04
-) -> Tuple[List[Tuple[float, float]], float, float]:
-    """
-    Calcula el rectángulo mínimo orientado (Oriented Bounding Box) que encierra la minuta,
-    expandido según el buffer porcentual a lo largo de sus ejes principales inclinados.
-    Retorna los 4 vértices del marco en diagonal y sus dimensiones reales (ancho, alto en metros).
-    """
-    poly = Polygon(pts)
-    mrr = poly.minimum_rotated_rectangle
-    coords = list(mrr.exterior.coords)[:-1]
-
-    if len(coords) < 4:
-        minx, miny, maxx, maxy = poly.bounds
-        dx = (maxx - minx) * buffer_pct
-        dy = (maxy - miny) * buffer_pct
-        return [
-            (minx - dx, miny - dy),
-            (maxx + dx, miny - dy),
-            (maxx + dx, maxy + dy),
-            (minx - dx, maxy + dy)
-        ], (maxx - minx) * (1.0 + 2.0 * buffer_pct), (maxy - miny) * (1.0 + 2.0 * buffer_pct)
-
-    cx = sum(c[0] for c in coords) / 4.0
-    cy = sum(c[1] for c in coords) / 4.0
-
-    dx1 = coords[1][0] - coords[0][0]
-    dy1 = coords[1][1] - coords[0][1]
-    l1 = math.hypot(dx1, dy1)
-    u1x, u1y = (dx1 / l1, dy1 / l1) if l1 > 1e-6 else (1.0, 0.0)
-
-    dx2 = coords[2][0] - coords[1][0]
-    dy2 = coords[2][1] - coords[1][1]
-    l2 = math.hypot(dx2, dy2)
-    u2x, u2y = (dx2 / l2, dy2 / l2) if l2 > 1e-6 else (0.0, 1.0)
-
-    h1 = (l1 / 2.0) * (1.0 + 2.0 * buffer_pct)
-    h2 = (l2 / 2.0) * (1.0 + 2.0 * buffer_pct)
-
-    c0 = (cx - h1 * u1x - h2 * u2x, cy - h1 * u1y - h2 * u2y)
-    c1 = (cx + h1 * u1x - h2 * u2x, cy + h1 * u1y - h2 * u2y)
-    c2 = (cx + h1 * u1x + h2 * u2x, cy + h1 * u1y + h2 * u2y)
-    c3 = (cx - h1 * u1x + h2 * u2x, cy - h1 * u1y + h2 * u2y)
-
-    ancho_m = l1 * (1.0 + 2.0 * buffer_pct)
-    alto_m = l2 * (1.0 + 2.0 * buffer_pct)
-
-    return [c0, c1, c2, c3], ancho_m, alto_m
-
-
 # --------------------------------------------------------------------------------------
 # 4. MAPA INTERACTIVO DE CONFIRMACIÓN DE UBICACIÓN
 # --------------------------------------------------------------------------------------
@@ -611,13 +541,14 @@ def generate_preview_map(
     polygons: List[Dict[str, Any]],
     crs_str: str,
     buffer_pct: float = 0.04,
-    mode_view: str = "auto"
+    active_service_key: str = "pnoa"
 ) -> Optional[folium.Map]:
     """
     Reproyecta los vértices de los polígonos al sistema WGS 84 (EPSG:4326)
-    y crea un mapa interactivo con ortofotografía satelital y capas PNOA.
-    Muestra tanto el contorno de la geometría CAD como el polígono envolvente
-    del encuadre exacto de la imagen de salida TIF resultante (en diagonal o cuadrada).
+    y crea un mapa interactivo con ortofotografía satelital y capas oficiales del IGN
+    (Ortofoto PNOA, Mapa Ráster MTN y Relieve MDT).
+    Muestra el contorno de la geometría CAD (línea continua) y el polígono envolvente
+    del encuadre exacto de la imagen de salida TIF resultante (línea discontinua con buffer).
     """
     if not polygons:
         return None
@@ -649,32 +580,19 @@ def generate_preview_map(
             except Exception:
                 continue
 
-        # Determinar si mostrar el encuadre en diagonal u ortogonal cuadrado
-        p_mode = p.get("modo_encuadre", "En diagonal (transparente)")
-        if mode_view == "diagonal":
-            use_diagonal = True
-        elif mode_view == "cuadrada":
-            use_diagonal = False
-        else:
-            use_diagonal = "diagonal" in str(p_mode).lower()
-
-        if use_diagonal:
-            bbox_corners, width_salida, height_salida = compute_rotated_bounding_box(pts, buffer_pct)
-            encuadre_tipo = "📐 Marco en Diagonal (Orientado)"
-        else:
-            minx, miny, maxx, maxy = bounds
-            dx = (maxx - minx) * buffer_pct
-            dy = (maxy - miny) * buffer_pct
-            bbox_buf = (minx - dx, miny - dy, maxx + dx, maxy + dy)
-            width_salida = bbox_buf[2] - bbox_buf[0]
-            height_salida = bbox_buf[3] - bbox_buf[1]
-            bbox_corners = [
-                (bbox_buf[0], bbox_buf[1]),
-                (bbox_buf[2], bbox_buf[1]),
-                (bbox_buf[2], bbox_buf[3]),
-                (bbox_buf[0], bbox_buf[3])
-            ]
-            encuadre_tipo = "🖼️ Marco Cuadrado (Ortogonal)"
+        # Marco rectangular ortogonal exacto de la salida TIF con buffer
+        minx, miny, maxx, maxy = bounds
+        dx = (maxx - minx) * buffer_pct
+        dy = (maxy - miny) * buffer_pct
+        bbox_buf = (minx - dx, miny - dy, maxx + dx, maxy + dy)
+        width_salida = bbox_buf[2] - bbox_buf[0]
+        height_salida = bbox_buf[3] - bbox_buf[1]
+        bbox_corners = [
+            (bbox_buf[0], bbox_buf[1]),
+            (bbox_buf[2], bbox_buf[1]),
+            (bbox_buf[2], bbox_buf[3]),
+            (bbox_buf[0], bbox_buf[3])
+        ]
 
         bbox_latlon = []
         for x, y in bbox_corners:
@@ -694,7 +612,6 @@ def generate_preview_map(
                 "bbox_locations": bbox_latlon,
                 "width_salida": round(width_salida, 1),
                 "height_salida": round(height_salida, 1),
-                "encuadre_tipo": encuadre_tipo,
                 "center": [sum(pt[0] for pt in latlon_ring)/len(latlon_ring), sum(pt[1] for pt in latlon_ring)/len(latlon_ring)]
             })
 
@@ -720,6 +637,13 @@ def generate_preview_map(
         control=True
     ).add_to(m)
 
+    folium.TileLayer(
+        tiles="OpenStreetMap",
+        name="🗺️ Callejero OpenStreetMap",
+        overlay=False,
+        control=True
+    ).add_to(m)
+
     folium.WmsTileLayer(
         url="https://www.ign.es/wms-inspire/pnoa-ma",
         layers="OI.OrthoimageCoverage",
@@ -727,14 +651,30 @@ def generate_preview_map(
         transparent=True,
         name="🇪🇸 Ortofoto PNOA WMS (IGN)",
         overlay=True,
-        control=True
+        control=True,
+        show=(active_service_key == "pnoa")
     ).add_to(m)
 
-    folium.TileLayer(
-        tiles="OpenStreetMap",
-        name="🗺️ Callejero OpenStreetMap",
-        overlay=False,
-        control=True
+    folium.WmsTileLayer(
+        url="https://www.ign.es/wms-inspire/mapa-raster",
+        layers="mtn_rasterizado",
+        fmt="image/png",
+        transparent=True,
+        name="🗺️ IGN Mapa Ráster MTN Topográfico",
+        overlay=True,
+        control=True,
+        show=(active_service_key == "mapa_raster")
+    ).add_to(m)
+
+    folium.WmsTileLayer(
+        url="https://servicios.idee.es/wms-inspire/mdt",
+        layers="EL.GridCoverage",
+        fmt="image/png",
+        transparent=True,
+        name="🏔️ IGN Modelo Digital Relieve (MDT)",
+        overlay=True,
+        control=True,
+        show=(active_service_key == "mdt_relieve")
     ).add_to(m)
 
     colors = ["#f59e0b", "#06b6d4", "#10b981", "#ec4899", "#8b5cf6", "#3b82f6"]
@@ -749,7 +689,6 @@ def generate_preview_map(
                 <div style="color: {col}; font-size: 14px; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">🖼️ Imagen de Salida TIF #{p_info['id']}</div>
                 <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Archivo:</b> <span style="font-family: monospace;">{p_info['nombre_archivo']}.tif</span></div>
                 <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Encuadre:</b> {poly_item['width_salida']} × {poly_item['height_salida']} m</div>
-                <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Tipo de marco:</b> <span style="color: #38bdf8;">{poly_item['encuadre_tipo']}</span></div>
                 <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Buffer perimetral:</b> {round(buffer_pct * 100)}%</div>
                 <div><b style="color: #94a3b8;">Calidad recomendada:</b> <span style="color: #10b981; font-weight: 600;">{p_info.get('calidad_sugerida', '1.00 m/px')}</span></div>
             </div>
@@ -764,13 +703,13 @@ def generate_preview_map(
                 fill_color=col,
                 fill_opacity=0.10,
                 popup=folium.Popup(bbox_popup_html, max_width=320),
-                tooltip=f"🖼️ Salida #{p_info['id']} ({poly_item['encuadre_tipo']}) | {poly_item['width_salida']}m × {poly_item['height_salida']}m"
+                tooltip=f"🖼️ Salida #{p_info['id']} | {poly_item['width_salida']}m × {poly_item['height_salida']}m"
             ).add_to(m)
 
-        # 2. Polígono de la Geometría CAD (Minuta interior)
+        # 2. Polígono de la Geometría CAD (Parcela interior)
         popup_html = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.5; min-width: 190px; color: #f8fafc;">
-            <div style="color: {col}; font-size: 14px; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">📐 Minuta CAD #{p_info['id']}</div>
+            <div style="color: {col}; font-size: 14px; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">📐 Geometría CAD #{p_info['id']}</div>
             <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Capa CAD:</b> <span style="background: #334155; padding: 1px 5px; border-radius: 4px; font-family: monospace;">{p_info['capa']}</span></div>
             <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Nombre:</b> {p_info['nombre_archivo']}</div>
             <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Dimensiones:</b> {p_info['ancho_m']} × {p_info['alto_m']} m</div>
@@ -926,21 +865,8 @@ def render_ui():
     except Exception as crs_err:
         st.sidebar.error(f"⚠️ Código EPSG no reconocido: {crs_err}")
 
-    # 2. Buffer porcentual de encuadre y formato de minutas
-    st.sidebar.subheader("2. Encuadre y Minutas en Diagonal")
-    encuadre_mode_global = st.sidebar.radio(
-        "Formato por defecto para minutas:",
-        options=[
-            "✂️ En diagonal (fondo transparente)",
-            "🖼️ Cuadrada cubriendo todo"
-        ],
-        index=0,
-        help=(
-            "• 'En diagonal': Recorta la ortofoto exactamente por el contorno de la minuta dejando el fondo exterior transparente (RGBA). "
-            "Al insertarla en AutoCAD, solo se verá la minuta y no tapará las capas ni los dibujos alrededor.\n"
-            "• 'Cuadrada cubriendo todo': Descarga la ortofoto completa cubriendo toda la caja envolvente con los alrededores."
-        )
-    )
+    # 2. Buffer porcentual de encuadre
+    st.sidebar.subheader("2. Margen de Encuadre (Buffer)")
     buffer_slider = st.sidebar.slider(
         "Buffer porcentual (%):",
         min_value=0,
@@ -967,18 +893,41 @@ def render_ui():
         )
     )
 
-    # 4. Servicio WMS PNOA
-    st.sidebar.subheader("4. Servicio WMS (PNOA - IGN)")
-    wms_url = st.sidebar.text_input(
-        "URL del servicio WMS:",
-        value="https://www.ign.es/wms-inspire/pnoa-ma",
-        help="Servicio WMS INSPIRE oficial de ortofotografía aérea de España."
+    # 4. Servicio Cartográfico Oficial (WMS IGN / Topográfico / Relieve)
+    st.sidebar.subheader("4. Servicio Cartográfico WMS")
+    service_keys = list(SERVICES_CATALOG.keys())
+    service_labels = [SERVICES_CATALOG[k]["name"] for k in service_keys]
+
+    selected_service_label = st.sidebar.selectbox(
+        "Servicio cartográfico a descargar:",
+        options=service_labels,
+        index=0,
+        help=(
+            "Selecciona la fuente cartográfica oficial de España:\n"
+            "- Ortofoto Aérea PNOA (Imágenes de satélite/vuelo de máxima resolución)\n"
+            "- Mapa Ráster IGN (Cartografía MTN25/MTN50 oficial, topografía, curvas de nivel y toponimia)\n"
+            "- Modelo Digital del Terreno (Sombreado continuo de relieve LiDAR/MDT)\n"
+            "- Personalizado (Cualquier servidor WMS 1.3.0)"
+        )
     )
-    wms_layer = st.sidebar.text_input(
-        "Capa WMS:",
-        value="OI.OrthoimageCoverage",
-        help="Capa de máxima resolución ortofotográfica del PNOA."
-    )
+
+    selected_service_key = service_keys[service_labels.index(selected_service_label)]
+    service_info = SERVICES_CATALOG[selected_service_key]
+
+    if selected_service_key == "custom":
+        wms_url = st.sidebar.text_input("URL del servicio WMS:", value=service_info["url"])
+        wms_layer = st.sidebar.text_input("Capa WMS:", value=service_info["layer"])
+        wms_tag = st.sidebar.text_input("Etiqueta para nombres de archivo:", value="custom")
+    else:
+        st.sidebar.caption(f"ℹ️ **{service_info['badge']}:** {service_info['description']}")
+        with st.sidebar.expander("⚙️ Ver detalles técnicos del WMS", expanded=False):
+            info_tech = f"URL: {service_info['url']}\nCapa: {service_info['layer']}"
+            if selected_service_key == "mapa_raster":
+                info_tech += "\nEndpoint WMTS: https://www.ign.es/wmts/mapa-raster"
+            st.code(info_tech, language="text")
+        wms_url = service_info["url"]
+        wms_layer = service_info["layer"]
+        wms_tag = service_info["tag"]
 
     # 5. Límites de seguridad
     with st.sidebar.expander("🛡️ Límites de Seguridad de Descarga", expanded=False):
@@ -1004,8 +953,8 @@ def render_ui():
     # ----------------------------------------------------------------------------------
     st.markdown("""
     <div class="main-header">
-        <h1>📐 Extractor de Ortofotos PNOA para AutoCAD</h1>
-        <p>Automatización de ortofotos georreferenciadas (PNOA España) en formato TIF + TFW sin necesidad de QGIS ni ArcGIS.</p>
+        <h1>📐 Extractor de Ortofotos PNOA y Cartografía IGN para AutoCAD</h1>
+        <p>Automatización de ortofotos PNOA, mapas topográficos MTN Ráster y modelos de relieve para AutoCAD en formato TIF + TFW georreferenciado.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1020,9 +969,9 @@ def render_ui():
            - **`.tfw`**: Archivo *World File* con el tamaño de píxel y coordenadas UTM de la esquina superior izquierda.
         
         **Cómo insertar en AutoCAD en su posición UTM exacta:**
-        - **AutoCAD Map 3D / Civil 3D**: Usa el comando `_MAPIINSERT` (o ve a *Insertar* -> *Imagen ráster*). Al seleccionar los archivos `.tif`, AutoCAD detectará automáticamente los archivos `.tfw` asociados e insertará las ortofotos en sus **coordenadas reales de proyecto**, encajando teselas de mosaico a la perfección y reconociendo el canal alfa transparente.
+        - **AutoCAD Map 3D / Civil 3D**: Usa el comando `_MAPIINSERT` (o ve a *Insertar* -> *Imagen ráster*). Al seleccionar los archivos `.tif`, AutoCAD detectará automáticamente los archivos `.tfw` asociados e insertará las ortofotos en sus **coordenadas reales de proyecto**, encajando teselas de mosaico a la perfección.
         - **AutoCAD Estándar / LT**: Inserta mediante el comando `_IMAGEATTACH` (`ENLAZARIMG`).
-        - **Minutas en diagonal con fondo transparente**: Para que los bordes exteriores no tapen el dibujo en AutoCAD, selecciona la imagen y activa su transparencia ejecutando el comando `_TRANSPARENCY` -> `ACT` (o en la paleta de Propiedades `Ctrl+1`, pon *Transparencia* = *Sí*).
+        - **Consejo para minutas o parcelas en diagonal**: Para recortar la ortofoto siguiendo la forma exacta de una minuta inclinada en AutoCAD, usa el comando nativo `_IMAGECLIP` (`DELIMIMG`) -> *Nuevo contorno* (`N`) -> *Seleccionar polilínea* (`S`) y toca tu polilínea. AutoCAD ocultará los bordes sobrantes al instante manteniendo la georreferenciación perfecta.
         """)
 
     if "processed_zip_data" not in st.session_state:
@@ -1075,16 +1024,16 @@ def render_ui():
         poly2 = demo_msp.add_lwpolyline(p2, close=True)
         poly2.dxf.layer = "PARCELA_INDUSTRIAL"
 
-        # Parcela 3: Minuta en diagonal (orientada a ~30° en Madrid, 6.0 ha -> 1.00 m/px Estándar)
+        # Parcela 3: Ámbito de obra / desarrollo en Madrid (6.0 ha -> 1.00 m/px Estándar)
         p3 = [(441300, 4476800), (441600, 4476980), (441480, 4477180), (441180, 4477000)]
         poly3 = demo_msp.add_lwpolyline(p3, close=True)
-        poly3.dxf.layer = "MINUTA_DIAGONAL"
+        poly3.dxf.layer = "AMBITO_OBRA"
 
         out_str = io.StringIO()
         demo_doc.write(out_str)
         dxf_bytes = out_str.getvalue().encode("utf-8")
         dxf_display_name = "demo_madrid_pnoa.dxf"
-        st.info("💡 Modo de demostración activo: Plano con 3 geometrías en Madrid (EPSG:25830), incluyendo una minuta en diagonal.")
+        st.info("💡 Modo de demostración activo: Plano con 3 geometrías en Madrid (EPSG:25830).")
 
     # ----------------------------------------------------------------------------------
     # EXTRACCIÓN Y VISOR CARTOGRÁFICO DE CONFIRMACIÓN
@@ -1092,7 +1041,7 @@ def render_ui():
     if dxf_bytes is not None:
         try:
             with st.spinner("Leyendo entidades del plano DXF..."):
-                extracted_polygons = parse_dxf_polygons(dxf_bytes, dxf_display_name)
+                extracted_polygons = parse_dxf_polygons(dxf_bytes, dxf_display_name, service_tag=wms_tag)
 
             if not extracted_polygons:
                 st.warning("""
@@ -1109,10 +1058,10 @@ def render_ui():
                 col_m1.metric("Polilíneas detectadas", len(extracted_polygons))
                 col_m2.metric("Capas CAD", len(layers_found))
                 col_m3.metric("Proyección", crs_str)
-                col_m4.metric("Buffer aplicado", f"{buffer_slider}%")
+                col_m4.metric("Servicio activo", service_info["badge"])
 
                 # Inicializar y sincronizar el estado de la tabla antes de renderizar el mapa
-                state_key = f"df_{dxf_display_name}_{len(extracted_polygons)}"
+                state_key = f"df_{dxf_display_name}_{len(extracted_polygons)}_{wms_tag}"
                 if state_key not in st.session_state:
                     table_data = []
                     for p in extracted_polygons:
@@ -1123,51 +1072,20 @@ def render_ui():
 
                 active_df = st.session_state[state_key]
 
-                # Sincronizar el modo de encuadre asignado en la tabla hacia los polígonos
-                if not active_df.empty and "modo_encuadre" in active_df.columns:
-                    mode_map = dict(zip(active_df["id"], active_df["modo_encuadre"]))
-                    for p in extracted_polygons:
-                        if p["id"] in mode_map:
-                            p["modo_encuadre"] = mode_map[p["id"]]
-
                 # VISOR CARTOGRÁFICO INTERACTIVO PARA CONFIRMAR UBICACIÓN
                 st.markdown("---")
-                col_map_t, col_map_opt = st.columns([2.7, 2.3])
-                with col_map_t:
-                    st.markdown("### 🗺️ Confirmación Visual de Ubicación y Encuadre de Salida")
-                    st.caption(
-                        "Verifica en el visor interactivo la ubicación de tus geometrías CAD (**contorno sólido**) "
-                        "y el **recuadro de la imagen de salida TIF** que se descargará (**línea discontinua** con buffer)."
-                    )
-                with col_map_opt:
-                    map_view_mode = st.radio(
-                        "📐 Formato de 'Imagen de Salida' a visualizar:",
-                        options=[
-                            "✂️ En diagonal (Orientada)",
-                            "🖼️ Cuadrada (Ortogonal)",
-                            "🎛️ Según selección individual"
-                        ],
-                        index=0 if "diagonal" in encuadre_mode_global.lower() else 1,
-                        horizontal=True,
-                        help=(
-                            "• 'En diagonal (Orientada)': El recuadro de salida gira siguiendo la orientación exacta de la minuta.\n"
-                            "• 'Cuadrada (Ortogonal)': El recuadro de salida se muestra cuadrado/ortogonal envolviendo todo.\n"
-                            "• 'Según selección individual': Cada polígono muestra su marco según lo asignado en la tabla."
-                        )
-                    )
-
-                if "diagonal" in map_view_mode.lower():
-                    chosen_mode = "diagonal"
-                elif "cuadrada" in map_view_mode.lower():
-                    chosen_mode = "cuadrada"
-                else:
-                    chosen_mode = "auto"
+                st.markdown(f"### 🗺️ Confirmación Visual de Ubicación y Encuadre ({service_info['badge']})")
+                st.caption(
+                    "Verifica en el visor interactivo la ubicación de tus geometrías CAD (**contorno sólido**) "
+                    "y el **recuadro de la imagen de salida TIF** que se descargará (**línea discontinua** con el margen de buffer aplicado). "
+                    "Puedes activar/desactivar las capas de Ortofoto PNOA, Mapa Ráster MTN o Relieve en el selector superior derecho."
+                )
 
                 preview_map = generate_preview_map(
                     extracted_polygons,
                     crs_str,
                     buffer_pct=buffer_pct,
-                    mode_view=chosen_mode
+                    active_service_key=selected_service_key
                 )
                 if preview_map is not None:
                     st_folium(preview_map, use_container_width=True, height=470, returned_objects=[])
@@ -1193,7 +1111,7 @@ def render_ui():
                     *Nota: Cada fila ha sido inicializada automáticamente con la resolución recomendada. Puedes ajustar los valores a tu gusto de manera individual o por lotes.*
                     """)
 
-                q1, q2, q3, q4, q5 = st.columns([2.0, 1.1, 1.4, 1.2, 1.5])
+                q1, q2, q3, q4 = st.columns([2.0, 1.2, 1.4, 1.4])
                 with q1:
                     preset_res = st.selectbox(
                         "Resolución rápida sugerida:",
@@ -1224,11 +1142,6 @@ def render_ui():
                     st.write("")
                     btn_invert_sel = st.button("Alternar selección", use_container_width=True)
 
-                with q5:
-                    st.write("")
-                    st.write("")
-                    btn_toggle_crop = st.button("Alternar encuadre", use_container_width=True, help="Alterna entre 'En diagonal' y 'Cuadrada' para todas las filas")
-
                 if btn_apply_rec:
                     for idx, row in active_df.iterrows():
                         rec_res, rec_label, _ = get_recommended_resolution(float(row.get("area_m2", 0)))
@@ -1254,13 +1167,6 @@ def render_ui():
                     st.session_state[state_key] = active_df
                     st.rerun()
 
-                if btn_toggle_crop and not active_df.empty and "modo_encuadre" in active_df.columns:
-                    first_val = str(active_df["modo_encuadre"].iloc[0])
-                    new_val = "Cuadrada (completa)" if "diagonal" in first_val.lower() else "En diagonal (transparente)"
-                    active_df["modo_encuadre"] = new_val
-                    st.session_state[state_key] = active_df
-                    st.rerun()
-
                 column_config = {
                     "incluir": st.column_config.CheckboxColumn(
                         "Descargar",
@@ -1269,22 +1175,6 @@ def render_ui():
                     ),
                     "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
                     "capa": st.column_config.TextColumn("Capa CAD", disabled=True, width="medium"),
-                    "tipo_geometria": st.column_config.TextColumn(
-                        "Orientación",
-                        help="Indica si la geometría es inclinada (diagonal) u ortogonal",
-                        disabled=True,
-                        width="small"
-                    ),
-                    "modo_encuadre": st.column_config.SelectboxColumn(
-                        "Formato Descarga",
-                        help="Elige si descargar recortada en diagonal (fondo transparente) o cuadrada cubriendo todo",
-                        options=[
-                            "En diagonal (transparente)",
-                            "Cuadrada (completa)"
-                        ],
-                        required=True,
-                        width="medium"
-                    ),
                     "area_m2": st.column_config.NumberColumn(
                         "Área (m²)",
                         disabled=True,
@@ -1320,7 +1210,7 @@ def render_ui():
                 }
 
                 column_order = [
-                    "incluir", "id", "capa", "tipo_geometria", "modo_encuadre",
+                    "incluir", "id", "capa",
                     "area_m2", "calidad_sugerida", "resolucion_m_px",
                     "nombre_archivo", "ancho_m", "alto_m", "num_vertices"
                 ]
@@ -1340,35 +1230,11 @@ def render_ui():
                 st.info(f"📍 **{len(selected_rows)}** polígono(s) seleccionado(s) para descarga.")
 
                 # ------------------------------------------------------------------------------
-                # OPCIONES DE ENCUADRE Y BOTÓN DE DESCARGA WMS
+                # BOTÓN DE DESCARGA WMS
                 # ------------------------------------------------------------------------------
-                st.markdown("#### 📐 Formato de Descarga para Minutas")
-                if "diagonal" in map_view_mode.lower():
-                    diag_default_idx = 0
-                elif "cuadrada" in map_view_mode.lower():
-                    diag_default_idx = 1
-                else:
-                    diag_default_idx = 2
-
-                download_crop_mode = st.radio(
-                    "Elige cómo descargar las ortofotos de las minutas:",
-                    options=[
-                        "✂️ En diagonal (Recorte transparente según la minuta - no tapa en AutoCAD)",
-                        "🖼️ Cuadrada cubriendo todo (Imagen ortogonal completa con entorno)",
-                        "🎛️ Usar selección individual de la tabla"
-                    ],
-                    index=diag_default_idx,
-                    horizontal=True,
-                    help=(
-                        "• 'En diagonal': Hace transparente el área exterior al polígono para no tapar el dibujo en AutoCAD.\n"
-                        "• 'Cuadrada cubriendo todo': Descarga la imagen envolvente completa sin recortar.\n"
-                        "• 'Usar selección individual de la tabla': Respeta lo asignado en la columna 'Formato Descarga' de cada polígono."
-                    )
-                )
-
                 st.write("")
                 btn_process = st.button(
-                    "🚀 Descargar Ortofotos y Generar Georreferenciación",
+                    f"🚀 Descargar Cartografía ({service_info['badge']}) y Generar Georreferenciación",
                     type="primary",
                     use_container_width=True,
                     disabled=(len(selected_rows) == 0)
@@ -1389,7 +1255,6 @@ def render_ui():
                     summary_log = []
                     used_names = set()
                     total_count = len(selected_rows)
-                    polygons_by_id = {p["id"]: p for p in extracted_polygons}
 
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                         for idx, row in enumerate(selected_rows):
@@ -1398,15 +1263,6 @@ def render_ui():
                             clean_base = sanitize_filename(row["nombre_archivo"])
                             pixel_size = float(row["resolucion_m_px"])
                             bounds = row["bounds"]
-
-                            poly_info = polygons_by_id.get(row.get("id"), {})
-                            poly_pts = poly_info.get("pts", [])
-
-                            # Determinar si aplicar recorte en diagonal
-                            if "individual" in download_crop_mode.lower():
-                                apply_diagonal_crop = "diagonal" in str(row.get("modo_encuadre", "")).lower()
-                            else:
-                                apply_diagonal_crop = "diagonal" in download_crop_mode.lower()
 
                             # Determinar tareas de descarga (única o teselas)
                             if "mosaico" in large_area_mode.lower():
@@ -1436,9 +1292,8 @@ def render_ui():
                                     counter += 1
                                 used_names.add(final_name)
 
-                                format_desc = "en diagonal (transparente)" if apply_diagonal_crop else "cuadrada completa"
                                 status_text.markdown(
-                                    f"⏳ **Descargando [{idx + 1}/{total_count}]:** `{final_name}.tif` [{format_desc}] "
+                                    f"⏳ **Descargando [{idx + 1}/{total_count}] ({service_info['badge']}):** `{final_name}.tif` "
                                     f"({job['ancho_px']} × {job['alto_px']} px, res: {abs(job['pixel_x']):.2f} m/px)..."
                                 )
 
@@ -1453,27 +1308,19 @@ def render_ui():
                                         alto_px=job["alto_px"]
                                     )
 
-                                    if apply_diagonal_crop and poly_pts:
-                                        img_bytes = apply_polygon_mask_to_tiff(
-                                            tiff_bytes=img_bytes,
-                                            bbox_buf=job["bbox_buf"],
-                                            pts=poly_pts
-                                        )
-
                                     zf.writestr(f"{final_name}.tif", img_bytes)
                                     zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
 
                                     size_kb = len(img_bytes) / 1024.0
                                     scaled_note = " (ajustado al límite del IGN)" if job.get("scaled", False) else ""
-                                    mode_note = " [✂️ Recorte diagonal transparente]" if apply_diagonal_crop else " [🖼️ Cuadrada completa]"
                                     log_expander.success(
                                         f"✅ [{final_name}] Descargado ({job['ancho_px']} × {job['alto_px']} px, "
-                                        f"{size_kb:.1f} KB, res: {abs(job['pixel_x']):.3f} m/px){scaled_note}{mode_note}"
+                                        f"{size_kb:.1f} KB, res: {abs(job['pixel_x']):.3f} m/px){scaled_note}"
                                     )
 
                                     summary_log.append({
                                         "Archivo": final_name,
-                                        "Formato": "✂️ En diagonal (transparente)" if apply_diagonal_crop else "🖼️ Cuadrada completa",
+                                        "Servicio": service_info["badge"],
                                         "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
                                         "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
                                         "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px",
@@ -1487,7 +1334,7 @@ def render_ui():
                                     log_expander.error(f"❌ [{final_name}] Error: {err_msg}")
                                     summary_log.append({
                                         "Archivo": final_name,
-                                        "Formato": "✂️ En diagonal" if apply_diagonal_crop else "🖼️ Cuadrada",
+                                        "Servicio": service_info["badge"],
                                         "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
                                         "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
                                         "Resolución Real": "-",
@@ -1502,11 +1349,11 @@ def render_ui():
                         zip_buffer.seek(0)
                         st.session_state["processed_zip_data"] = zip_buffer.getvalue()
                         base_dxf_stem = os.path.splitext(sanitize_filename(dxf_display_name))[0]
-                        st.session_state["processed_zip_name"] = f"ortofotos_{base_dxf_stem}.zip"
+                        st.session_state["processed_zip_name"] = f"cartografia_{wms_tag}_{base_dxf_stem}.zip"
                         st.session_state["processed_summary"] = summary_log
                         st.balloons()
                     else:
-                        st.error("No se pudo descargar ninguna ortofoto. Verifica la conectividad con el servicio WMS y las coordenadas.")
+                        st.error("No se pudo descargar ninguna imagen cartográfica. Verifica la conectividad con el servicio WMS y las coordenadas.")
 
         except Exception as e:
             st.error(f"❌ Error al procesar el archivo DXF: {e}")
@@ -1522,20 +1369,17 @@ def render_ui():
 
         c1, c2 = st.columns([2, 1])
         with c1:
-            st.success("🎉 **¡Paquete de georreferenciación generado exitosamente!**")
+            st.success(f"🎉 **¡Paquete de georreferenciación ({service_info['badge']}) generado exitosamente!**")
             st.markdown(
-                "El paquete ZIP contiene los archivos **`.tif` + `.tfw`** listos para ser "
+                f"El paquete ZIP contiene la cartografía **{service_info['name']}** en archivos **`.tif` + `.tfw`** listos para ser "
                 "insertados en AutoCAD mediante `_MAPIINSERT` o `_IMAGEATTACH`."
             )
-            has_diagonal = any("diagonal" in str(item.get("Formato", "")).lower() for item in st.session_state.get("processed_summary", []))
-            if has_diagonal:
-                st.info(
-                    "💡 **Minutas en diagonal con fondo transparente en AutoCAD:**\n\n"
-                    "- **AutoCAD Map 3D / Civil 3D**: Al usar `_MAPIINSERT`, AutoCAD reconoce automáticamente el canal alfa de transparencia.\n"
-                    "- **AutoCAD Estándar / LT**: Selecciona la imagen insertada y activa la propiedad de transparencia ejecutando el comando `_TRANSPARENCY` -> `ACT` (o en la paleta de Propiedades `Ctrl+1` -> *Transparencia* = *Sí*). Así los bordes exteriores no taparán tu plano."
-                )
+            st.info(
+                "💡 **Consejo para minutas o ámbitos en diagonal en AutoCAD:**\n\n"
+                "Para recortar la imagen siguiendo la forma exacta de tu minuta en el dibujo, usa el comando nativo `_IMAGECLIP` (`DELIMIMG`) -> *Nuevo contorno* (`N`) -> *Seleccionar polilínea* (`S`) y selecciona tu polilínea. AutoCAD ocultará las esquinas sobrantes al instante manteniendo la georreferenciación perfecta."
+            )
             st.download_button(
-                label="📥 Descargar Paquete ZIP para AutoCAD",
+                label=f"📥 Descargar Paquete ZIP para AutoCAD ({service_info['badge']})",
                 data=st.session_state["processed_zip_data"],
                 file_name=st.session_state["processed_zip_name"],
                 mime="application/zip",
