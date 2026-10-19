@@ -1,24 +1,25 @@
-# 📐 Cartografía & PNOA to AutoCAD | Extractor Georreferenciado Oficial
+# 🌍 GeoRaster to CAD | Extractor Georreferenciado Universal
 
-Aplicación web desarrollada en **Streamlit** para automatizar la extracción de cartografía oficial y ortofotografías aéreas de máxima resolución de España a partir de polilíneas cerradas de planos CAD (**DXF**).
+Aplicación web desarrollada en **Streamlit** para automatizar la extracción y georreferenciación milimétrica para AutoCAD de **cualquier servidor WMS del mundo**, Google Satélite, Esri y servicios oficiales a partir de polilíneas cerradas de planos CAD (**DXF**).
 
 Permite descargar e insertar en **AutoCAD, AutoCAD Map 3D, Civil 3D y BricsCAD**:
-- **🇪🇸 Ortofoto Aérea PNOA (IGN)**: Fotografías aéreas y satelitales oficiales de España de máxima nitidez.
-- **🌍 Google Satélite (Mundial)**: Fotografía satelital mundial de alta resolución de Google sin rótulos.
+- **🌍 Google Satélite (Mundial)**: Fotografía satelital mundial de máxima resolución de Google sin rótulos.
 - **🌍 Google Híbrido (Mundial)**: Satélite de Google con carreteras, calles principales y toponimia sobreimpresas.
 - **🛰️ Esri World Imagery (Mundial)**: Ortofotografía satelital global de alta resolución de Esri.
-- **🗺️ Mapa Ráster IGN (MTN25 / MTN50 Topográfico)**: Cartografía topográfica oficial con curvas de nivel, toponimia y altitudes (`https://www.ign.es/wmts/mapa-raster`).
+- **⚙️ Servidor WMS Universal**: Conexión a cualquier servicio WMS 1.3.0 o 1.1.1 oficial del mundo (Australia, Europa, América, etc.).
+- **🇪🇸 Ortofoto Aérea PNOA (IGN)**: Fotografías aéreas y satelitales oficiales de España de máxima nitidez.
+- **🗺️ Mapa Ráster IGN (MTN25 / MTN50 Topográfico)**: Cartografía topográfica oficial con curvas de nivel, toponimia y altitudes.
 - **🏔️ Modelo Digital del Terreno - Relieve (MDT / LiDAR)**: Sombreado continuo de pendientes y relieve.
-- **⚙️ Personalizado**: Conexión a cualquier servicio WMS 1.3.0 oficial o autonómico.
 
 Genera directamente para cada polígono los archivos estándar:
 - `.tif`: Imagen raster descargada del servicio en máxima resolución y nitidez nativa.
-- `.tfw`: Archivo de calibración espacial (*World File*) con las coordenadas UTM exactas de georreferenciación.
+- `.tfw`: Archivo de calibración espacial (*World File*) con las coordenadas UTM/proyectadas exactas de georreferenciación.
 
 ### ✨ Características Principales:
-- **🗺️ Catálogo Multicartográfico Oficial y Satelital**: Elige entre Ortofoto PNOA, Google Satélite, Google Híbrido, Esri World Imagery, Mapa Topográfico Ráster MTN o Relieve MDT con un solo clic.
+- **🌐 Soporte EPSG Global**: Compatible con cualquier proyección del mundo (ej: Australia `EPSG:7855` / `EPSG:28355`, España `EPSG:25830`, Colombia `EPSG:9377`, Chile `EPSG:5361`, México `EPSG:6369`, EE.UU. `EPSG:26918`, WGS 84 global `EPSG:326xx` / `EPSG:327xx`).
+- **🗺️ Catálogo Multicartográfico Universal**: Elige entre Google Satélite, Google Híbrido, Esri World Imagery, cualquier WMS propio, PNOA o cartografía IGN con un solo clic.
 - **🪄 Recomendación Inteligente de Calidad por Área**: Calcula la resolución óptima ($m/px$) analizando la superficie de cada polígono (< 0.5 ha = 0.25 m/px, 0.5 a 2.5 ha = 0.50 m/px, 2.5 a 15 ha = 1.00 m/px, etc.).
-- **🗺️ Visor de Ubicación con Encuadre de Salida**: Muestra en el mapa interactivo tanto la geometría CAD como el recuadro rectangular exacto de la imagen TIF que se descargará con el buffer perimetral, permitiendo conmutar entre satélite, PNOA, mapa ráster y relieve.
+- **🗺️ Visor de Ubicación con Encuadre de Salida**: Muestra en el mapa interactivo tanto la geometría CAD como el recuadro rectangular exacto de la imagen TIF que se descargará con el buffer perimetral, permitiendo conmutar entre satélite, WMS y cartografía.
 - **✂️ Recorte de Minutas en AutoCAD (`DELIMIMG`)**: La aplicación entrega el ráster ortogonal puro y nítido. Para recortarlo por una minuta inclinada en AutoCAD, se utiliza el comando nativo `_IMAGECLIP` (`DELIMIMG`), ajustándose al polígono sin perder calidad ni lidiar con fondos negros.
 - **📦 Salida Limpia**: Solo descarga los productos necesarios (`.tif` + `.tfw`).
 

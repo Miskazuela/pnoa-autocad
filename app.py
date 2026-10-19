@@ -53,8 +53,8 @@ from PIL import Image, ImageDraw, ImageChops
 
 # Streamlit Page Config debe ser la primera llamada de Streamlit
 st.set_page_config(
-    page_title="PNOA to AutoCAD | Ortofotos Georreferenciadas",
-    page_icon="🗺️",
+    page_title="GeoRaster to CAD | Extractor Georreferenciado Universal",
+    page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -288,31 +288,21 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
 
 
 # --------------------------------------------------------------------------------------
-# 3. CATÁLOGO DE SERVICIOS CARTOGRÁFICOS Y CONSUMO WMS (IGN ESPAÑA)
+# 3. CATÁLOGO DE SERVICIOS CARTOGRÁFICOS Y SATELITALES (MUNDIAL Y NACIONAL)
 # --------------------------------------------------------------------------------------
 SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
-    "pnoa": {
-        "name": "🇪🇸 IGN - Ortofoto Aérea PNOA (España - Máxima Resolución)",
-        "type": "wms",
-        "url": "https://www.ign.es/wms-inspire/pnoa-ma",
-        "layer": "OI.OrthoimageCoverage",
-        "tag": "pnoa",
-        "badge": "Ortofoto PNOA",
-        "description": "Ortofotografías aéreas oficiales de España de máxima resolución del PNOA. Ideal para urbanismo, edificación y parcelas.",
-        "folium_name": "🇪🇸 Ortofoto PNOA WMS (IGN)",
-    },
     "google_sat": {
-        "name": "🌍 Google Satélite (Imágenes Satelitales Mundiales)",
+        "name": "🌍 Google Satélite (Mundial - Máxima Resolución)",
         "type": "xyz",
         "url": "https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
         "layer": "",
         "tag": "google_sat",
         "badge": "Google Satélite",
-        "description": "Fotografía satelital mundial de Google de alta resolución sin rótulos. Cobertura global (España, Latinoamérica y resto del mundo).",
+        "description": "Fotografía satelital mundial de Google de alta resolución sin rótulos. Cobertura global (Australia, América, Europa, Asia y resto del mundo).",
         "folium_name": "🌍 Google Satélite (Google Maps)",
     },
     "google_hybrid": {
-        "name": "🌍 Google Híbrido (Satélite + Vías y Nombres)",
+        "name": "🌍 Google Híbrido (Mundial - Satélite + Vías y Nombres)",
         "type": "xyz",
         "url": "https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
         "layer": "",
@@ -322,7 +312,7 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
         "folium_name": "🌍 Google Híbrido (Satélite + Vías)",
     },
     "esri_sat": {
-        "name": "🛰️ Esri World Imagery (Satélite Global de Alta Resolución)",
+        "name": "🛰️ Esri World Imagery (Mundial - Alta Resolución)",
         "type": "xyz",
         "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         "layer": "",
@@ -331,35 +321,45 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
         "description": "Ortofotografía satelital global de Esri / Maxar de alta resolución.",
         "folium_name": "🛰️ Esri World Imagery",
     },
+    "custom": {
+        "name": "⚙️ Servidor WMS Universal (Cualquier país / organismo del mundo)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/pnoa-ma",
+        "layer": "OI.OrthoimageCoverage",
+        "tag": "wms_custom",
+        "badge": "WMS Universal",
+        "description": "Introduce la URL y capa de cualquier servidor WMS del mundo (gobiernos estatales, catastro, Australia, etc.).",
+        "folium_name": "⚙️ WMS Universal",
+    },
+    "pnoa": {
+        "name": "🇪🇸 IGN - Ortofoto Aérea PNOA (España - Máxima Resolución)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/pnoa-ma",
+        "layer": "OI.OrthoimageCoverage",
+        "tag": "pnoa",
+        "badge": "Ortofoto PNOA",
+        "description": "Ortofotografías aéreas oficiales de España de máxima resolución del PNOA. Ideal para urbanismo y edificación.",
+        "folium_name": "🇪🇸 Ortofoto PNOA WMS (IGN)",
+    },
     "mapa_raster": {
-        "name": "🗺️ IGN - Mapa Ráster / MTN Topográfico Nacional",
+        "name": "🗺️ IGN - Mapa Ráster / MTN Topográfico (España)",
         "type": "wms",
         "url": "https://www.ign.es/wms-inspire/mapa-raster",
         "layer": "mtn_rasterizado",
         "tag": "mtn_raster",
         "badge": "Mapa Ráster MTN",
-        "description": "Cartografía oficial del IGN (MTN25 / MTN50 ráster y escalas derivadas). Ideal para proyectos de ingeniería civil, curvas de nivel y toponimia.",
+        "description": "Cartografía topográfica oficial con curvas de nivel, toponimia y altitudes.",
         "folium_name": "🗺️ IGN Mapa Ráster MTN Topográfico",
     },
     "mdt_relieve": {
-        "name": "🏔️ IGN - Modelo Digital del Terreno (Sombreado Relieve)",
+        "name": "🏔️ IGN - Modelo Digital del Terreno Relieve (España)",
         "type": "wms",
         "url": "https://servicios.idee.es/wms-inspire/mdt",
         "layer": "EL.GridCoverage",
         "tag": "mdt_relieve",
         "badge": "Relieve MDT",
-        "description": "Sombreado continuo del terreno del IGN derivado de LiDAR y MDT. Perfecto para estudios de pendiente, geotécnicos y geomorfología.",
+        "description": "Sombreado continuo del terreno derivado de LiDAR y MDT para estudios de pendiente.",
         "folium_name": "🏔️ IGN Relieve Sombreado MDT",
-    },
-    "custom": {
-        "name": "⚙️ Personalizado (Servicio WMS propio)",
-        "type": "wms",
-        "url": "https://www.ign.es/wms-inspire/pnoa-ma",
-        "layer": "OI.OrthoimageCoverage",
-        "tag": "custom",
-        "badge": "Personalizado",
-        "description": "Introduce manualmente la URL y capa de cualquier servidor WMS 1.3.0 compatible (IGN, CCAA, etc.).",
-        "folium_name": "Servicio WMS Personalizado",
     }
 }
 
@@ -707,7 +707,10 @@ def generate_preview_map(
     polygons: List[Dict[str, Any]],
     crs_str: str,
     buffer_pct: float = 0.04,
-    active_service_key: str = "pnoa"
+    active_service_key: str = "google_sat",
+    custom_wms_url: str = "",
+    custom_wms_layer: str = "",
+    custom_wms_tag: str = "wms_custom"
 ) -> Optional[folium.Map]:
     """
     Reproyecta los vértices de los polígonos al sistema WGS 84 (EPSG:4326)
@@ -858,6 +861,21 @@ def generate_preview_map(
         control=True,
         show=(active_service_key == "mdt_relieve")
     ).add_to(m)
+
+    if active_service_key == "custom" and custom_wms_url and custom_wms_layer:
+        try:
+            folium.WmsTileLayer(
+                url=custom_wms_url,
+                layers=custom_wms_layer,
+                fmt="image/png",
+                transparent=True,
+                name=f"⚙️ WMS Personalizado ({custom_wms_tag})",
+                overlay=True,
+                control=True,
+                show=True
+            ).add_to(m)
+        except Exception:
+            pass
 
     colors = ["#f59e0b", "#06b6d4", "#10b981", "#ec4899", "#8b5cf6", "#3b82f6"]
     for i, poly_item in enumerate(converted_polygons):
@@ -1011,41 +1029,73 @@ def render_ui():
     # ----------------------------------------------------------------------------------
     st.sidebar.header("⚙️ Configuración Global")
 
-    # 1. Sistema de Referencia de Coordenadas (CRS)
-    st.sidebar.subheader("1. Coordenadas y CRS")
-    crs_options = {
-        "EPSG:25830 - ETRS89 / UTM 30N (Península central/este)": 25830,
-        "EPSG:25829 - ETRS89 / UTM 29N (Galicia y oeste peninsular)": 25829,
-        "EPSG:25831 - ETRS89 / UTM 31N (Cataluña y Baleares)": 25831,
-        "EPSG:32628 - WGS 84 / UTM 28N (Islas Canarias)": 32628,
-        "Personalizado (Código EPSG manual)": 0
-    }
-
-    selected_crs_label = st.sidebar.selectbox(
-        "Sistema de Referencia (CRS):",
-        options=list(crs_options.keys()),
+    # 1. Sistema de Referencia de Coordenadas (CRS / Proyección)
+    st.sidebar.subheader("1. Proyección Cartográfica (CRS)")
+    
+    crs_mode = st.sidebar.radio(
+        "Modo de selección del CRS:",
+        options=["Código EPSG directo (Cualquier país)", "Preajustes regionales comunes"],
         index=0,
-        help="Define la proyección cartográfica de tu plano CAD para el consumo WMS y calibración espacial."
+        horizontal=True,
+        help="Introduce directamente el código EPSG de tu plano (ej: Australia 7855, España 25830, Colombia 9377) o usa un preajuste."
     )
 
-    if crs_options[selected_crs_label] == 0:
-        epsg_code = st.sidebar.number_input(
-            "Código EPSG manual:",
-            min_value=1000,
-            max_value=99999,
-            value=25830,
-            step=1
-        )
+    regional_presets = {
+        "🇦🇺 Australia - GDA2020 / MGA zone 55 (EPSG:7855)": 7855,
+        "🇦🇺 Australia - GDA2020 / MGA zone 56 (EPSG:7856)": 7856,
+        "🇦🇺 Australia - GDA2020 / MGA zone 54 (EPSG:7854)": 7854,
+        "🇦🇺 Australia - GDA94 / MGA zone 55 (EPSG:28355)": 28355,
+        "🇦🇺 Australia - GDA94 / MGA zone 56 (EPSG:28356)": 28356,
+        "🇪🇸 España - ETRS89 / UTM 30N (EPSG:25830)": 25830,
+        "🇪🇸 España - ETRS89 / UTM 29N (Galicia) (EPSG:25829)": 25829,
+        "🇪🇸 España - ETRS89 / UTM 31N (Cataluña/Baleares) (EPSG:25831)": 25831,
+        "🇪🇸 Canarias - WGS 84 / UTM 28N (EPSG:32628)": 32628,
+        "🌎 Global - WGS 84 / UTM 30N (EPSG:32630)": 32630,
+        "🌎 Global - WGS 84 / Web Mercator (EPSG:3857)": 3857,
+        "🌎 Global - WGS 84 Geográficas (EPSG:4326)": 4326,
+        "🇲🇽 México - ITRF2008 / UTM 14N (EPSG:6369)": 6369,
+        "🇨🇴 Colombia - MAGNA-SIRGAS Origen Nacional (EPSG:9377)": 9377,
+        "🇨🇱 Chile - SIRGAS-Chile / UTM 19S (EPSG:5361)": 5361,
+        "🇦🇷 Argentina - POSGAR 07 / Faja 4 (EPSG:5346)": 5346,
+        "🇺🇸 USA - NAD83 / UTM zone 18N (EPSG:26918)": 26918,
+        "🇺🇸 USA - NAD83 / UTM zone 10N (EPSG:26910)": 26910
+    }
+
+    if crs_mode == "Código EPSG directo (Cualquier país)":
+        epsg_raw = st.sidebar.text_input(
+            "Código EPSG de tu plano CAD:",
+            value="25830",
+            help="Ejemplos mundiales: 7855 o 28355 (Australia), 25830 (España), 32618 (Colombia/Panamá/USA), 32719 (Chile/Perú), 32630 (Europa/África), 6369 (México)."
+        ).strip().upper().replace("EPSG:", "").strip()
+
+        try:
+            epsg_code = int(epsg_raw)
+        except ValueError:
+            epsg_code = 25830
+            st.sidebar.warning("⚠️ Código numérico no válido. Usando EPSG:25830 por defecto.")
     else:
-        epsg_code = crs_options[selected_crs_label]
+        preset_label = st.sidebar.selectbox(
+            "Selecciona proyección regional:",
+            options=list(regional_presets.keys()),
+            index=0
+        )
+        epsg_code = regional_presets[preset_label]
 
     crs_str = f"EPSG:{epsg_code}"
 
     try:
         pyproj_crs = CRS.from_epsg(epsg_code)
-        st.sidebar.caption(f"✅ Proyección activa: **{pyproj_crs.name}**")
+        crs_name = pyproj_crs.name
+        area_name = pyproj_crs.area_of_use.name if pyproj_crs.area_of_use else "Global / No especificado"
+        st.sidebar.markdown(f"""
+        <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid #059669; border-radius: 8px; padding: 8px 12px; margin-top: 5px; margin-bottom: 10px;">
+            <div style="font-weight: 700; color: #10b981; font-size: 13px;">✅ EPSG:{epsg_code} Activo</div>
+            <div style="color: #f1f5f9; font-size: 12px; font-weight: 600;">{crs_name}</div>
+            <div style="color: #94a3b8; font-size: 11px; margin-top: 2px;">📍 Ámbito: {area_name[:55]}...</div>
+        </div>
+        """, unsafe_allow_html=True)
     except Exception as crs_err:
-        st.sidebar.error(f"⚠️ Código EPSG no reconocido: {crs_err}")
+        st.sidebar.error(f"⚠️ EPSG:{epsg_code} no reconocido: {crs_err}")
 
     # 2. Buffer porcentual de encuadre
     st.sidebar.subheader("2. Margen de Encuadre (Buffer)")
@@ -1100,9 +1150,14 @@ def render_ui():
     service_info = SERVICES_CATALOG[selected_service_key]
 
     if selected_service_key == "custom":
-        wms_url = st.sidebar.text_input("URL del servicio WMS:", value=service_info["url"])
-        wms_layer = st.sidebar.text_input("Capa WMS:", value=service_info["layer"])
-        wms_tag = st.sidebar.text_input("Etiqueta para nombres de archivo:", value="custom")
+        st.sidebar.markdown("""
+        <div style="background: rgba(56, 189, 248, 0.1); border-left: 3px solid #38bdf8; padding: 6px 10px; border-radius: 4px; margin-bottom: 8px; font-size: 12px; color: #cbd5e1;">
+            💡 <b>Conexión WMS Universal:</b> Puedes conectar cualquier servidor de cartografía u ortofotos oficial del mundo (Australia, Europa, América, etc.).
+        </div>
+        """, unsafe_allow_html=True)
+        wms_url = st.sidebar.text_input("URL base del servicio WMS:", value=service_info.get("url", ""), placeholder="https://ejemplo.gov/wms", help="URL base del servicio OGC WMS")
+        wms_layer = st.sidebar.text_input("Nombre técnico de la capa (Layer):", value=service_info.get("layer", ""), placeholder="imagery_layer", help="Identificador exacto de la capa en el servidor WMS")
+        wms_tag = st.sidebar.text_input("Etiqueta para archivos (Tag):", value="wms_custom", help="Prefijo corto que se incluirá en los nombres de archivo .tif y .tfw")
     else:
         st.sidebar.caption(f"ℹ️ **{service_info['badge']}:** {service_info['description']}")
         with st.sidebar.expander("⚙️ Ver detalles técnicos del servicio", expanded=False):
@@ -1141,23 +1196,24 @@ def render_ui():
     # ----------------------------------------------------------------------------------
     st.markdown("""
     <div class="main-header">
-        <h1>📐 Extractor de Cartografía Oficial y Google Satélite para AutoCAD</h1>
-        <p>Automatización de Ortofotos PNOA (IGN España), Google Satélite mundial, mapas topográficos MTN Ráster y relieve para AutoCAD en formato TIF + TFW georreferenciado.</p>
+        <h1>🌍 GeoRaster to CAD | Extractor Georreferenciado Universal</h1>
+        <p>Extracción y georreferenciación de <b>cualquier servidor WMS del mundo</b>, Google Satélite, Esri y cartografía oficial para AutoCAD, Civil 3D y BricsCAD en formato <b>TIF + TFW</b>.</p>
     </div>
     """, unsafe_allow_html=True)
 
     with st.expander("📖 Guía de uso rápido y cómo insertar en AutoCAD / Civil 3D", expanded=False):
         st.markdown("""
-        **Instrucciones para delineantes, topógrafos e ingenieros:**
-        1. **Carga tu archivo `.dxf`**: El dibujo debe contener polilíneas cerradas (`LWPOLYLINE` o `POLYLINE`) que delimiten el ámbito de trabajo.
-        2. **Verifica la ubicación en el visor interactivo**: Confirma visualmente que las geometrías caen sobre la ortofoto aérea en la posición real de tu proyecto y revisa el recuadro de salida.
-        3. **Personaliza la resolución (m/px)**: Define el nivel de detalle requerido por cada polígono (ej. 0.5 m/px para edificación, 1.0 o 2.0 m/px para obras civiles).
-        4. **Descarga el `.zip`**: Contiene los archivos georreferenciados para cada polígono:
-           - **`.tif`**: Imagen ortofoto descargada del servidor WMS del IGN.
-           - **`.tfw`**: Archivo *World File* con el tamaño de píxel y coordenadas UTM de la esquina superior izquierda.
+        **Instrucciones para delineantes, topógrafos e ingenieros de cualquier país:**
+        1. **Define la proyección (CRS)**: En la barra lateral, escribe directamente el código **EPSG** de tu plano (ej. `7855` para Australia GDA2020, `25830` para España ETRS89, `9377` para Colombia MAGNA, `32618` para WGS84 UTM 18N, etc.) o elige un preajuste regional.
+        2. **Selecciona la fuente de imagen**: Elige **Google Satélite** (mundial limpio), **Google Híbrido** (con vías y nombres), **Esri World Imagery**, **Cualquier servidor WMS del mundo** o servicios nacionales (PNOA/IGN).
+        3. **Carga tu archivo `.dxf`**: El dibujo debe contener polilíneas cerradas (`LWPOLYLINE` o `POLYLINE`) que delimiten el ámbito de trabajo o parcelas.
+        4. **Verifica la ubicación en el visor interactivo**: Confirma visualmente que las geometrías caen sobre la imagen en la posición real de tu proyecto y revisa el recuadro de salida.
+        5. **Descarga el `.zip`**: Contiene los archivos georreferenciados para cada polígono:
+           - **`.tif`**: Imagen ráster recortada en máxima resolución.
+           - **`.tfw`**: Archivo *World File* de calibración espacial con coordenadas UTM/proyectadas exactas.
         
-        **Cómo insertar en AutoCAD en su posición UTM exacta:**
-        - **AutoCAD Map 3D / Civil 3D**: Usa el comando `_MAPIINSERT` (o ve a *Insertar* -> *Imagen ráster*). Al seleccionar los archivos `.tif`, AutoCAD detectará automáticamente los archivos `.tfw` asociados e insertará las ortofotos en sus **coordenadas reales de proyecto**, encajando teselas de mosaico a la perfección.
+        **Cómo insertar en AutoCAD en su posición proyectada exacta:**
+        - **AutoCAD Map 3D / Civil 3D**: Ejecuta el comando `_MAPIINSERT` (o ve a *Insertar* -> *Imagen ráster*). Al seleccionar los archivos `.tif`, AutoCAD detectará automáticamente los archivos `.tfw` asociados e insertará las ortofotos en sus **coordenadas reales de proyecto**.
         - **AutoCAD Estándar / LT**: Inserta mediante el comando `_IMAGEATTACH` (`ENLAZARIMG`).
         - **Consejo para minutas o parcelas en diagonal**: Para recortar la ortofoto siguiendo la forma exacta de una minuta inclinada en AutoCAD, usa el comando nativo `_IMAGECLIP` (`DELIMIMG`) -> *Nuevo contorno* (`N`) -> *Seleccionar polilínea* (`S`) y toca tu polilínea. AutoCAD ocultará los bordes sobrantes al instante manteniendo la georreferenciación perfecta.
         """)
@@ -1273,7 +1329,10 @@ def render_ui():
                     extracted_polygons,
                     crs_str,
                     buffer_pct=buffer_pct,
-                    active_service_key=selected_service_key
+                    active_service_key=selected_service_key,
+                    custom_wms_url=wms_url if selected_service_key == "custom" else "",
+                    custom_wms_layer=wms_layer if selected_service_key == "custom" else "",
+                    custom_wms_tag=wms_tag if selected_service_key == "custom" else "custom"
                 )
                 if preview_map is not None:
                     st_folium(preview_map, use_container_width=True, height=470, returned_objects=[])
