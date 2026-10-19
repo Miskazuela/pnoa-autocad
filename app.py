@@ -49,8 +49,10 @@ import ezdxf
 from shapely.geometry import Polygon
 from pyproj import CRS, Transformer
 import folium
+from folium.plugins import Draw
 from streamlit_folium import st_folium
 from PIL import Image, ImageDraw, ImageChops
+import xml.etree.ElementTree as ET
 
 # Streamlit Page Config debe ser la primera llamada de Streamlit
 st.set_page_config(
@@ -298,6 +300,278 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
             continue
 
     return extracted_polygons
+
+
+def extract_kml_bytes_from_kmz(file_bytes: bytes) -> bytes:
+    """Extrae el archivo XML .kml principal contenido en un archivo comprimido .kmz."""
+    with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+        kml_files = [n for n in zf.namelist() if n.lower().endswith(".kml")]
+        if not kml_files:
+            raise ValueError("El archivo KMZ no contiene ningún archivo .kml válido.")
+        return zf.read(kml_files[0])
+
+
+def detect_epsg_from_lonlat(lon: float, lat: float) -> List[Dict[str, Any]]:
+    """
+    Calcula el sistema de proyección UTM o regional recomendado (EPSG)
+    a partir de las coordenadas geográficas reales (Longitud, Latitud WGS 84).
+    """
+    recommendations: List[Dict[str, Any]] = []
+    utm_zone = int(math.floor((lon + 180.0) / 6.0)) + 1
+    is_north = (lat >= 0)
+
+    # 1. España Peninsular y Baleares
+    if 35.0 <= lat <= 44.5 and -10.0 <= lon <= 5.0:
+        zone = 29 if lon <= -6.0 else (30 if lon <= 0.0 else 31)
+        recommendations.append({
+            "code": 25800 + zone,
+            "name": f"ETRS89 / UTM zone {zone}N (EPSG:{25800 + zone})",
+            "region": f"🇪🇸 España Peninsular (Huso {zone})",
+            "reason": f"Ubicación geográfica detectada en España (Lat: {lat:.4f}°, Lon: {lon:.4f}°).",
+            "confidence": "Muy Alta"
+        })
+    # Islas Canarias
+    elif 27.0 <= lat <= 30.0 and -19.0 <= lon <= -13.0:
+        recommendations.append({
+            "code": 32628,
+            "name": "WGS 84 / UTM zone 28N (EPSG:32628)",
+            "region": "🇪🇸 Islas Canarias (España)",
+            "reason": "Ubicación geográfica en el archipiélago canario.",
+            "confidence": "Muy Alta"
+        })
+
+    # 2. Colombia
+    if -4.5 <= lat <= 13.5 and -80.0 <= lon <= -66.0:
+        recommendations.append({
+            "code": 9377,
+            "name": "MAGNA-SIRGAS / Origen Nacional (EPSG:9377)",
+            "region": "🇨🇴 Colombia (Proyección Oficial Nacional)",
+            "reason": "Ubicación geográfica dentro del territorio de Colombia.",
+            "confidence": "Muy Alta"
+        })
+        if 4.0 <= lat <= 5.5 and -75.0 <= lon <= -73.5:
+            recommendations.append({
+                "code": 3116,
+                "name": "MAGNA-SIRGAS / Colombia Bogota zone (EPSG:3116)",
+                "region": "🇨🇴 Colombia (Bogotá D.C. / Cundinamarca)",
+                "reason": "Zona central de Bogotá D.C. y Sabana de Bogotá.",
+                "confidence": "Alta"
+            })
+
+    # 3. Australia
+    if -45.0 <= lat <= -9.0 and 110.0 <= lon <= 155.0:
+        if 48 <= utm_zone <= 58:
+            recommendations.append({
+                "code": 7800 + utm_zone,
+                "name": f"GDA2020 / MGA zone {utm_zone} (EPSG:{7800 + utm_zone})",
+                "region": f"🇦🇺 Australia (Map Grid of Australia Huso {utm_zone})",
+                "reason": f"Ubicación geográfica en Australia (Zona MGA {utm_zone}).",
+                "confidence": "Muy Alta"
+            })
+
+    # 4. Proyección Universal UTM Mundial
+    generic_code = (32600 + utm_zone) if is_north else (32700 + utm_zone)
+    hem_str = "Norte" if is_north else "Sur"
+    recommendations.append({
+        "code": generic_code,
+        "name": f"WGS 84 / UTM zone {utm_zone}{'N' if is_north else 'S'} (EPSG:{generic_code})",
+        "region": f"🌎 Proyección Universal UTM Huso {utm_zone} {hem_str}",
+        "reason": f"Cálculo automático de Huso UTM según longitud ({lon:.4f}°).",
+        "confidence": "Alta"
+    })
+    return recommendations
+
+
+def parse_kml_or_kmz_polygons(
+    file_bytes: bytes,
+    filename: str,
+    target_crs_str: str,
+    service_tag: str = "pnoa"
+) -> Tuple[List[Dict[str, Any]], Optional[Tuple[float, float]]]:
+    """
+    Extrae polígonos de archivos KML o KMZ de Google Earth, reproyectando las coordenadas
+    geográficas WGS 84 (EPSG:4326) al sistema de coordenadas CAD activo (target_crs_str).
+    Retorna la lista de polígonos y el centroide promedio (lon, lat) para recomendación inteligente de EPSG.
+    """
+    is_kmz = filename.lower().endswith(".kmz") or file_bytes[:4] == b"PK\x03\x04"
+    if is_kmz:
+        kml_bytes = extract_kml_bytes_from_kmz(file_bytes)
+    else:
+        kml_bytes = file_bytes
+
+    try:
+        root = ET.fromstring(kml_bytes)
+    except Exception as e:
+        raise ValueError(f"Error al interpretar el archivo XML del KML: {e}")
+
+    transformer = Transformer.from_crs("EPSG:4326", target_crs_str, always_xy=True)
+
+    extracted_polygons: List[Dict[str, Any]] = []
+    base_file_prefix = os.path.splitext(sanitize_filename(filename))[0]
+    polygon_counter = 1
+    all_lons: List[float] = []
+    all_lats: List[float] = []
+
+    for pm in root.iter():
+        if pm.tag.endswith("Placemark"):
+            pm_name = f"Parcela_{polygon_counter}"
+            for child in pm:
+                if child.tag.endswith("name") and child.text:
+                    pm_name = child.text.strip()
+                    break
+
+            # Buscar coordenadas en Polygon, MultiGeometry, LinearRing, LineString
+            for el in pm.iter():
+                if el.tag.endswith("coordinates") and el.text:
+                    raw_text = el.text.strip()
+                    lonlats: List[Tuple[float, float]] = []
+                    for token in raw_text.split():
+                        parts = token.split(",")
+                        if len(parts) >= 2:
+                            try:
+                                lon = float(parts[0])
+                                lat = float(parts[1])
+                                if -180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0:
+                                    lonlats.append((lon, lat))
+                                    all_lons.append(lon)
+                                    all_lats.append(lat)
+                            except ValueError:
+                                pass
+
+                    if len(lonlats) >= 3:
+                        # Asegurar cierre de polígono
+                        if lonlats[0] != lonlats[-1]:
+                            lonlats.append(lonlats[0])
+
+                        cad_pts: List[Tuple[float, float]] = []
+                        for lon, lat in lonlats:
+                            try:
+                                x, y = transformer.transform(lon, lat)
+                                cad_pts.append((x, y))
+                            except Exception:
+                                pass
+
+                        if len(cad_pts) >= 3:
+                            poly = Polygon(cad_pts)
+                            if poly.area > 0.01:
+                                minx, miny, maxx, maxy = poly.bounds
+                                width = maxx - minx
+                                height = maxy - miny
+
+                                clean_layer = sanitize_filename(pm_name)
+                                clean_tag = sanitize_filename(service_tag)
+                                output_name = f"{base_file_prefix}_{clean_tag}_{clean_layer}_p{polygon_counter}"
+                                rec_res, rec_label, _ = get_recommended_resolution(poly.area)
+
+                                extracted_polygons.append({
+                                    "incluir": True,
+                                    "id": polygon_counter,
+                                    "capa": pm_name,
+                                    "nombre_archivo": output_name,
+                                    "resolucion_m_px": rec_res,
+                                    "calidad_sugerida": rec_label,
+                                    "ancho_m": round(width, 2),
+                                    "alto_m": round(height, 2),
+                                    "area_m2": round(poly.area, 2),
+                                    "num_vertices": len(cad_pts),
+                                    "bounds": (minx, miny, maxx, maxy),
+                                    "pts": cad_pts,
+                                    "origen": "kml"
+                                })
+                                polygon_counter += 1
+
+    centroid = None
+    if all_lons and all_lats:
+        centroid = (sum(all_lons) / len(all_lons), sum(all_lats) / len(all_lats))
+
+    return extracted_polygons, centroid
+
+
+def parse_drawn_features(
+    drawings: List[Dict[str, Any]],
+    target_crs_str: str,
+    start_id: int = 1,
+    service_tag: str = "wms"
+) -> List[Dict[str, Any]]:
+    """
+    Convierte las geometrías dibujadas por el usuario en el mapa interactivo (GeoJSON WGS 84)
+    a polígonos proyectados en el sistema de coordenadas CAD activo (target_crs_str).
+    """
+    if not drawings:
+        return []
+
+    transformer = Transformer.from_crs("EPSG:4326", target_crs_str, always_xy=True)
+    extracted: List[Dict[str, Any]] = []
+
+    for i, feature in enumerate(drawings):
+        geom = feature.get("geometry", {})
+        gtype = geom.get("type", "")
+        coords = geom.get("coordinates", [])
+
+        rings = []
+        if gtype == "Polygon" and coords:
+            rings = coords[0]
+        elif gtype == "MultiPolygon" and coords:
+            rings = coords[0][0]
+
+        if len(rings) >= 3:
+            cad_pts: List[Tuple[float, float]] = []
+            for pt in rings:
+                try:
+                    lon, lat = float(pt[0]), float(pt[1])
+                    x, y = transformer.transform(lon, lat)
+                    cad_pts.append((x, y))
+                except Exception:
+                    pass
+
+            if len(cad_pts) >= 3:
+                poly = Polygon(cad_pts)
+                if poly.area > 0.01:
+                    minx, miny, maxx, maxy = poly.bounds
+                    w = maxx - minx
+                    h = maxy - miny
+                    rec_res, rec_label, _ = get_recommended_resolution(poly.area)
+                    curr_id = start_id + i
+
+                    extracted.append({
+                        "incluir": True,
+                        "id": curr_id,
+                        "capa": f"DIBUJO_MAPA_{curr_id}",
+                        "nombre_archivo": f"dibujo_mapa_{service_tag}_p{curr_id}",
+                        "resolucion_m_px": rec_res,
+                        "calidad_sugerida": rec_label,
+                        "ancho_m": round(w, 2),
+                        "alto_m": round(h, 2),
+                        "area_m2": round(poly.area, 2),
+                        "num_vertices": len(cad_pts),
+                        "bounds": (minx, miny, maxx, maxy),
+                        "pts": cad_pts,
+                        "es_dibujo": True
+                    })
+
+    return extracted
+
+
+def export_polygons_to_dxf(polygons: List[Dict[str, Any]]) -> bytes:
+    """
+    Genera un archivo DXF AutoCAD R2010 con las polilíneas cerradas (LWPOLYLINE) y sus capas,
+    permitiendo al usuario abrir las geometrías dibujadas o de KML directamente en AutoCAD.
+    """
+    doc = ezdxf.new("R2010")
+    msp = doc.modelspace()
+    for p in polygons:
+        pts = p.get("pts", [])
+        if len(pts) >= 3:
+            layer_name = sanitize_filename(str(p.get("capa", "0")))[:31]
+            try:
+                doc.layers.new(name=layer_name)
+            except Exception:
+                pass
+            pl = msp.add_lwpolyline(pts, close=True)
+            pl.dxf.layer = layer_name
+    buf = io.StringIO()
+    doc.write(buf)
+    return buf.getvalue().encode("utf-8")
 
 
 # --------------------------------------------------------------------------------------
@@ -1380,98 +1654,107 @@ def fetch_xyz_ortho(
 # --------------------------------------------------------------------------------------
 # 4. MAPA INTERACTIVO DE CONFIRMACIÓN DE UBICACIÓN
 # --------------------------------------------------------------------------------------
+def get_crs_default_center(crs_str: str) -> Tuple[float, float, int]:
+    """Obtiene latitud, longitud y nivel de zoom aproximados para centrar el mapa según el CRS activo."""
+    try:
+        c = CRS.from_user_input(crs_str)
+        a = c.area_of_use
+        if a and a.west is not None and a.east is not None and a.south is not None and a.north is not None:
+            lat = max(-80.0, min(84.0, (a.south + a.north) / 2.0))
+            lon = (a.west + a.east) / 2.0
+            return lat, lon, 7
+    except Exception:
+        pass
+    return 40.4168, -3.7038, 6
+
+
 def generate_preview_map(
-    polygons: List[Dict[str, Any]],
-    crs_str: str,
+    polygons: Optional[List[Dict[str, Any]]] = None,
+    crs_str: str = "EPSG:25830",
     buffer_pct: float = 0.04,
     active_service_key: str = "google_sat",
     custom_wms_url: str = "",
     custom_wms_layer: str = "",
-    custom_wms_tag: str = "wms_custom"
-) -> Optional[folium.Map]:
+    custom_wms_tag: str = "wms_custom",
+    enable_draw: bool = True
+) -> folium.Map:
     """
-    Reproyecta los vértices de los polígonos al sistema WGS 84 (EPSG:4326)
-    y crea un mapa interactivo con ortofotografía satelital y capas oficiales del IGN
-    (Ortofoto PNOA, Mapa Ráster MTN y Relieve MDT).
-    Muestra el contorno de la geometría CAD (línea continua) y el polígono envolvente
-    del encuadre exacto de la imagen de salida TIF resultante (línea discontinua con buffer).
+    Crea un mapa interactivo con ortofotografía satelital y capas oficiales del IGN.
+    Permite visualizar polígonos existentes (DXF/KML) y trazar nuevas parcelas directamente
+    en el visor mediante la barra de herramientas de dibujo (Draw: polígonos y rectángulos).
     """
-    if not polygons:
-        return None
-
-    try:
-        transformer = Transformer.from_crs(crs_str, "EPSG:4326", always_xy=True)
-    except Exception as e:
-        st.warning(f"No se pudo inicializar la transformación desde {crs_str}: {e}")
-        return None
-
+    has_polys = bool(polygons)
     all_lats: List[float] = []
     all_lons: List[float] = []
     converted_polygons = []
 
-    for p in polygons:
-        pts = p.get("pts", [])
-        bounds = p.get("bounds")
-        if not pts or not bounds:
-            continue
+    if has_polys:
+        try:
+            transformer = Transformer.from_crs(crs_str, "EPSG:4326", always_xy=True)
+            for p in polygons:
+                pts = p.get("pts", [])
+                bounds = p.get("bounds")
+                if not pts or not bounds:
+                    continue
 
-        latlon_ring = []
-        for x, y in pts:
-            try:
-                lon, lat = transformer.transform(x, y)
-                if -90 <= lat <= 90 and -180 <= lon <= 180:
-                    latlon_ring.append([lat, lon])
-                    all_lats.append(lat)
-                    all_lons.append(lon)
-            except Exception:
-                continue
+                latlon_ring = []
+                for x, y in pts:
+                    try:
+                        lon, lat = transformer.transform(x, y)
+                        if -90 <= lat <= 90 and -180 <= lon <= 180:
+                            latlon_ring.append([lat, lon])
+                            all_lats.append(lat)
+                            all_lons.append(lon)
+                    except Exception:
+                        continue
 
-        # Marco rectangular ortogonal exacto de la salida TIF con buffer
-        minx, miny, maxx, maxy = bounds
-        dx = (maxx - minx) * buffer_pct
-        dy = (maxy - miny) * buffer_pct
-        bbox_buf = (minx - dx, miny - dy, maxx + dx, maxy + dy)
-        width_salida = bbox_buf[2] - bbox_buf[0]
-        height_salida = bbox_buf[3] - bbox_buf[1]
-        bbox_corners = [
-            (bbox_buf[0], bbox_buf[1]),
-            (bbox_buf[2], bbox_buf[1]),
-            (bbox_buf[2], bbox_buf[3]),
-            (bbox_buf[0], bbox_buf[3])
-        ]
+                # Marco rectangular ortogonal exacto de la salida TIF con buffer
+                minx, miny, maxx, maxy = bounds
+                dx = (maxx - minx) * buffer_pct
+                dy = (maxy - miny) * buffer_pct
+                bbox_buf = (minx - dx, miny - dy, maxx + dx, maxy + dy)
+                width_salida = bbox_buf[2] - bbox_buf[0]
+                height_salida = bbox_buf[3] - bbox_buf[1]
+                bbox_corners = [
+                    (bbox_buf[0], bbox_buf[1]),
+                    (bbox_buf[2], bbox_buf[1]),
+                    (bbox_buf[2], bbox_buf[3]),
+                    (bbox_buf[0], bbox_buf[3])
+                ]
 
-        bbox_latlon = []
-        for x, y in bbox_corners:
-            try:
-                lon, lat = transformer.transform(x, y)
-                if -90 <= lat <= 90 and -180 <= lon <= 180:
-                    bbox_latlon.append([lat, lon])
-                    all_lats.append(lat)
-                    all_lons.append(lon)
-            except Exception:
-                continue
+                bbox_latlon = []
+                for x, y in bbox_corners:
+                    try:
+                        lon, lat = transformer.transform(x, y)
+                        if -90 <= lat <= 90 and -180 <= lon <= 180:
+                            bbox_latlon.append([lat, lon])
+                            all_lats.append(lat)
+                            all_lons.append(lon)
+                    except Exception:
+                        continue
 
-        if len(latlon_ring) >= 3:
-            converted_polygons.append({
-                "info": p,
-                "locations": latlon_ring,
-                "bbox_locations": bbox_latlon,
-                "width_salida": round(width_salida, 1),
-                "height_salida": round(height_salida, 1),
-                "center": [sum(pt[0] for pt in latlon_ring)/len(latlon_ring), sum(pt[1] for pt in latlon_ring)/len(latlon_ring)]
-            })
+                if len(latlon_ring) >= 3:
+                    converted_polygons.append({
+                        "info": p,
+                        "locations": latlon_ring,
+                        "bbox_locations": bbox_latlon,
+                        "width_salida": round(width_salida, 1),
+                        "height_salida": round(height_salida, 1),
+                        "center": [sum(pt[0] for pt in latlon_ring)/len(latlon_ring), sum(pt[1] for pt in latlon_ring)/len(latlon_ring)]
+                    })
+        except Exception:
+            pass
 
-    if not all_lats or not all_lons:
-        return None
-
-    center_lat = sum(all_lats) / len(all_lats)
-    center_lon = sum(all_lons) / len(all_lons)
-    min_lat, max_lat = min(all_lats), max(all_lats)
-    min_lon, max_lon = min(all_lons), max(all_lons)
+    if all_lats and all_lons:
+        center_lat = sum(all_lats) / len(all_lats)
+        center_lon = sum(all_lons) / len(all_lons)
+        zoom_start = 15
+    else:
+        center_lat, center_lon, zoom_start = get_crs_default_center(crs_str)
 
     m = folium.Map(
         location=[center_lat, center_lon],
-        zoom_start=15,
+        zoom_start=zoom_start,
         control_scale=True
     )
 
@@ -1587,7 +1870,7 @@ def generate_preview_map(
         popup_html = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.5; min-width: 190px; color: #f8fafc;">
             <div style="color: {col}; font-size: 14px; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">📐 Geometría CAD #{p_info['id']}</div>
-            <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Capa CAD:</b> <span style="background: #334155; padding: 1px 5px; border-radius: 4px; font-family: monospace;">{p_info['capa']}</span></div>
+            <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Capa:</b> <span style="background: #334155; padding: 1px 5px; border-radius: 4px; font-family: monospace;">{p_info['capa']}</span></div>
             <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Nombre:</b> {p_info['nombre_archivo']}</div>
             <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Dimensiones:</b> {p_info['ancho_m']} × {p_info['alto_m']} m</div>
             <div style="margin-bottom: 3px;"><b style="color: #94a3b8;">Área:</b> <span style="color: #38bdf8; font-weight: 600;">{p_info['area_m2']:,} m²</span> ({(p_info['area_m2']/10000):.2f} ha)</div>
@@ -1603,7 +1886,7 @@ def generate_preview_map(
             fill_color=col,
             fill_opacity=0.35,
             popup=folium.Popup(popup_html, max_width=300),
-            tooltip=f"📐 Minuta CAD #{p_info['id']} | {p_info['capa']} ({p_info['ancho_m']}m × {p_info['alto_m']}m)"
+            tooltip=f"📐 Parcela #{p_info['id']} | {p_info['capa']} ({p_info['ancho_m']}m × {p_info['alto_m']}m)"
         ).add_to(m)
 
         folium.CircleMarker(
@@ -1617,7 +1900,28 @@ def generate_preview_map(
             tooltip=f"Centroide Polígono #{p_info['id']}"
         ).add_to(m)
 
-    m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+    if all_lats and all_lons:
+        min_lat, max_lat = min(all_lats), max(all_lats)
+        min_lon, max_lon = min(all_lons), max(all_lons)
+        m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+
+    # Barra de herramientas para dibujar polígonos o rectángulos libres en el mapa
+    if enable_draw:
+        Draw(
+            export=False,
+            filename="poligono.geojson",
+            position="topleft",
+            draw_options={
+                "polyline": False,
+                "rectangle": True,
+                "polygon": True,
+                "circle": False,
+                "marker": False,
+                "circlemarker": False
+            },
+            edit_options={"edit": True, "remove": True}
+        ).add_to(m)
+
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
     return m
@@ -1981,50 +2285,103 @@ def render_ui():
         st.session_state["processed_summary"] = []
     if "demo_active" not in st.session_state:
         st.session_state["demo_active"] = False
+    if "draw_only_mode" not in st.session_state:
+        st.session_state["draw_only_mode"] = False
+    if "persisted_drawings" not in st.session_state:
+        st.session_state["persisted_drawings"] = []
+    if "draw_version" not in st.session_state:
+        st.session_state["draw_version"] = 0
+    if "is_vector_exportable" not in st.session_state:
+        st.session_state["is_vector_exportable"] = False
 
     # ----------------------------------------------------------------------------------
-    # CARGA DE ARCHIVO DXF Y MODO DE PRUEBA
+    # CARGA DE ARCHIVO (DXF / KML / KMZ) Y ACCIONES RÁPIDAS
     # ----------------------------------------------------------------------------------
-    col_up, col_demo = st.columns([3, 1])
+    col_up, col_demo = st.columns([2.8, 1.4])
 
     with col_up:
         uploaded_file = st.file_uploader(
-            "📁 Carga tu plano AutoCAD en formato DXF (.dxf):",
-            type=["dxf"],
-            help="Sube un archivo DXF que contenga una o más polilíneas cerradas."
+            "📁 Carga tu plano AutoCAD (DXF) o polígonos Google Earth (KML / KMZ):",
+            type=["dxf", "kml", "kmz"],
+            help="Sube un archivo DXF con polilíneas cerradas, o un archivo KML / KMZ exportado desde Google Earth."
         )
 
     with col_demo:
         st.write("")
-        st.markdown("<b style='font-size: 13px; color: #94a3b8;'>🧪 Probar sin subir archivo:</b>", unsafe_allow_html=True)
-        col_d1, col_d2 = st.columns(2)
+        st.markdown("<b style='font-size: 13px; color: #94a3b8;'>⚡ Acciones rápidas:</b>", unsafe_allow_html=True)
+        col_d1, col_d2, col_d3 = st.columns(3)
         with col_d1:
-            if st.button("🇪🇸 Madrid", help="Genera plano DXF en Madrid (EPSG:25830)", use_container_width=True):
-                st.session_state["demo_active"] = "madrid"
+            if st.button("✏️ Dibujar", help="Abre el visor para trazar polígonos directamente sin archivo", use_container_width=True):
+                st.session_state["draw_only_mode"] = True
+                st.session_state["demo_active"] = False
                 st.session_state["processed_zip_data"] = None
         with col_d2:
-            if st.button("🇦🇺 Australia", help="Genera plano DXF en Melbourne, Australia (EPSG:7855)", use_container_width=True):
-                st.session_state["demo_active"] = "australia"
+            if st.button("🇪🇸 Madrid", help="Genera plano DXF demo en Madrid (EPSG:25830)", use_container_width=True):
+                st.session_state["demo_active"] = "madrid"
+                st.session_state["draw_only_mode"] = False
+                st.session_state["pending_epsg_code"] = 25830
                 st.session_state["processed_zip_data"] = None
+                st.rerun()
+        with col_d3:
+            if st.button("🇦🇺 Australia", help="Genera plano DXF demo en Melbourne (EPSG:7855)", use_container_width=True):
+                st.session_state["demo_active"] = "australia"
+                st.session_state["draw_only_mode"] = False
+                st.session_state["pending_epsg_code"] = 7855
+                st.session_state["processed_zip_data"] = None
+                st.rerun()
 
-    dxf_bytes = None
+    file_polygons: List[Dict[str, Any]] = []
     dxf_display_name = ""
+    is_vector_exportable = False
+    kml_centroid: Optional[Tuple[float, float]] = None
+    raw_dxf_snippet = ""
+    dxf_bytes = None
 
     if uploaded_file is not None:
         st.session_state["demo_active"] = False
-        dxf_bytes = uploaded_file.getvalue()
-        dxf_display_name = uploaded_file.name
+        st.session_state["draw_only_mode"] = False
+        filename = uploaded_file.name
+        ext = os.path.splitext(filename)[1].lower()
+        file_bytes = uploaded_file.getvalue()
+        dxf_display_name = filename
+
+        try:
+            if ext in (".kml", ".kmz"):
+                with st.spinner("Leyendo polígonos de Google Earth (KML/KMZ)..."):
+                    file_polygons, kml_centroid = parse_kml_or_kmz_polygons(
+                        file_bytes, filename, target_crs_str=crs_str, service_tag=wms_tag
+                    )
+                is_vector_exportable = True
+                if not file_polygons:
+                    st.warning("⚠️ No se encontraron polígonos cerrados en el archivo KML/KMZ. Comprueba que contiene geometrías tipo Polygon o rutas cerradas en Google Earth.")
+            elif ext == ".dxf":
+                with st.spinner("Leyendo entidades del plano DXF..."):
+                    file_polygons = parse_dxf_polygons(file_bytes, filename, service_tag=wms_tag)
+                dxf_bytes = file_bytes
+                raw_dxf_snippet = file_bytes[:100000].decode("latin-1", errors="ignore")
+                if not file_polygons:
+                    st.warning("""
+                    ⚠️ **No se encontraron polilíneas cerradas en el espacio modelo del archivo DXF.**
+                    
+                    **Recomendaciones para AutoCAD:**
+                    - Comprueba que las parcelas son entidades `LWPOLYLINE` o `POLYLINE`.
+                    - Selecciona la polilínea, abre la paleta de Propiedades (`Ctrl+1`) y verifica que **Cerrada = Sí**.
+                    - En la línea de comandos, ejecuta `EDITPOL` (`PEDIT`) y elige la opción **Cerrar**.
+                    """)
+        except Exception as e:
+            st.error(f"❌ Error al procesar el archivo `{filename}`: {e}")
+            with st.expander("Detalle del error técnico"):
+                st.code(traceback.format_exc())
+
     elif st.session_state.get("demo_active"):
         demo_mode = st.session_state.get("demo_active")
         if demo_mode == "australia":
             demo_doc = ezdxf.new("R2010")
             demo_msp = demo_doc.modelspace()
-            # Parcela 1: Melbourne City Center (GDA2020 / MGA zone 55 - EPSG:7855)
             p1 = [(320650, 5812850), (320750, 5812850), (320750, 5812950), (320650, 5812950)]
             poly1 = demo_msp.add_lwpolyline(p1, close=True)
             poly1.dxf.layer = "PARCELA_MELBOURNE_VIC"
 
-            # Parcela 2: Lote suburbano en Melbourne
             p2 = [(321100, 5813200), (321280, 5813200), (321280, 5813350), (321100, 5813350)]
             poly2 = demo_msp.add_lwpolyline(p2, close=True)
             poly2.dxf.layer = "AMBITO_OBRA_AUSTRALIA"
@@ -2037,18 +2394,14 @@ def render_ui():
         else:
             demo_doc = ezdxf.new("R2010")
             demo_msp = demo_doc.modelspace()
-            
-            # Parcela 1: Solar urbano en Madrid (Área pequeña < 0.5 ha -> 0.25 m/px Muy Alta)
             p1 = [(441300, 4478100), (441360, 4478100), (441360, 4478150), (441300, 4478150)]
             poly1 = demo_msp.add_lwpolyline(p1, close=True)
             poly1.dxf.layer = "SOLAR_EDIFICACION"
-            
-            # Parcela 2: Parcela industrial / nave en Madrid (1.2 ha -> 0.50 m/px Alta)
+
             p2 = [(441800, 4473800), (441920, 4473800), (441920, 4473900), (441800, 4473900)]
             poly2 = demo_msp.add_lwpolyline(p2, close=True)
             poly2.dxf.layer = "PARCELA_INDUSTRIAL"
 
-            # Parcela 3: Ámbito de obra / desarrollo en Madrid (6.0 ha -> 1.00 m/px Estándar)
             p3 = [(441300, 4476800), (441600, 4476980), (441480, 4477180), (441180, 4477000)]
             poly3 = demo_msp.add_lwpolyline(p3, close=True)
             poly3.dxf.layer = "AMBITO_OBRA"
@@ -2059,467 +2412,557 @@ def render_ui():
             dxf_display_name = "demo_madrid_pnoa.dxf"
             st.info("💡 Modo de demostración activo: Plano con 3 geometrías en Madrid (EPSG:25830).")
 
+        file_polygons = parse_dxf_polygons(dxf_bytes, dxf_display_name, service_tag=wms_tag)
+        raw_dxf_snippet = dxf_bytes[:100000].decode("latin-1", errors="ignore")
+        is_vector_exportable = True
+
+    # Integrar geometrías dibujadas interactivamente en el mapa
+    persisted_drawings = st.session_state.get("persisted_drawings", [])
+    drawn_polys: List[Dict[str, Any]] = []
+    if persisted_drawings:
+        drawn_polys = parse_drawn_features(
+            persisted_drawings,
+            target_crs_str=crs_str,
+            start_id=len(file_polygons) + 1,
+            service_tag=wms_tag
+        )
+        is_vector_exportable = True
+
+    extracted_polygons = file_polygons + drawn_polys
+    if not dxf_display_name:
+        dxf_display_name = "trazado_mapa.dxf" if drawn_polys else "proyecto.dxf"
+
     # ----------------------------------------------------------------------------------
-    # EXTRACCIÓN Y VISOR CARTOGRÁFICO DE CONFIRMACIÓN
+    # RECOMENDACIÓN INTELIGENTE DE PROYECCIÓN CARTOGRÁFICA (CRS / EPSG)
     # ----------------------------------------------------------------------------------
-    if dxf_bytes is not None:
-        try:
-            with st.spinner("Leyendo entidades del plano DXF..."):
-                extracted_polygons = parse_dxf_polygons(dxf_bytes, dxf_display_name, service_tag=wms_tag)
+    rec_crs_list: List[Dict[str, Any]] = []
+    if kml_centroid is not None:
+        rec_crs_list = detect_epsg_from_lonlat(kml_centroid[0], kml_centroid[1])
+    elif persisted_drawings and not file_polygons:
+        all_draw_lons: List[float] = []
+        all_draw_lats: List[float] = []
+        for d in persisted_drawings:
+            coords = d.get("geometry", {}).get("coordinates", [])
+            def _extract_c(c_arr):
+                for item in c_arr:
+                    if isinstance(item, (list, tuple)) and len(item) >= 2 and isinstance(item[0], (int, float)):
+                        all_draw_lons.append(float(item[0]))
+                        all_draw_lats.append(float(item[1]))
+                    elif isinstance(item, (list, tuple)):
+                        _extract_c(item)
+            _extract_c(coords)
+        if all_draw_lons and all_draw_lats:
+            rec_crs_list = detect_epsg_from_lonlat(
+                sum(all_draw_lons) / len(all_draw_lons),
+                sum(all_draw_lats) / len(all_draw_lats)
+            )
+    elif file_polygons:
+        all_minx = min(p["bounds"][0] for p in file_polygons)
+        all_miny = min(p["bounds"][1] for p in file_polygons)
+        all_maxx = min(p["bounds"][2] for p in file_polygons)
+        all_maxy = min(p["bounds"][3] for p in file_polygons)
+        total_bounds = (all_minx, all_miny, all_maxx, all_maxy)
+        layers_found = list(set(p["capa"] for p in file_polygons))
+        rec_crs_list = detect_recommended_epsg(total_bounds, layer_names=layers_found, raw_text=raw_dxf_snippet)
 
-            if not extracted_polygons:
-                st.warning("""
-                ⚠️ **No se encontraron polilíneas cerradas en el espacio modelo del archivo DXF.**
-                
-                **Recomendaciones para AutoCAD:**
-                - Comprueba que las parcelas son entidades `LWPOLYLINE` o `POLYLINE`.
-                - Selecciona la polilínea, abre la paleta de Propiedades (`Ctrl+1`) y verifica que **Cerrada = Sí**.
-                - En la línea de comandos, ejecuta `EDITPOL` (`PEDIT`) y elige la opción **Cerrar**.
-                """)
-            else:
-                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-                layers_found = list(set(p["capa"] for p in extracted_polygons))
-                col_m1.metric("Polilíneas detectadas", len(extracted_polygons))
-                col_m2.metric("Capas CAD", len(layers_found))
-                col_m3.metric("Proyección activa", crs_str)
-                col_m4.metric("Servicio activo", service_info["badge"])
+    if rec_crs_list:
+        top_rec = rec_crs_list[0]
+        if epsg_code == top_rec["code"]:
+            st.markdown(f"""
+            <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid #059669; border-radius: 10px; padding: 12px 16px; margin: 12px 0 16px 0;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 18px;">✅</span>
+                    <div style="color: #10b981; font-weight: 700; font-size: 14px;">
+                        Proyección Activa Verificada: Coincide con EPSG:{epsg_code} ({top_rec['name']})
+                    </div>
+                </div>
+                <div style="color: #cbd5e1; font-size: 12px; margin-top: 3px; padding-left: 26px;">
+                    📍 <b>Ámbito:</b> {top_rec['region']} &mdash; <i>{top_rec['reason']}</i>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+                        border: 2px solid #38bdf8; border-radius: 12px; padding: 16px 20px; margin: 12px 0 16px 0;
+                        box-shadow: 0 8px 24px rgba(56, 189, 248, 0.18);">
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 22px;">💡</span>
+                        <span style="color: #38bdf8; font-size: 1.15rem; font-weight: 700;">
+                            Sugerencia Inteligente de Coordenadas: ¿Tu plano es EPSG:{top_rec['code']}?
+                        </span>
+                    </div>
+                    <span style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.4);">
+                        Confianza {top_rec['confidence']}
+                    </span>
+                </div>
+                <div style="color: #f1f5f9; font-size: 0.95rem; font-weight: 600; margin-bottom: 4px;">
+                    🎯 <b>{top_rec['name']}</b> &mdash; <span style="color: #94a3b8; font-weight: 400;">{top_rec['region']}</span>
+                </div>
+                <div style="color: #cbd5e1; font-size: 0.88rem; margin-bottom: 12px; line-height: 1.4;">
+                    {top_rec['reason']} Actualmente tienes seleccionada en la barra lateral la proyección <b>{crs_str}</b>.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-                # ----------------------------------------------------------------------
-                # RECOMENDACIÓN INTELIGENTE DE PROYECCIÓN CARTOGRÁFICA (CRS)
-                # ----------------------------------------------------------------------
-                all_minx = min(p["bounds"][0] for p in extracted_polygons)
-                all_miny = min(p["bounds"][1] for p in extracted_polygons)
-                all_maxx = min(p["bounds"][2] for p in extracted_polygons)
-                all_maxy = min(p["bounds"][3] for p in extracted_polygons)
-                total_bounds = (all_minx, all_miny, all_maxx, all_maxy)
+            c_btn_top, c_btn_alts = st.columns([1.6, 2.4])
+            with c_btn_top:
+                btn_label = f"✨ Aplicar recomendada: EPSG:{top_rec['code']}"
+                if st.button(btn_label, type="primary", use_container_width=True, key=f"btn_apply_{top_rec['code']}"):
+                    st.session_state["pending_epsg_code"] = top_rec["code"]
+                    st.rerun()
 
-                dxf_snippet = dxf_bytes[:100000].decode("latin-1", errors="ignore")
-                rec_crs_list = detect_recommended_epsg(total_bounds, layer_names=layers_found, raw_text=dxf_snippet)
-
-                if rec_crs_list:
-                    top_rec = rec_crs_list[0]
-                    if epsg_code == top_rec["code"]:
-                        st.markdown(f"""
-                        <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid #059669; border-radius: 10px; padding: 12px 16px; margin: 12px 0 16px 0;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <span style="font-size: 18px;">✅</span>
-                                <div style="color: #10b981; font-weight: 700; font-size: 14px;">
-                                    Proyección Activa Verificada: Coincide con EPSG:{epsg_code} ({top_rec['name']})
-                                </div>
-                            </div>
-                            <div style="color: #cbd5e1; font-size: 12px; margin-top: 3px; padding-left: 26px;">
-                                📍 <b>Ámbito:</b> {top_rec['region']} &mdash; <i>{top_rec['reason']}</i>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
-                                    border: 2px solid #38bdf8; border-radius: 12px; padding: 16px 20px; margin: 12px 0 16px 0;
-                                    box-shadow: 0 8px 24px rgba(56, 189, 248, 0.18);">
-                            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <span style="font-size: 22px;">💡</span>
-                                    <span style="color: #38bdf8; font-size: 1.15rem; font-weight: 700;">
-                                        Sugerencia Inteligente de Coordenadas: ¿Tu plano es EPSG:{top_rec['code']}?
-                                    </span>
-                                </div>
-                                <span style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.4);">
-                                    Confianza {top_rec['confidence']}
-                                </span>
-                            </div>
-                            <div style="color: #f1f5f9; font-size: 0.95rem; font-weight: 600; margin-bottom: 4px;">
-                                🎯 <b>{top_rec['name']}</b> &mdash; <span style="color: #94a3b8; font-weight: 400;">{top_rec['region']}</span>
-                            </div>
-                            <div style="color: #cbd5e1; font-size: 0.88rem; margin-bottom: 12px; line-height: 1.4;">
-                                {top_rec['reason']} Actualmente tienes seleccionada en la barra lateral la proyección <b>{crs_str}</b>.
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        c_btn_top, c_btn_alts = st.columns([1.6, 2.4])
-                        with c_btn_top:
-                            btn_label = f"✨ Aplicar recomendada: EPSG:{top_rec['code']}"
-                            if st.button(btn_label, type="primary", use_container_width=True, key=f"btn_apply_{top_rec['code']}"):
-                                st.session_state["pending_epsg_code"] = top_rec["code"]
+            with c_btn_alts:
+                if len(rec_crs_list) > 1:
+                    alts = rec_crs_list[1:3]
+                    alt_cols = st.columns(len(alts))
+                    for i, alt in enumerate(alts):
+                        with alt_cols[i]:
+                            alt_name_short = alt['name'].split('(')[0].replace("GDA2020 / ", "").replace("ETRS89 / ", "").strip()
+                            if st.button(f"Probar EPSG:{alt['code']} ({alt_name_short})", use_container_width=True, key=f"btn_alt_{alt['code']}", help=f"{alt['name']} - {alt['region']}"):
+                                st.session_state["pending_epsg_code"] = alt["code"]
                                 st.rerun()
 
-                        with c_btn_alts:
-                            if len(rec_crs_list) > 1:
-                                alts = rec_crs_list[1:3]
-                                alt_cols = st.columns(len(alts))
-                                for i, alt in enumerate(alts):
-                                    with alt_cols[i]:
-                                        alt_name_short = alt['name'].split('(')[0].replace("GDA2020 / ", "").replace("ETRS89 / ", "").strip()
-                                        if st.button(f"Probar EPSG:{alt['code']} ({alt_name_short})", use_container_width=True, key=f"btn_alt_{alt['code']}", help=f"{alt['name']} - {alt['region']}"):
-                                            st.session_state["pending_epsg_code"] = alt["code"]
-                                            st.rerun()
+            if len(rec_crs_list) > 3 or any("alt_code" in r for r in rec_crs_list):
+                with st.expander("🔍 Ver otras opciones geodésicas detectadas (ej. GDA94 / Husos secundarios)", expanded=False):
+                    for r in rec_crs_list:
+                        if "alt_code" in r:
+                            c_a1, c_a2 = st.columns([3, 1])
+                            c_a1.write(f"**{r['alt_name']}** &mdash; {r['region']}")
+                            if c_a2.button(f"Aplicar EPSG:{r['alt_code']}", key=f"btn_apply_alt_{r['alt_code']}", use_container_width=True):
+                                st.session_state["pending_epsg_code"] = r["alt_code"]
+                                st.rerun()
 
-                        if len(rec_crs_list) > 3 or any("alt_code" in r for r in rec_crs_list):
-                            with st.expander("🔍 Ver otras opciones geodésicas detectadas (ej. GDA94 / Husos secundarios)", expanded=False):
-                                for r in rec_crs_list:
-                                    if "alt_code" in r:
-                                        c_a1, c_a2 = st.columns([3, 1])
-                                        c_a1.write(f"**{r['alt_name']}** &mdash; {r['region']}")
-                                        if c_a2.button(f"Aplicar EPSG:{r['alt_code']}", key=f"btn_apply_alt_{r['alt_code']}", use_container_width=True):
-                                            st.session_state["pending_epsg_code"] = r["alt_code"]
-                                            st.rerun()
+    # ----------------------------------------------------------------------------------
+    # VISOR CARTOGRÁFICO INTERACTIVO Y HERRAMIENTA DE TRAZADO
+    # ----------------------------------------------------------------------------------
+    st.markdown("---")
+    col_map_h, col_map_btn = st.columns([3, 1])
+    with col_map_h:
+        st.markdown(f"### 🗺️ Visor Cartográfico y Trazado de Áreas ({service_info['badge']})")
+        st.caption(
+            "Verifica la ubicación de tus geometrías CAD/KML (**contorno sólido**) y el **recuadro de la imagen TIF de salida** (**línea discontinua** con buffer). "
+            "Para trazar una nueva parcela directamente en el mapa, usa las herramientas de **polígono o rectángulo** en la barra superior izquierda (✏️)."
+        )
+    with col_map_btn:
+        st.write("")
+        if st.session_state.get("persisted_drawings"):
+            if st.button("🗑️ Limpiar dibujos del mapa", use_container_width=True, help="Elimina los polígonos dibujados manualmente"):
+                st.session_state["persisted_drawings"] = []
+                st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
+                st.session_state["processed_zip_data"] = None
+                st.rerun()
 
-                # Inicializar y sincronizar el estado de la tabla antes de renderizar el mapa
-                state_key = f"df_{dxf_display_name}_{len(extracted_polygons)}_{wms_tag}"
-                if state_key not in st.session_state:
-                    table_data = []
-                    for p in extracted_polygons:
-                        row_copy = dict(p)
-                        row_copy.pop("pts", None)
-                        table_data.append(row_copy)
-                    st.session_state[state_key] = pd.DataFrame(table_data)
+    draw_ver = st.session_state.get("draw_version", 0)
+    preview_map = generate_preview_map(
+        polygons=extracted_polygons if extracted_polygons else None,
+        crs_str=crs_str,
+        buffer_pct=buffer_pct,
+        active_service_key=selected_service_key,
+        custom_wms_url=wms_url if selected_service_key == "custom" else "",
+        custom_wms_layer=wms_layer if selected_service_key == "custom" else "",
+        custom_wms_tag=wms_tag if selected_service_key == "custom" else "custom",
+        enable_draw=True
+    )
 
-                active_df = st.session_state[state_key]
+    if preview_map is not None:
+        map_output = st_folium(
+            preview_map,
+            use_container_width=True,
+            height=480,
+            returned_objects=["all_drawings", "last_active_drawing"],
+            key=f"cad_map_v{draw_ver}"
+        )
 
-                # VISOR CARTOGRÁFICO INTERACTIVO PARA CONFIRMAR UBICACIÓN
-                st.markdown("---")
-                st.markdown(f"### 🗺️ Confirmación Visual de Ubicación y Encuadre ({service_info['badge']})")
-                st.caption(
-                    "Verifica en el visor interactivo la ubicación de tus geometrías CAD (**contorno sólido**) "
-                    "y el **recuadro de la imagen de salida TIF** que se descargará (**línea discontinua** con el margen de buffer aplicado). "
-                    "Puedes activar/desactivar las capas de Ortofoto PNOA, Mapa Ráster MTN o Relieve en el selector superior derecho."
-                )
+        if map_output and map_output.get("all_drawings"):
+            leaflet_drawings = map_output.get("all_drawings")
+            saved_drawings = list(st.session_state.get("persisted_drawings", []))
+            saved_signatures = {
+                json.dumps(f.get("geometry", {}).get("coordinates", [])) for f in saved_drawings
+            }
+            any_added = False
+            for feat in leaflet_drawings:
+                coords = feat.get("geometry", {}).get("coordinates", [])
+                sig = json.dumps(coords)
+                if sig not in saved_signatures:
+                    saved_drawings.append(feat)
+                    saved_signatures.add(sig)
+                    any_added = True
+            if any_added:
+                st.session_state["persisted_drawings"] = saved_drawings
+                st.session_state["draw_only_mode"] = True
+                st.rerun()
+    else:
+        st.info("ℹ️ No fue posible proyectar las geometrías sobre el mapa. Comprueba que el CRS coincida con las coordenadas del plano.")
 
-                preview_map = generate_preview_map(
-                    extracted_polygons,
-                    crs_str,
-                    buffer_pct=buffer_pct,
-                    active_service_key=selected_service_key,
-                    custom_wms_url=wms_url if selected_service_key == "custom" else "",
-                    custom_wms_layer=wms_layer if selected_service_key == "custom" else "",
-                    custom_wms_tag=wms_tag if selected_service_key == "custom" else "custom"
-                )
-                if preview_map is not None:
-                    st_folium(preview_map, use_container_width=True, height=470, returned_objects=[])
-                else:
-                    st.info("ℹ️ No fue posible proyectar las geometrías sobre el mapa. Comprueba que el CRS coincida con las coordenadas del plano.")
+    # ----------------------------------------------------------------------------------
+    # TABLA DE PERSONALIZACIÓN Y RESOLUCIÓN
+    # ----------------------------------------------------------------------------------
+    if not extracted_polygons:
+        st.info(
+            "👆 **¿Cómo empezar?** Puedes:\n"
+            "- Cargar un archivo **AutoCAD (.dxf)** con polilíneas cerradas.\n"
+            "- Cargar un archivo **Google Earth (.kml / .kmz)** con parcelas o polígonos.\n"
+            "- O trazar directamente una parcela en el visor usando la herramienta de **polígono o rectángulo** en la barra superior izquierda del mapa (✏️)."
+        )
+    else:
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        layers_found = list(set(p["capa"] for p in extracted_polygons))
+        col_m1.metric("Polígonos detectados", len(extracted_polygons))
+        col_m2.metric("Capas / Orígenes", len(layers_found))
+        col_m3.metric("Proyección activa", crs_str)
+        col_m4.metric("Servicio activo", service_info["badge"])
 
-                # TABLA DE PERSONALIZACIÓN Y RESOLUCIÓN
-                st.markdown("---")
-                st.markdown("### 📋 Personalización de Polígonos y Recomendación de Calidad")
+        # Inicializar y sincronizar el estado de la tabla
+        state_key = f"df_{dxf_display_name}_{len(extracted_polygons)}_{crs_str}_{wms_tag}"
+        if state_key not in st.session_state:
+            table_data = []
+            for p in extracted_polygons:
+                row_copy = dict(p)
+                row_copy.pop("pts", None)
+                table_data.append(row_copy)
+            st.session_state[state_key] = pd.DataFrame(table_data)
 
-                with st.expander("💡 Guía de Calidad Recomendada de Imagen según el Tamaño del Área", expanded=False):
-                    st.markdown("""
-                    La aplicación analiza el área ($m^2$ y hectáreas) de cada polígono CAD y asigna automáticamente la resolución óptima recomendada para obtener el máximo nivel de detalle sin sobrecargar la memoria ni exceder los límites de descarga del IGN:
-                    
-                    | Superficie de la Geometría | Nivel de Calidad | Resolución Sugerida ($m/px$) | Tipo de Proyecto / Uso Habitual |
-                    | :--- | :--- | :--- | :--- |
-                    | **< 5.000 m²** (< 0.5 ha) | 🌟 **Muy Alta** | `0.25 m/px` | Solares urbanos, parcelas pequeñas, edificación y detalle fino |
-                    | **5.000 a 25.000 m²** (0.5 a 2.5 ha) | 🔍 **Alta** | `0.50 m/px` | Parcelas y naves industriales, urbanizaciones compactas |
-                    | **25.000 a 150.000 m²** (2.5 a 15 ha) | 📐 **Estándar** | `1.00 m/px` | Obras lineales medianas, polígonos, desarrollos urbanísticos |
-                    | **150.000 a 1.000.000 m²** (15 a 100 ha) | 🚜 **Normal** | `2.00 m/px` | Grandes fincas rústicas, parques solares, infraestructuras |
-                    | **> 1.000.000 m²** (> 100 ha) | 🗺️ **Panorámica** | `4.00 m/px` | Escala territorial, términos municipales, cuencas |
-                    
-                    *Nota: Cada fila ha sido inicializada automáticamente con la resolución recomendada. Puedes ajustar los valores a tu gusto de manera individual o por lotes.*
-                    """)
+        active_df = st.session_state[state_key]
 
-                # 1. Ajuste rápido de resolución por lote
-                r1, r2, r3 = st.columns([2.0, 1.3, 1.3])
-                with r1:
-                    preset_res = st.selectbox(
-                        "Resolución rápida sugerida:",
-                        options=[
-                            "Mantener selección individual",
-                            "🪄 Recomendada según área (Auto)",
-                            "0.25 m/px - Muy Alta (< 0.5 ha)",
-                            "0.50 m/px - Alta (0.5 a 2.5 ha)",
-                            "1.00 m/px - Estándar (2.5 a 15 ha)",
-                            "2.00 m/px - Normal (15 a 100 ha)",
-                            "4.00 m/px - Panorámica (> 100 ha)"
-                        ],
-                        index=0
-                    )
+        st.markdown("---")
+        st.markdown("### 📋 Personalización de Polígonos y Recomendación de Calidad")
 
-                with r2:
-                    st.write("")
-                    st.write("")
-                    btn_apply_all = st.button("📏 Aplicar a todos", use_container_width=True)
+        with st.expander("💡 Guía de Calidad Recomendada de Imagen según el Tamaño del Área", expanded=False):
+            st.markdown("""
+            La aplicación analiza el área ($m^2$ y hectáreas) de cada polígono CAD y asigna automáticamente la resolución óptima recomendada para obtener el máximo nivel de detalle sin sobrecargar la memoria ni exceder los límites de descarga del IGN:
+            
+            | Superficie de la Geometría | Nivel de Calidad | Resolución Sugerida ($m/px$) | Tipo de Proyecto / Uso Habitual |
+            | :--- | :--- | :--- | :--- |
+            | **< 5.000 m²** (< 0.5 ha) | 🌟 **Muy Alta** | `0.25 m/px` | Solares urbanos, parcelas pequeñas, edificación y detalle fino |
+            | **5.000 a 25.000 m²** (0.5 a 2.5 ha) | 🔍 **Alta** | `0.50 m/px` | Parcelas y naves industriales, urbanizaciones compactas |
+            | **25.000 a 150.000 m²** (2.5 a 15 ha) | 📐 **Estándar** | `1.00 m/px` | Obras lineales medianas, polígonos, desarrollos urbanísticos |
+            | **150.000 a 1.000.000 m²** (15 a 100 ha) | 🚜 **Normal** | `2.00 m/px` | Grandes fincas rústicas, parques solares, infraestructuras |
+            | **> 1.000.000 m²** (> 100 ha) | 🗺️ **Panorámica** | `4.00 m/px` | Escala territorial, términos municipales, cuencas |
+            
+            *Nota: Cada fila ha sido inicializada automáticamente con la resolución recomendada. Puedes ajustar los valores a tu gusto de manera individual o por lotes.*
+            """)
 
-                with r3:
-                    st.write("")
-                    st.write("")
-                    btn_apply_rec = st.button("🪄 Calidad sugerida", use_container_width=True, help="Restaura la resolución recomendada según el área en m² de cada polígono")
+        # 1. Ajuste rápido de resolución por lote
+        r1, r2, r3 = st.columns([2.0, 1.3, 1.3])
+        with r1:
+            preset_res = st.selectbox(
+                "Resolución rápida sugerida:",
+                options=[
+                    "Mantener selección individual",
+                    "🪄 Recomendada según área (Auto)",
+                    "0.25 m/px - Muy Alta (< 0.5 ha)",
+                    "0.50 m/px - Alta (0.5 a 2.5 ha)",
+                    "1.00 m/px - Estándar (2.5 a 15 ha)",
+                    "2.00 m/px - Normal (15 a 100 ha)",
+                    "4.00 m/px - Panorámica (> 100 ha)"
+                ],
+                index=0
+            )
 
-                # 2. Barra de selección rápida de polígonos
-                total_polys = len(active_df)
-                selected_count = int(active_df["incluir"].sum()) if "incluir" in active_df.columns else 0
+        with r2:
+            st.write("")
+            st.write("")
+            btn_apply_all = st.button("📏 Aplicar a todos", use_container_width=True)
 
-                s1, s2, s3, s4 = st.columns([2.0, 1.2, 1.2, 1.0])
-                with s1:
-                    st.markdown(
-                        f"<div style='padding-top: 6px; font-weight: 600; font-size: 13.5px; color: #38bdf8;'>"
-                        f"📍 <b>{selected_count}</b> de <b>{total_polys}</b> polígono(s) marcado(s)"
-                        f"</div>",
-                        unsafe_allow_html=True
-                    )
-                with s2:
-                    btn_select_all = st.button("✅ Seleccionar todo", use_container_width=True, help="Marca todos los polígonos de la tabla")
-                with s3:
-                    btn_deselect_all = st.button("⬜ Deseleccionar todo", use_container_width=True, help="Desmarca todos los polígonos de la tabla")
-                with s4:
-                    btn_invert_sel = st.button("🔄 Invertir", use_container_width=True, help="Invierte la selección actual de polígonos")
+        with r3:
+            st.write("")
+            st.write("")
+            btn_apply_rec = st.button("🪄 Calidad sugerida", use_container_width=True, help="Restaura la resolución recomendada según el área en m² de cada polígono")
 
-                editor_ver = st.session_state.get(f"ver_{state_key}", 0)
+        # 2. Barra de selección rápida de polígonos
+        total_polys = len(active_df)
+        selected_count = int(active_df["incluir"].sum()) if "incluir" in active_df.columns else 0
 
-                if btn_select_all:
-                    active_df["incluir"] = True
-                    st.session_state[state_key] = active_df
-                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
-                    st.rerun()
+        s1, s2, s3, s4 = st.columns([2.0, 1.2, 1.2, 1.0])
+        with s1:
+            st.markdown(
+                f"<div style='padding-top: 6px; font-weight: 600; font-size: 13.5px; color: #38bdf8;'>"
+                f"📍 <b>{selected_count}</b> de <b>{total_polys}</b> polígono(s) marcado(s)"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+        with s2:
+            btn_select_all = st.button("✅ Seleccionar todo", use_container_width=True, help="Marca todos los polígonos de la tabla")
+        with s3:
+            btn_deselect_all = st.button("⬜ Deseleccionar todo", use_container_width=True, help="Desmarca todos los polígonos de la tabla")
+        with s4:
+            btn_invert_sel = st.button("🔄 Invertir", use_container_width=True, help="Invierte la selección actual de polígonos")
 
-                if btn_deselect_all:
-                    active_df["incluir"] = False
-                    st.session_state[state_key] = active_df
-                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
-                    st.rerun()
+        editor_ver = st.session_state.get(f"ver_{state_key}", 0)
 
-                if btn_invert_sel:
-                    active_df["incluir"] = ~active_df["incluir"].astype(bool)
-                    st.session_state[state_key] = active_df
-                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
-                    st.rerun()
+        if btn_select_all:
+            active_df["incluir"] = True
+            st.session_state[state_key] = active_df
+            st.session_state[f"ver_{state_key}"] = editor_ver + 1
+            st.rerun()
 
-                if btn_apply_rec:
-                    for idx, row in active_df.iterrows():
-                        rec_res, rec_label, _ = get_recommended_resolution(float(row.get("area_m2", 0)))
-                        active_df.at[idx, "resolucion_m_px"] = rec_res
-                        active_df.at[idx, "calidad_sugerida"] = rec_label
-                    st.session_state[state_key] = active_df
-                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
-                    st.rerun()
+        if btn_deselect_all:
+            active_df["incluir"] = False
+            st.session_state[state_key] = active_df
+            st.session_state[f"ver_{state_key}"] = editor_ver + 1
+            st.rerun()
 
-                if btn_apply_all and preset_res != "Mantener selección individual":
-                    if "Recomendada" in preset_res:
-                        for idx, row in active_df.iterrows():
-                            rec_res, rec_label, _ = get_recommended_resolution(float(row.get("area_m2", 0)))
-                            active_df.at[idx, "resolucion_m_px"] = rec_res
-                            active_df.at[idx, "calidad_sugerida"] = rec_label
+        if btn_invert_sel:
+            active_df["incluir"] = ~active_df["incluir"].astype(bool)
+            st.session_state[state_key] = active_df
+            st.session_state[f"ver_{state_key}"] = editor_ver + 1
+            st.rerun()
+
+        if btn_apply_rec:
+            for idx, row in active_df.iterrows():
+                rec_res, rec_label, _ = get_recommended_resolution(float(row.get("area_m2", 0)))
+                active_df.at[idx, "resolucion_m_px"] = rec_res
+                active_df.at[idx, "calidad_sugerida"] = rec_label
+            st.session_state[state_key] = active_df
+            st.session_state[f"ver_{state_key}"] = editor_ver + 1
+            st.rerun()
+
+        if btn_apply_all and preset_res != "Mantener selección individual":
+            if "Recomendada" in preset_res:
+                for idx, row in active_df.iterrows():
+                    rec_res, rec_label, _ = get_recommended_resolution(float(row.get("area_m2", 0)))
+                    active_df.at[idx, "resolucion_m_px"] = rec_res
+                    active_df.at[idx, "calidad_sugerida"] = rec_label
+            else:
+                val = float(preset_res.split(" ")[0])
+                active_df["resolucion_m_px"] = val
+            st.session_state[state_key] = active_df
+            st.session_state[f"ver_{state_key}"] = editor_ver + 1
+            st.rerun()
+
+        column_config = {
+            "incluir": st.column_config.CheckboxColumn(
+                "Descargar",
+                help="Marcar para incluir en la descarga",
+                default=True
+            ),
+            "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+            "capa": st.column_config.TextColumn("Capa / Nombre", disabled=True, width="medium"),
+            "area_m2": st.column_config.NumberColumn(
+                "Área (m²)",
+                disabled=True,
+                format="%.1f m²",
+                help="Superficie total encerrada por el polígono"
+            ),
+            "calidad_sugerida": st.column_config.TextColumn(
+                "Calidad Sugerida",
+                help="Resolución recomendada por el sistema según el área de la geometría",
+                disabled=True,
+                width="medium"
+            ),
+            "resolucion_m_px": st.column_config.NumberColumn(
+                "Resolución (m/px)",
+                help="Tamaño de píxel en metros (Personalizable: Muy Alta 0.25, Alta 0.50, Estándar 1.00, Normal 2.00, Panorámica 4.00 o manual)",
+                min_value=0.1,
+                max_value=20.0,
+                step=0.25,
+                format="%.2f m/px",
+                required=True,
+                width="medium"
+            ),
+            "nombre_archivo": st.column_config.TextColumn(
+                "Nombre Base Archivo",
+                help="Nombre que recibirán los archivos .tif y .tfw",
+                required=True,
+                width="large"
+            ),
+            "ancho_m": st.column_config.NumberColumn("Ancho (m)", disabled=True, format="%.1f m"),
+            "alto_m": st.column_config.NumberColumn("Alto (m)", disabled=True, format="%.1f m"),
+            "num_vertices": st.column_config.NumberColumn("Vértices", disabled=True),
+            "bounds": None
+        }
+
+        column_order = [
+            "incluir", "id", "capa",
+            "area_m2", "calidad_sugerida", "resolucion_m_px",
+            "nombre_archivo", "ancho_m", "alto_m", "num_vertices"
+        ]
+
+        edited_df = st.data_editor(
+            active_df,
+            column_config=column_config,
+            column_order=column_order,
+            hide_index=True,
+            use_container_width=True,
+            num_rows="fixed",
+            key=f"editor_{state_key}_{editor_ver}"
+        )
+        st.session_state[state_key] = edited_df
+
+        selected_rows = edited_df[edited_df["incluir"] == True].to_dict("records")
+        if len(selected_rows) == 0:
+            st.warning("⚠️ No has seleccionado ningún polígono para descargar. Marca las casillas en la tabla o pulsa '✅ Seleccionar todo'.")
+        else:
+            st.info(f"📍 **{len(selected_rows)}** polígono(s) seleccionado(s) listos para descargar.")
+
+        # ------------------------------------------------------------------------------
+        # BOTÓN DE DESCARGA WMS / SATÉLITE
+        # ------------------------------------------------------------------------------
+        st.write("")
+        btn_process = st.button(
+            f"🚀 Descargar Cartografía ({service_info['badge']}) y Generar Georreferenciación",
+            type="primary",
+            use_container_width=True,
+            disabled=(len(selected_rows) == 0)
+        )
+
+        if btn_process:
+            if selected_service_key == "custom":
+                if not wms_url.strip():
+                    st.error("⚠️ Debes introducir la URL de tu servidor WMS en la barra lateral para continuar.")
+                    st.stop()
+                if not wms_layer.strip():
+                    st.error("⚠️ Debes introducir el identificador técnico de la capa (Layer) en la barra lateral.")
+                    st.stop()
+
+            st.session_state["processed_zip_data"] = None
+            st.session_state["processed_summary"] = []
+
+            progress_bar = st.progress(0.0)
+            status_text = st.empty()
+            log_expander = st.expander("📝 Detalle del procesamiento en tiempo real", expanded=True)
+
+            session = create_resilient_session(timeout=35)
+            zip_buffer = io.BytesIO()
+
+            success_count = 0
+            summary_log = []
+            used_names = set()
+            total_count = len(selected_rows)
+
+            base_dxf_stem = os.path.splitext(sanitize_filename(dxf_display_name))[0]
+            if not base_dxf_stem:
+                base_dxf_stem = "proyecto"
+
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                # Si las geometrías fueron dibujadas en el mapa o provienen de KML/KMZ, exportar vector CAD complementario
+                pts_map = {p["id"]: p.get("pts", []) for p in extracted_polygons}
+                polys_for_dxf = []
+                for r in selected_rows:
+                    r_pts = pts_map.get(r["id"], [])
+                    if r_pts:
+                        polys_for_dxf.append({
+                            "capa": r.get("capa", "0"),
+                            "pts": r_pts
+                        })
+
+                if is_vector_exportable and polys_for_dxf:
+                    try:
+                        dxf_vector_bytes = export_polygons_to_dxf(polys_for_dxf)
+                        zf.writestr(f"vector_{base_dxf_stem}.dxf", dxf_vector_bytes)
+                        log_expander.info(f"📐 Archivo CAD vectorial incluido en el ZIP: `vector_{base_dxf_stem}.dxf` ({len(polys_for_dxf)} polígono(s) cerrados).")
+                    except Exception as dxf_err:
+                        log_expander.warning(f"⚠️ No se pudo generar vector DXF complementario: {dxf_err}")
+
+                for idx, row in enumerate(selected_rows):
+                    progress_bar.progress(idx / total_count)
+
+                    clean_base = sanitize_filename(row["nombre_archivo"])
+                    pixel_size = float(row["resolucion_m_px"])
+                    bounds = row["bounds"]
+
+                    # Determinar tareas de descarga (única o teselas)
+                    if "mosaico" in large_area_mode.lower():
+                        tile_jobs = compute_tiled_georeferencing(
+                            bounds=bounds,
+                            buffer_pct=buffer_pct,
+                            pixel_size=pixel_size,
+                            max_tile_side=4000
+                        )
                     else:
-                        val = float(preset_res.split(" ")[0])
-                        active_df["resolucion_m_px"] = val
-                    st.session_state[state_key] = active_df
-                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
-                    st.rerun()
+                        single_job = compute_georeferencing_parameters(
+                            bounds=bounds,
+                            buffer_pct=buffer_pct,
+                            pixel_size=pixel_size,
+                            max_pixels_lado=max_pixels_lado,
+                            max_pixels_totales=max_pixels_totales
+                        )
+                        tile_jobs = [single_job]
 
-                column_config = {
-                    "incluir": st.column_config.CheckboxColumn(
-                        "Descargar",
-                        help="Marcar para incluir en la descarga",
-                        default=True
-                    ),
-                    "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
-                    "capa": st.column_config.TextColumn("Capa CAD", disabled=True, width="medium"),
-                    "area_m2": st.column_config.NumberColumn(
-                        "Área (m²)",
-                        disabled=True,
-                        format="%.1f m²",
-                        help="Superficie total encerrada por la polilínea CAD"
-                    ),
-                    "calidad_sugerida": st.column_config.TextColumn(
-                        "Calidad Sugerida",
-                        help="Resolución recomendada por el sistema según el área de la geometría",
-                        disabled=True,
-                        width="medium"
-                    ),
-                    "resolucion_m_px": st.column_config.NumberColumn(
-                        "Resolución (m/px)",
-                        help="Tamaño de píxel en metros (Personalizable: Muy Alta 0.25, Alta 0.50, Estándar 1.00, Normal 2.00, Panorámica 4.00 o manual)",
-                        min_value=0.1,
-                        max_value=20.0,
-                        step=0.25,
-                        format="%.2f m/px",
-                        required=True,
-                        width="medium"
-                    ),
-                    "nombre_archivo": st.column_config.TextColumn(
-                        "Nombre Base Archivo",
-                        help="Nombre que recibirán los archivos .tif y .tfw",
-                        required=True,
-                        width="large"
-                    ),
-                    "ancho_m": st.column_config.NumberColumn("Ancho (m)", disabled=True, format="%.1f m"),
-                    "alto_m": st.column_config.NumberColumn("Alto (m)", disabled=True, format="%.1f m"),
-                    "num_vertices": st.column_config.NumberColumn("Vértices", disabled=True),
-                    "bounds": None
-                }
+                    for job in tile_jobs:
+                        suffix = job.get("tile_suffix", "")
+                        final_name = f"{clean_base}{suffix}"
+                        
+                        counter = 1
+                        while final_name in used_names:
+                            final_name = f"{clean_base}{suffix}_{counter}"
+                            counter += 1
+                        used_names.add(final_name)
 
-                column_order = [
-                    "incluir", "id", "capa",
-                    "area_m2", "calidad_sugerida", "resolucion_m_px",
-                    "nombre_archivo", "ancho_m", "alto_m", "num_vertices"
-                ]
+                        status_text.markdown(
+                            f"⏳ **Descargando [{idx + 1}/{total_count}] ({service_info['badge']}):** `{final_name}.tif` "
+                            f"({job['ancho_px']} × {job['alto_px']} px, res: {abs(job['pixel_x']):.2f} m/px)..."
+                        )
 
-                edited_df = st.data_editor(
-                    active_df,
-                    column_config=column_config,
-                    column_order=column_order,
-                    hide_index=True,
-                    use_container_width=True,
-                    num_rows="fixed",
-                    key=f"editor_{state_key}_{editor_ver}"
-                )
-                st.session_state[state_key] = edited_df
-
-                selected_rows = edited_df[edited_df["incluir"] == True].to_dict("records")
-                if len(selected_rows) == 0:
-                    st.warning("⚠️ No has seleccionado ningún polígono para descargar. Marca las casillas en la tabla o pulsa '✅ Seleccionar todo'.")
-                else:
-                    st.info(f"📍 **{len(selected_rows)}** polígono(s) seleccionado(s) listos para descargar.")
-
-                # ------------------------------------------------------------------------------
-                # BOTÓN DE DESCARGA WMS
-                # ------------------------------------------------------------------------------
-                st.write("")
-                btn_process = st.button(
-                    f"🚀 Descargar Cartografía ({service_info['badge']}) y Generar Georreferenciación",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=(len(selected_rows) == 0)
-                )
-
-                if btn_process:
-                    if selected_service_key == "custom":
-                        if not wms_url.strip():
-                            st.error("⚠️ Debes introducir la URL de tu servidor WMS en la barra lateral para continuar.")
-                            st.stop()
-                        if not wms_layer.strip():
-                            st.error("⚠️ Debes introducir el identificador técnico de la capa (Layer) en la barra lateral.")
-                            st.stop()
-
-                    st.session_state["processed_zip_data"] = None
-                    st.session_state["processed_summary"] = []
-
-                    progress_bar = st.progress(0.0)
-                    status_text = st.empty()
-                    log_expander = st.expander("📝 Detalle del procesamiento en tiempo real", expanded=True)
-
-                    session = create_resilient_session(timeout=35)
-                    zip_buffer = io.BytesIO()
-
-                    success_count = 0
-                    summary_log = []
-                    used_names = set()
-                    total_count = len(selected_rows)
-
-                    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                        for idx, row in enumerate(selected_rows):
-                            progress_bar.progress(idx / total_count)
-
-                            clean_base = sanitize_filename(row["nombre_archivo"])
-                            pixel_size = float(row["resolucion_m_px"])
-                            bounds = row["bounds"]
-
-                            # Determinar tareas de descarga (única o teselas)
-                            if "mosaico" in large_area_mode.lower():
-                                tile_jobs = compute_tiled_georeferencing(
-                                    bounds=bounds,
-                                    buffer_pct=buffer_pct,
-                                    pixel_size=pixel_size,
-                                    max_tile_side=4000
+                        try:
+                            if service_info.get("type") == "xyz":
+                                img_bytes = fetch_xyz_ortho(
+                                    session=session,
+                                    tile_url_template=service_info["url"],
+                                    crs_str=crs_str,
+                                    bbox_buf=job["bbox_buf"],
+                                    ancho_px=job["ancho_px"],
+                                    alto_px=job["alto_px"]
                                 )
                             else:
-                                single_job = compute_georeferencing_parameters(
-                                    bounds=bounds,
-                                    buffer_pct=buffer_pct,
-                                    pixel_size=pixel_size,
-                                    max_pixels_lado=max_pixels_lado,
-                                    max_pixels_totales=max_pixels_totales
-                                )
-                                tile_jobs = [single_job]
-
-                            for job in tile_jobs:
-                                suffix = job.get("tile_suffix", "")
-                                final_name = f"{clean_base}{suffix}"
-                                
-                                counter = 1
-                                while final_name in used_names:
-                                    final_name = f"{clean_base}{suffix}_{counter}"
-                                    counter += 1
-                                used_names.add(final_name)
-
-                                status_text.markdown(
-                                    f"⏳ **Descargando [{idx + 1}/{total_count}] ({service_info['badge']}):** `{final_name}.tif` "
-                                    f"({job['ancho_px']} × {job['alto_px']} px, res: {abs(job['pixel_x']):.2f} m/px)..."
+                                img_bytes = fetch_wms_ortho(
+                                    session=session,
+                                    wms_url=wms_url,
+                                    wms_layer=wms_layer,
+                                    crs_str=crs_str,
+                                    bbox_buf=job["bbox_buf"],
+                                    ancho_px=job["ancho_px"],
+                                    alto_px=job["alto_px"]
                                 )
 
-                                try:
-                                    if service_info.get("type") == "xyz":
-                                        img_bytes = fetch_xyz_ortho(
-                                            session=session,
-                                            tile_url_template=service_info["url"],
-                                            crs_str=crs_str,
-                                            bbox_buf=job["bbox_buf"],
-                                            ancho_px=job["ancho_px"],
-                                            alto_px=job["alto_px"]
-                                        )
-                                    else:
-                                        img_bytes = fetch_wms_ortho(
-                                            session=session,
-                                            wms_url=wms_url,
-                                            wms_layer=wms_layer,
-                                            crs_str=crs_str,
-                                            bbox_buf=job["bbox_buf"],
-                                            ancho_px=job["ancho_px"],
-                                            alto_px=job["alto_px"]
-                                        )
+                            zf.writestr(f"{final_name}.tif", img_bytes)
+                            zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
 
-                                    zf.writestr(f"{final_name}.tif", img_bytes)
-                                    zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
+                            size_kb = len(img_bytes) / 1024.0
+                            scaled_note = " (ajustado al límite del IGN)" if job.get("scaled", False) else ""
+                            log_expander.success(
+                                f"✅ [{final_name}] Descargado ({job['ancho_px']} × {job['alto_px']} px, "
+                                f"{size_kb:.1f} KB, res: {abs(job['pixel_x']):.3f} m/px){scaled_note}"
+                            )
 
-                                    size_kb = len(img_bytes) / 1024.0
-                                    scaled_note = " (ajustado al límite del IGN)" if job.get("scaled", False) else ""
-                                    log_expander.success(
-                                        f"✅ [{final_name}] Descargado ({job['ancho_px']} × {job['alto_px']} px, "
-                                        f"{size_kb:.1f} KB, res: {abs(job['pixel_x']):.3f} m/px){scaled_note}"
-                                    )
+                            summary_log.append({
+                                "Archivo": final_name,
+                                "Servicio": service_info["badge"],
+                                "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
+                                "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
+                                "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px",
+                                "Estado": "Descargado",
+                                "Detalle": f"{size_kb:.1f} KB"
+                            })
+                            success_count += 1
 
-                                    summary_log.append({
-                                        "Archivo": final_name,
-                                        "Servicio": service_info["badge"],
-                                        "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
-                                        "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
-                                        "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px",
-                                        "Estado": "Descargado",
-                                        "Detalle": f"{size_kb:.1f} KB"
-                                    })
-                                    success_count += 1
+                        except Exception as err:
+                            err_msg = str(err)
+                            log_expander.error(f"❌ [{final_name}] Error: {err_msg}")
+                            summary_log.append({
+                                "Archivo": final_name,
+                                "Servicio": service_info["badge"],
+                                "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
+                                "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
+                                "Resolución Real": "-",
+                                "Estado": "Error",
+                                "Detalle": err_msg
+                            })
 
-                                except Exception as err:
-                                    err_msg = str(err)
-                                    log_expander.error(f"❌ [{final_name}] Error: {err_msg}")
-                                    summary_log.append({
-                                        "Archivo": final_name,
-                                        "Servicio": service_info["badge"],
-                                        "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
-                                        "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
-                                        "Resolución Real": "-",
-                                        "Estado": "Error",
-                                        "Detalle": err_msg
-                                    })
+            progress_bar.progress(1.0)
+            status_text.empty()
 
-                    progress_bar.progress(1.0)
-                    status_text.empty()
-
-                    if success_count > 0:
-                        zip_buffer.seek(0)
-                        st.session_state["processed_zip_data"] = zip_buffer.getvalue()
-                        base_dxf_stem = os.path.splitext(sanitize_filename(dxf_display_name))[0]
-                        st.session_state["processed_zip_name"] = f"cartografia_{wms_tag}_{base_dxf_stem}.zip"
-                        st.session_state["processed_summary"] = summary_log
-                        st.balloons()
-                    else:
-                        st.error("No se pudo descargar ninguna imagen cartográfica. Verifica la conectividad con el servicio WMS y las coordenadas.")
-
-        except Exception as e:
-            st.error(f"❌ Error al procesar el archivo DXF: {e}")
-            with st.expander("Detalle del error técnico"):
-                st.code(traceback.format_exc())
+            if success_count > 0:
+                zip_buffer.seek(0)
+                st.session_state["processed_zip_data"] = zip_buffer.getvalue()
+                st.session_state["processed_zip_name"] = f"cartografia_{wms_tag}_{base_dxf_stem}.zip"
+                st.session_state["processed_summary"] = summary_log
+                st.session_state["is_vector_exportable"] = is_vector_exportable
+                st.balloons()
+            else:
+                st.error("No se pudo descargar ninguna imagen cartográfica. Verifica la conectividad con el servicio WMS y las coordenadas.")
 
     # ----------------------------------------------------------------------------------
     # ENTREGA DE RESULTADOS: BOTÓN DE DESCARGA FINAL
@@ -2535,6 +2978,12 @@ def render_ui():
                 f"El paquete ZIP contiene la cartografía **{service_info['name']}** en archivos **`.tif` + `.tfw`** listos para ser "
                 "insertados en AutoCAD mediante `_MAPIINSERT` o `_IMAGEATTACH`."
             )
+            if st.session_state.get("is_vector_exportable"):
+                st.info(
+                    "📐 **¡Incluye archivo CAD vectorial complementario!**\n\n"
+                    "El archivo `.zip` incluye `vector_*.dxf` con las líneas de las parcelas proyectadas en las coordenadas oficiales de tu plano. "
+                    "Puedes abrirlo directamente en AutoCAD o Civil 3D e insertar las ortofotos mediante `_MAPIINSERT` para una concordancia perfecta."
+                )
             st.info(
                 "💡 **Consejo para minutas o ámbitos en diagonal en AutoCAD:**\n\n"
                 "Para recortar la imagen siguiendo la forma exacta de tu minuta en el dibujo, usa el comando nativo `_IMAGECLIP` (`DELIMIMG`) -> *Nuevo contorno* (`N`) -> *Seleccionar polilínea* (`S`) y selecciona tu polilínea. AutoCAD ocultará las esquinas sobrantes al instante manteniendo la georreferenciación perfecta."
