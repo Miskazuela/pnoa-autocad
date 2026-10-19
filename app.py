@@ -1261,6 +1261,19 @@ def render_ui():
     </style>
     """, unsafe_allow_html=True)
 
+    # Sincronización segura de proyección pendiente antes de instanciar widgets de Streamlit
+    if "pending_epsg_code" in st.session_state:
+        new_code = st.session_state.pop("pending_epsg_code")
+        st.session_state["active_epsg_code"] = int(new_code)
+        st.session_state["sidebar_epsg_input"] = str(new_code)
+        if int(new_code) not in [25829, 25830, 25831, 32628]:
+            st.session_state["selected_service_idx"] = 0
+
+    if "active_epsg_code" not in st.session_state:
+        st.session_state["active_epsg_code"] = 25830
+    if "sidebar_epsg_input" not in st.session_state:
+        st.session_state["sidebar_epsg_input"] = str(st.session_state["active_epsg_code"])
+
     # ----------------------------------------------------------------------------------
     # BARRA LATERAL (SIDEBAR): CONFIGURACIÓN GLOBAL
     # ----------------------------------------------------------------------------------
@@ -1298,11 +1311,6 @@ def render_ui():
         "🇺🇸 USA - NAD83 / UTM zone 10N (EPSG:26910)": 26910
     }
 
-    if "active_epsg_code" not in st.session_state:
-        st.session_state["active_epsg_code"] = 25830
-    if "sidebar_epsg_input" not in st.session_state:
-        st.session_state["sidebar_epsg_input"] = str(st.session_state["active_epsg_code"])
-
     if crs_mode == "Código EPSG directo (Cualquier país)":
         epsg_raw = st.sidebar.text_input(
             "Código EPSG de tu plano CAD:",
@@ -1329,7 +1337,6 @@ def render_ui():
         )
         epsg_code = regional_presets[preset_label]
         st.session_state["active_epsg_code"] = epsg_code
-        st.session_state["sidebar_epsg_input"] = str(epsg_code)
 
     crs_str = f"EPSG:{epsg_code}"
 
@@ -1641,11 +1648,7 @@ def render_ui():
                         with c_btn_top:
                             btn_label = f"✨ Aplicar recomendada: EPSG:{top_rec['code']}"
                             if st.button(btn_label, type="primary", use_container_width=True, key=f"btn_apply_{top_rec['code']}"):
-                                st.session_state["active_epsg_code"] = top_rec["code"]
-                                st.session_state["sidebar_epsg_input"] = str(top_rec["code"])
-                                # Si se seleccionó una proyección fuera de España y el servicio actual es PNOA o MTN, cambiar a Google Satélite
-                                if selected_service_key in ["pnoa", "mapa_raster", "mdt_relieve"] and top_rec["code"] not in [25829, 25830, 25831, 32628]:
-                                    st.session_state["selected_service_idx"] = 0
+                                st.session_state["pending_epsg_code"] = top_rec["code"]
                                 st.rerun()
 
                         with c_btn_alts:
@@ -1656,10 +1659,7 @@ def render_ui():
                                     with alt_cols[i]:
                                         alt_name_short = alt['name'].split('(')[0].replace("GDA2020 / ", "").replace("ETRS89 / ", "").strip()
                                         if st.button(f"Probar EPSG:{alt['code']} ({alt_name_short})", use_container_width=True, key=f"btn_alt_{alt['code']}", help=f"{alt['name']} - {alt['region']}"):
-                                            st.session_state["active_epsg_code"] = alt["code"]
-                                            st.session_state["sidebar_epsg_input"] = str(alt["code"])
-                                            if selected_service_key in ["pnoa", "mapa_raster", "mdt_relieve"] and alt["code"] not in [25829, 25830, 25831, 32628]:
-                                                st.session_state["selected_service_idx"] = 0
+                                            st.session_state["pending_epsg_code"] = alt["code"]
                                             st.rerun()
 
                         if len(rec_crs_list) > 3 or any("alt_code" in r for r in rec_crs_list):
@@ -1669,10 +1669,7 @@ def render_ui():
                                         c_a1, c_a2 = st.columns([3, 1])
                                         c_a1.write(f"**{r['alt_name']}** &mdash; {r['region']}")
                                         if c_a2.button(f"Aplicar EPSG:{r['alt_code']}", key=f"btn_apply_alt_{r['alt_code']}", use_container_width=True):
-                                            st.session_state["active_epsg_code"] = r["alt_code"]
-                                            st.session_state["sidebar_epsg_input"] = str(r["alt_code"])
-                                            if selected_service_key in ["pnoa", "mapa_raster", "mdt_relieve"] and r["alt_code"] not in [25829, 25830, 25831, 32628]:
-                                                st.session_state["selected_service_idx"] = 0
+                                            st.session_state["pending_epsg_code"] = r["alt_code"]
                                             st.rerun()
 
                 # Inicializar y sincronizar el estado de la tabla antes de renderizar el mapa
