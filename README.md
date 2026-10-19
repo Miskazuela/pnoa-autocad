@@ -16,6 +16,7 @@ Genera directamente para cada polígono los archivos estándar:
 - `.tfw`: Archivo de calibración espacial (*World File*) con las coordenadas UTM/proyectadas exactas de georreferenciación.
 
 ### ✨ Características Principales:
+- **🧠 Detección y Recomendación Automática de EPSG/CRS**: Al subir cualquier plano DXF, el sistema analiza instantáneamente sus coordenadas métricas $(X, Y)$, capas y metadatos, detectando la proyección recomendada (ej: Australia `EPSG:7855` / `7856`, España `EPSG:25830`, Colombia `EPSG:9377`, Canarias `EPSG:32628`, etc.) con un botón de **1-clic** para aplicarla y volar el visor satelital a la posición real.
 - **🌐 Soporte EPSG Global**: Compatible con cualquier proyección del mundo (ej: Australia `EPSG:7855` / `EPSG:28355`, España `EPSG:25830`, Colombia `EPSG:9377`, Chile `EPSG:5361`, México `EPSG:6369`, EE.UU. `EPSG:26918`, WGS 84 global `EPSG:326xx` / `EPSG:327xx`).
 - **🗺️ Catálogo Multicartográfico Universal**: Elige entre Google Satélite, Google Híbrido, Esri World Imagery, cualquier WMS propio, PNOA o cartografía IGN con un solo clic.
 - **🪄 Recomendación Inteligente de Calidad por Área**: Calcula la resolución óptima ($m/px$) analizando la superficie de cada polígono (< 0.5 ha = 0.25 m/px, 0.5 a 2.5 ha = 0.50 m/px, 2.5 a 15 ha = 1.00 m/px, etc.).

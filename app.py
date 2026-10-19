@@ -288,6 +288,243 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
 
 
 # --------------------------------------------------------------------------------------
+# 2.1 RECOMENDACIÓN INTELIGENTE DE PROYECCIÓN CARTOGRÁFICA (CRS / EPSG)
+# --------------------------------------------------------------------------------------
+def detect_recommended_epsg(
+    bounds: Tuple[float, float, float, float],
+    layer_names: Optional[List[str]] = None,
+    raw_text: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Analiza las coordenadas espaciales (X, Y), nombres de capas y metadatos del DXF
+    para determinar y recomendar los Sistemas de Coordenadas de Referencia (EPSG/CRS)
+    más probables a nivel mundial y regional.
+    
+    Retorna una lista de recomendaciones ordenadas por probabilidad/confianza.
+    """
+    recommendations: List[Dict[str, Any]] = []
+    minx, miny, maxx, maxy = bounds
+    cx = (minx + maxx) / 2.0
+    cy = (miny + maxy) / 2.0
+
+    search_corpus = ""
+    if layer_names:
+        search_corpus += " " + " ".join(layer_names)
+    if raw_text:
+        search_corpus += " " + raw_text[:50000]
+    search_corpus_upper = search_corpus.upper()
+
+    # 1. BÚSQUEDA EXPLÍCITA EN METADATOS Y CAPAS (MÁXIMA PRIORIDAD)
+    explicit_codes: List[int] = []
+
+    # Patrón EPSG: 4 o 5 dígitos precedidos de EPSG
+    for m in re.finditer(r"(?:EPSG|[A-Z]*EPSG)[_\-\s:]*(\d{4,5})", search_corpus_upper):
+        code = int(m.group(1))
+        if code not in explicit_codes:
+            explicit_codes.append(code)
+
+    # Patrón MGA zone (Australia)
+    for m in re.finditer(r"\bMGA[_\-\s]*(\d{2})\b", search_corpus_upper):
+        zone = int(m.group(1))
+        if 48 <= zone <= 58:
+            if (7800 + zone) not in explicit_codes:
+                explicit_codes.append(7800 + zone) # GDA2020
+            if (28300 + zone) not in explicit_codes:
+                explicit_codes.append(28300 + zone) # GDA94
+
+    # Patrón UTM zone (ej: UTM 30N, UTM30, UTM 55S)
+    for m in re.finditer(r"\bUTM[_\-\s]*(\d{1,2})\s*([NSns]?)\b", search_corpus_upper):
+        zone = int(m.group(1))
+        hem = m.group(2).upper()
+        if 1 <= zone <= 60:
+            if hem == "S" or cy > 5000000:
+                if 49 <= zone <= 56:
+                    if (7800 + zone) not in explicit_codes:
+                        explicit_codes.append(7800 + zone)
+                else:
+                    code_utm_s = 32700 + zone
+                    if code_utm_s not in explicit_codes:
+                        explicit_codes.append(code_utm_s)
+            else:
+                if zone in [28, 29, 30, 31]:
+                    if zone == 28:
+                        if 32628 not in explicit_codes:
+                            explicit_codes.append(32628)
+                    else:
+                        if (25800 + zone) not in explicit_codes:
+                            explicit_codes.append(25800 + zone)
+                else:
+                    code_utm_n = 32600 + zone
+                    if code_utm_n not in explicit_codes:
+                        explicit_codes.append(code_utm_n)
+
+    # Validar códigos explícitos encontrados con pyproj
+    for code in explicit_codes:
+        try:
+            crs_obj = CRS.from_epsg(code)
+            recommendations.append({
+                "code": code,
+                "name": crs_obj.name,
+                "region": crs_obj.area_of_use.name if crs_obj.area_of_use else "Definido en plano CAD",
+                "reason": f"Detectado explícitamente en capas o metadatos del archivo DXF.",
+                "confidence": "Muy Alta"
+            })
+        except Exception:
+            pass
+
+    if recommendations:
+        return recommendations
+
+    # 2. ANÁLISIS GEOMÉTRICO BASADO EN COORDENADAS (X, Y)
+    # A. Coordenadas Geográficas (Grados decimales WGS84)
+    if -180.0 <= minx <= 180.0 and -180.0 <= maxx <= 180.0 and -90.0 <= miny <= 90.0 and -90.0 <= maxy <= 90.0:
+        recommendations.append({
+            "code": 4326,
+            "name": "WGS 84 (Coordenadas Geográficas en Grados)",
+            "region": "🌎 Cobertura Global",
+            "reason": f"Las coordenadas (X={cx:.4f}°, Y={cy:.4f}°) se encuentran dentro del rango angular mundial (-180° a 180°, -90° a 90°).",
+            "confidence": "Muy Alta"
+        })
+        return recommendations
+
+    # B. Colombia - Origen Nacional Único (MAGNA-SIRGAS EPSG:9377)
+    if 4000000 <= cx <= 6000000 and 1000000 <= cy <= 3500000:
+        recommendations.append({
+            "code": 9377,
+            "name": "MAGNA-SIRGAS / Origen Nacional (EPSG:9377)",
+            "region": "🇨🇴 Colombia (Sistema Oficial Único)",
+            "reason": f"Coordenadas proyectadas características de Colombia con Falso Este ~5.000.000 m y Falso Norte ~2.000.000 m.",
+            "confidence": "Muy Alta"
+        })
+        return recommendations
+
+    # C. Hemisferio Sur - Australia (UTM False Northing = 10.000.000 m)
+    # Latitudes de Australia (-44° a -10° S) -> Y entre 5.100.000 m y 8.900.000 m; X entre 150.000 m y 850.000 m.
+    if 5000000 <= cy <= 9000000 and 150000 <= cx <= 850000:
+        text_lower = search_corpus.lower()
+        pref_zone = None
+        if any(w in text_lower for w in ["sydney", "nsw", "brisbane", "gold coast", "qld", "queensland"]):
+            pref_zone = 56
+        elif any(w in text_lower for w in ["melbourne", "victoria", "vic", "tasmania", "hobart", "act", "canberra"]):
+            pref_zone = 55
+        elif any(w in text_lower for w in ["adelaide", "south australia", "sa"]):
+            pref_zone = 54
+        elif any(w in text_lower for w in ["perth", "western australia", "wa"]):
+            pref_zone = 50
+
+        aus_zones = [55, 56, 54, 50, 51, 52, 53, 49]
+        if pref_zone and pref_zone in aus_zones:
+            aus_zones.remove(pref_zone)
+            aus_zones.insert(0, pref_zone)
+
+        zone_names = {
+            55: "Victoria, Melbourne, NSW, QLD",
+            56: "Sydney, Brisbane, Gold Coast, NSW Este",
+            54: "South Australia, Adelaide",
+            50: "Western Australia, Perth",
+            51: "Western Australia interior",
+            52: "NT / SA Central",
+            53: "Northern Territory, Darwin, Alice Springs",
+            49: "Western Australia Oeste"
+        }
+
+        for idx, z in enumerate(aus_zones[:4]):
+            gda2020_code = 7800 + z
+            recommendations.append({
+                "code": gda2020_code,
+                "name": f"GDA2020 / MGA zone {z} (EPSG:{gda2020_code})",
+                "region": f"🇦🇺 Australia ({zone_names.get(z, f'Zone {z}')})",
+                "reason": f"Coordenadas UTM del Hemisferio Sur (Y={cy:,.0f} m, X={cx:,.0f} m) típicas de Australia.",
+                "confidence": "Alta" if idx == 0 else "Media",
+                "alt_code": 28300 + z,
+                "alt_name": f"GDA94 / MGA zone {z} (EPSG:{28300 + z})"
+            })
+        return recommendations
+
+    # D. España Peninsular y Europa (UTM Husos 29, 30, 31)
+    # Latitudes 35.8° a 44° N -> Y entre 3.850.000 m y 4.900.000 m; X entre 150.000 m y 850.000 m.
+    if 3850000 <= cy <= 4900000 and 150000 <= cx <= 850000:
+        text_lower = search_corpus.lower()
+        pref_spain_zone = 30
+        if any(w in text_lower for w in ["galicia", "coruña", "pontevedra", "ourense", "lugo", "huelva", "vigo", "asturias"]):
+            pref_spain_zone = 29
+        elif any(w in text_lower for w in ["catalunya", "cataluña", "barcelona", "girona", "tarragona", "lleida", "baleares", "mallorca", "menorca", "ibiza"]):
+            pref_spain_zone = 31
+
+        spain_zones = [30, 29, 31]
+        if pref_spain_zone != 30:
+            spain_zones.remove(pref_spain_zone)
+            spain_zones.insert(0, pref_spain_zone)
+
+        spain_info = {
+            30: ("ETRS89 / UTM zone 30N (EPSG:25830)", "🇪🇸 España Peninsular (Centro, Madrid, Andalucía, Valencia, Norte)", "Muy Alta" if pref_spain_zone == 30 else "Alta"),
+            29: ("ETRS89 / UTM zone 29N (EPSG:25829)", "🇪🇸 España (Galicia, Huelva y Asturias Occidental)", "Alta" if pref_spain_zone == 29 else "Media"),
+            31: ("ETRS89 / UTM zone 31N (EPSG:25831)", "🇪🇸 España (Cataluña, Baleares y Franja Oriental)", "Alta" if pref_spain_zone == 31 else "Media")
+        }
+
+        for z in spain_zones:
+            epsg_sp = 25800 + z
+            name, reg, conf = spain_info[z]
+            recommendations.append({
+                "code": epsg_sp,
+                "name": name,
+                "region": reg,
+                "reason": f"Coordenadas UTM características de España y Europa (Y={cy:,.0f} m, X={cx:,.0f} m).",
+                "confidence": conf
+            })
+        return recommendations
+
+    # E. Islas Canarias (UTM Huso 28N)
+    # Latitudes 27.5° a 29.5° N -> Y entre 3.000.000 m y 3.350.000 m; X entre 150.000 m y 750.000 m.
+    if 3000000 <= cy <= 3350000 and 150000 <= cx <= 750000:
+        recommendations.append({
+            "code": 32628,
+            "name": "WGS 84 / UTM zone 28N (EPSG:32628)",
+            "region": "🇪🇸 Islas Canarias (España) / África Noroeste",
+            "reason": f"Coordenadas UTM del archipiélago canario (Y={cy:,.0f} m, X={cx:,.0f} m).",
+            "confidence": "Muy Alta"
+        })
+        recommendations.append({
+            "code": 4083,
+            "name": "REGCAN95 / UTM zone 28N (EPSG:4083)",
+            "region": "🇪🇸 Islas Canarias (Red Geodésica Oficial REGCAN95)",
+            "reason": "Referencia geodésica oficial de las Islas Canarias.",
+            "confidence": "Alta"
+        })
+        return recommendations
+
+    # F. México (UTM Husos 11N a 16N)
+    if 1550000 <= cy <= 3600000 and 150000 <= cx <= 850000:
+        recommendations.append({
+            "code": 6369,
+            "name": "ITRF2008 / UTM zone 14N (EPSG:6369)",
+            "region": "🇲🇽 México (Zona Central / CDMX / Puebla / Veracruz)",
+            "reason": f"Rango de coordenadas UTM común en México y Centroamérica (Y={cy:,.0f} m).",
+            "confidence": "Media"
+        })
+        recommendations.append({
+            "code": 6367,
+            "name": "ITRF2008 / UTM zone 12N (EPSG:6367)",
+            "region": "🇲🇽 México (Noroeste / Sonora / Sinaloa)",
+            "reason": "Zona 12N para estados del noroeste de México.",
+            "confidence": "Media"
+        })
+        return recommendations
+
+    # G. Web Mercator Pseudo-Mercator (EPSG:3857)
+    if abs(cx) > 1000000 or abs(cy) > 1000000:
+        recommendations.append({
+            "code": 3857,
+            "name": "WGS 84 / Pseudo-Mercator (EPSG:3857)",
+            "region": "🌎 Cobertura Global (Mapas Web)",
+            "reason": "Valores métricos extensos compatibles con la proyección Web Mercator estándar.",
+            "confidence": "Baja"
+        })
+
+    return recommendations
+
+
+# --------------------------------------------------------------------------------------
 # 3. CATÁLOGO DE SERVICIOS CARTOGRÁFICOS Y SATELITALES (MUNDIAL Y NACIONAL)
 # --------------------------------------------------------------------------------------
 SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
@@ -1061,25 +1298,38 @@ def render_ui():
         "🇺🇸 USA - NAD83 / UTM zone 10N (EPSG:26910)": 26910
     }
 
+    if "active_epsg_code" not in st.session_state:
+        st.session_state["active_epsg_code"] = 25830
+    if "sidebar_epsg_input" not in st.session_state:
+        st.session_state["sidebar_epsg_input"] = str(st.session_state["active_epsg_code"])
+
     if crs_mode == "Código EPSG directo (Cualquier país)":
         epsg_raw = st.sidebar.text_input(
             "Código EPSG de tu plano CAD:",
-            value="25830",
+            key="sidebar_epsg_input",
             help="Ejemplos mundiales: 7855 o 28355 (Australia), 25830 (España), 32618 (Colombia/Panamá/USA), 32719 (Chile/Perú), 32630 (Europa/África), 6369 (México)."
         ).strip().upper().replace("EPSG:", "").strip()
 
         try:
             epsg_code = int(epsg_raw)
+            st.session_state["active_epsg_code"] = epsg_code
         except ValueError:
-            epsg_code = 25830
+            epsg_code = st.session_state.get("active_epsg_code", 25830)
             st.sidebar.warning("⚠️ Código numérico no válido. Usando EPSG:25830 por defecto.")
     else:
+        preset_names = list(regional_presets.keys())
+        preset_codes = list(regional_presets.values())
+        curr_code = st.session_state.get("active_epsg_code", 25830)
+        default_preset_idx = preset_codes.index(curr_code) if curr_code in preset_codes else 0
+
         preset_label = st.sidebar.selectbox(
             "Selecciona proyección regional:",
-            options=list(regional_presets.keys()),
-            index=0
+            options=preset_names,
+            index=default_preset_idx
         )
         epsg_code = regional_presets[preset_label]
+        st.session_state["active_epsg_code"] = epsg_code
+        st.session_state["sidebar_epsg_input"] = str(epsg_code)
 
     crs_str = f"EPSG:{epsg_code}"
 
@@ -1130,10 +1380,14 @@ def render_ui():
     service_keys = list(SERVICES_CATALOG.keys())
     service_labels = [SERVICES_CATALOG[k]["name"] for k in service_keys]
 
+    default_serv_idx = st.session_state.get("selected_service_idx", 0)
+    if default_serv_idx >= len(service_labels):
+        default_serv_idx = 0
+
     selected_service_label = st.sidebar.selectbox(
         "Capa o servicio a descargar:",
         options=service_labels,
-        index=0,
+        index=default_serv_idx,
         help=(
             "Selecciona la fuente de imagen para tu plano CAD:\n"
             "- Ortofoto Aérea PNOA (IGN España - Vuelo oficial de máxima resolución)\n"
@@ -1147,6 +1401,7 @@ def render_ui():
     )
 
     selected_service_key = service_keys[service_labels.index(selected_service_label)]
+    st.session_state["selected_service_idx"] = service_labels.index(selected_service_label)
     service_info = SERVICES_CATALOG[selected_service_key]
 
     if selected_service_key == "custom":
@@ -1241,11 +1496,16 @@ def render_ui():
 
     with col_demo:
         st.write("")
-        st.write("")
-        btn_demo = st.button("🧪 Probar con DXF de ejemplo", help="Genera un plano DXF con parcelas en Madrid (EPSG:25830), incluyendo una minuta en diagonal")
-        if btn_demo:
-            st.session_state["demo_active"] = True
-            st.session_state["processed_zip_data"] = None
+        st.markdown("<b style='font-size: 13px; color: #94a3b8;'>🧪 Probar sin subir archivo:</b>", unsafe_allow_html=True)
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            if st.button("🇪🇸 Madrid", help="Genera plano DXF en Madrid (EPSG:25830)", use_container_width=True):
+                st.session_state["demo_active"] = "madrid"
+                st.session_state["processed_zip_data"] = None
+        with col_d2:
+            if st.button("🇦🇺 Australia", help="Genera plano DXF en Melbourne, Australia (EPSG:7855)", use_container_width=True):
+                st.session_state["demo_active"] = "australia"
+                st.session_state["processed_zip_data"] = None
 
     dxf_bytes = None
     dxf_display_name = ""
@@ -1254,30 +1514,50 @@ def render_ui():
         st.session_state["demo_active"] = False
         dxf_bytes = uploaded_file.getvalue()
         dxf_display_name = uploaded_file.name
-    elif st.session_state.get("demo_active", False):
-        demo_doc = ezdxf.new("R2010")
-        demo_msp = demo_doc.modelspace()
-        
-        # Parcela 1: Solar urbano en Madrid (Área pequeña < 0.5 ha -> 0.25 m/px Muy Alta)
-        p1 = [(441300, 4478100), (441360, 4478100), (441360, 4478150), (441300, 4478150)]
-        poly1 = demo_msp.add_lwpolyline(p1, close=True)
-        poly1.dxf.layer = "SOLAR_EDIFICACION"
-        
-        # Parcela 2: Parcela industrial / nave en Madrid (1.2 ha -> 0.50 m/px Alta)
-        p2 = [(441800, 4473800), (441920, 4473800), (441920, 4473900), (441800, 4473900)]
-        poly2 = demo_msp.add_lwpolyline(p2, close=True)
-        poly2.dxf.layer = "PARCELA_INDUSTRIAL"
+    elif st.session_state.get("demo_active"):
+        demo_mode = st.session_state.get("demo_active")
+        if demo_mode == "australia":
+            demo_doc = ezdxf.new("R2010")
+            demo_msp = demo_doc.modelspace()
+            # Parcela 1: Melbourne City Center (GDA2020 / MGA zone 55 - EPSG:7855)
+            p1 = [(320650, 5812850), (320750, 5812850), (320750, 5812950), (320650, 5812950)]
+            poly1 = demo_msp.add_lwpolyline(p1, close=True)
+            poly1.dxf.layer = "PARCELA_MELBOURNE_VIC"
 
-        # Parcela 3: Ámbito de obra / desarrollo en Madrid (6.0 ha -> 1.00 m/px Estándar)
-        p3 = [(441300, 4476800), (441600, 4476980), (441480, 4477180), (441180, 4477000)]
-        poly3 = demo_msp.add_lwpolyline(p3, close=True)
-        poly3.dxf.layer = "AMBITO_OBRA"
+            # Parcela 2: Lote suburbano en Melbourne
+            p2 = [(321100, 5813200), (321280, 5813200), (321280, 5813350), (321100, 5813350)]
+            poly2 = demo_msp.add_lwpolyline(p2, close=True)
+            poly2.dxf.layer = "AMBITO_OBRA_AUSTRALIA"
 
-        out_str = io.StringIO()
-        demo_doc.write(out_str)
-        dxf_bytes = out_str.getvalue().encode("utf-8")
-        dxf_display_name = "demo_madrid_pnoa.dxf"
-        st.info("💡 Modo de demostración activo: Plano con 3 geometrías en Madrid (EPSG:25830).")
+            out_str = io.StringIO()
+            demo_doc.write(out_str)
+            dxf_bytes = out_str.getvalue().encode("utf-8")
+            dxf_display_name = "demo_melbourne_australia.dxf"
+            st.info("💡 Modo de demostración activo: Plano con 2 geometrías en Melbourne, Australia.")
+        else:
+            demo_doc = ezdxf.new("R2010")
+            demo_msp = demo_doc.modelspace()
+            
+            # Parcela 1: Solar urbano en Madrid (Área pequeña < 0.5 ha -> 0.25 m/px Muy Alta)
+            p1 = [(441300, 4478100), (441360, 4478100), (441360, 4478150), (441300, 4478150)]
+            poly1 = demo_msp.add_lwpolyline(p1, close=True)
+            poly1.dxf.layer = "SOLAR_EDIFICACION"
+            
+            # Parcela 2: Parcela industrial / nave en Madrid (1.2 ha -> 0.50 m/px Alta)
+            p2 = [(441800, 4473800), (441920, 4473800), (441920, 4473900), (441800, 4473900)]
+            poly2 = demo_msp.add_lwpolyline(p2, close=True)
+            poly2.dxf.layer = "PARCELA_INDUSTRIAL"
+
+            # Parcela 3: Ámbito de obra / desarrollo en Madrid (6.0 ha -> 1.00 m/px Estándar)
+            p3 = [(441300, 4476800), (441600, 4476980), (441480, 4477180), (441180, 4477000)]
+            poly3 = demo_msp.add_lwpolyline(p3, close=True)
+            poly3.dxf.layer = "AMBITO_OBRA"
+
+            out_str = io.StringIO()
+            demo_doc.write(out_str)
+            dxf_bytes = out_str.getvalue().encode("utf-8")
+            dxf_display_name = "demo_madrid_pnoa.dxf"
+            st.info("💡 Modo de demostración activo: Plano con 3 geometrías en Madrid (EPSG:25830).")
 
     # ----------------------------------------------------------------------------------
     # EXTRACCIÓN Y VISOR CARTOGRÁFICO DE CONFIRMACIÓN
@@ -1301,8 +1581,99 @@ def render_ui():
                 layers_found = list(set(p["capa"] for p in extracted_polygons))
                 col_m1.metric("Polilíneas detectadas", len(extracted_polygons))
                 col_m2.metric("Capas CAD", len(layers_found))
-                col_m3.metric("Proyección", crs_str)
+                col_m3.metric("Proyección activa", crs_str)
                 col_m4.metric("Servicio activo", service_info["badge"])
+
+                # ----------------------------------------------------------------------
+                # RECOMENDACIÓN INTELIGENTE DE PROYECCIÓN CARTOGRÁFICA (CRS)
+                # ----------------------------------------------------------------------
+                all_minx = min(p["bounds"][0] for p in extracted_polygons)
+                all_miny = min(p["bounds"][1] for p in extracted_polygons)
+                all_maxx = min(p["bounds"][2] for p in extracted_polygons)
+                all_maxy = min(p["bounds"][3] for p in extracted_polygons)
+                total_bounds = (all_minx, all_miny, all_maxx, all_maxy)
+
+                dxf_snippet = dxf_bytes[:100000].decode("latin-1", errors="ignore")
+                rec_crs_list = detect_recommended_epsg(total_bounds, layer_names=layers_found, raw_text=dxf_snippet)
+
+                if rec_crs_list:
+                    top_rec = rec_crs_list[0]
+                    if epsg_code == top_rec["code"]:
+                        st.markdown(f"""
+                        <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid #059669; border-radius: 10px; padding: 12px 16px; margin: 12px 0 16px 0;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 18px;">✅</span>
+                                <div style="color: #10b981; font-weight: 700; font-size: 14px;">
+                                    Proyección Activa Verificada: Coincide con EPSG:{epsg_code} ({top_rec['name']})
+                                </div>
+                            </div>
+                            <div style="color: #cbd5e1; font-size: 12px; margin-top: 3px; padding-left: 26px;">
+                                📍 <b>Ámbito:</b> {top_rec['region']} &mdash; <i>{top_rec['reason']}</i>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+                                    border: 2px solid #38bdf8; border-radius: 12px; padding: 16px 20px; margin: 12px 0 16px 0;
+                                    box-shadow: 0 8px 24px rgba(56, 189, 248, 0.18);">
+                            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span style="font-size: 22px;">💡</span>
+                                    <span style="color: #38bdf8; font-size: 1.15rem; font-weight: 700;">
+                                        Sugerencia Inteligente de Coordenadas: ¿Tu plano es EPSG:{top_rec['code']}?
+                                    </span>
+                                </div>
+                                <span style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.4);">
+                                    Confianza {top_rec['confidence']}
+                                </span>
+                            </div>
+                            <div style="color: #f1f5f9; font-size: 0.95rem; font-weight: 600; margin-bottom: 4px;">
+                                🎯 <b>{top_rec['name']}</b> &mdash; <span style="color: #94a3b8; font-weight: 400;">{top_rec['region']}</span>
+                            </div>
+                            <div style="color: #cbd5e1; font-size: 0.88rem; margin-bottom: 12px; line-height: 1.4;">
+                                {top_rec['reason']} Actualmente tienes seleccionada en la barra lateral la proyección <b>{crs_str}</b>.
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        c_btn_top, c_btn_alts = st.columns([1.6, 2.4])
+                        with c_btn_top:
+                            btn_label = f"✨ Aplicar recomendada: EPSG:{top_rec['code']}"
+                            if st.button(btn_label, type="primary", use_container_width=True, key=f"btn_apply_{top_rec['code']}"):
+                                st.session_state["active_epsg_code"] = top_rec["code"]
+                                st.session_state["sidebar_epsg_input"] = str(top_rec["code"])
+                                # Si se seleccionó una proyección fuera de España y el servicio actual es PNOA o MTN, cambiar a Google Satélite
+                                if selected_service_key in ["pnoa", "mapa_raster", "mdt_relieve"] and top_rec["code"] not in [25829, 25830, 25831, 32628]:
+                                    st.session_state["selected_service_idx"] = 0
+                                st.rerun()
+
+                        with c_btn_alts:
+                            if len(rec_crs_list) > 1:
+                                alts = rec_crs_list[1:3]
+                                alt_cols = st.columns(len(alts))
+                                for i, alt in enumerate(alts):
+                                    with alt_cols[i]:
+                                        alt_name_short = alt['name'].split('(')[0].replace("GDA2020 / ", "").replace("ETRS89 / ", "").strip()
+                                        if st.button(f"Probar EPSG:{alt['code']} ({alt_name_short})", use_container_width=True, key=f"btn_alt_{alt['code']}", help=f"{alt['name']} - {alt['region']}"):
+                                            st.session_state["active_epsg_code"] = alt["code"]
+                                            st.session_state["sidebar_epsg_input"] = str(alt["code"])
+                                            if selected_service_key in ["pnoa", "mapa_raster", "mdt_relieve"] and alt["code"] not in [25829, 25830, 25831, 32628]:
+                                                st.session_state["selected_service_idx"] = 0
+                                            st.rerun()
+
+                        if len(rec_crs_list) > 3 or any("alt_code" in r for r in rec_crs_list):
+                            with st.expander("🔍 Ver otras opciones geodésicas detectadas (ej. GDA94 / Husos secundarios)", expanded=False):
+                                for r in rec_crs_list:
+                                    if "alt_code" in r:
+                                        c_a1, c_a2 = st.columns([3, 1])
+                                        c_a1.write(f"**{r['alt_name']}** &mdash; {r['region']}")
+                                        if c_a2.button(f"Aplicar EPSG:{r['alt_code']}", key=f"btn_apply_alt_{r['alt_code']}", use_container_width=True):
+                                            st.session_state["active_epsg_code"] = r["alt_code"]
+                                            st.session_state["sidebar_epsg_input"] = str(r["alt_code"])
+                                            if selected_service_key in ["pnoa", "mapa_raster", "mdt_relieve"] and r["alt_code"] not in [25829, 25830, 25831, 32628]:
+                                                st.session_state["selected_service_idx"] = 0
+                                            st.rerun()
 
                 # Inicializar y sincronizar el estado de la tabla antes de renderizar el mapa
                 state_key = f"df_{dxf_display_name}_{len(extracted_polygons)}_{wms_tag}"
