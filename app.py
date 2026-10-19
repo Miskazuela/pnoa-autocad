@@ -35,6 +35,7 @@ import math
 import socket
 import zipfile
 import urllib.request
+from urllib.parse import urlparse
 import traceback
 import concurrent.futures
 from typing import List, Dict, Any, Tuple, Optional
@@ -561,8 +562,8 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
     "custom": {
         "name": "⚙️ Servidor WMS Universal (Cualquier país / organismo del mundo)",
         "type": "wms",
-        "url": "https://www.ign.es/wms-inspire/pnoa-ma",
-        "layer": "OI.OrthoimageCoverage",
+        "url": "",
+        "layer": "",
         "tag": "wms_custom",
         "badge": "WMS Universal",
         "description": "Introduce la URL y capa de cualquier servidor WMS del mundo (gobiernos estatales, catastro, Australia, etc.).",
@@ -755,55 +756,112 @@ def fetch_wms_ortho(
     timeout: int = 35
 ) -> bytes:
     """
-    Ejecuta la petición HTTP GetMap bajo el estándar OGC WMS 1.3.0 y valida
-    rigurosamente que la respuesta sea una imagen TIFF válida y no un XML de error.
+    Ejecuta la petición HTTP GetMap bajo los estándares OGC WMS (1.3.0 y 1.1.1)
+    con reintentos multi-formato (TIFF -> PNG -> JPEG), conversión automática a TIFF
+    y limpieza de parámetros en la URL, asegurando compatibilidad con cualquier
+    servidor del mundo (Bogotá, España, Australia, EE.UU., etc.).
     """
-    # Seguridad absoluta: asegurar que nunca se envíe > 4096 px al servidor
+    # 1. Limpieza de URL (remover cualquier parámetro previo tras el signo ?)
+    clean_url = wms_url.split("?")[0].strip()
+    if not clean_url:
+        raise ValueError("La URL del servidor WMS está vacía. Por favor introduce una URL válida en la barra lateral.")
+
+    host = urlparse(clean_url).netloc or "WMS"
+
+    # 2. Límites de seguridad en píxeles
     ancho_px = min(4000, max(1, int(ancho_px)))
     alto_px = min(4000, max(1, int(alto_px)))
+    bbox_str = f"{bbox_buf[0]},{bbox_buf[1]},{bbox_buf[2]},{bbox_buf[3]}"
 
-    params = {
-        "SERVICE": "WMS",
-        "VERSION": "1.3.0",
-        "REQUEST": "GetMap",
-        "LAYERS": wms_layer,
-        "STYLES": "",
-        "FORMAT": "image/tiff",
-        "CRS": crs_str,
-        "BBOX": f"{bbox_buf[0]},{bbox_buf[1]},{bbox_buf[2]},{bbox_buf[3]}",
-        "WIDTH": ancho_px,
-        "HEIGHT": alto_px,
-        "TRANSPARENT": "TRUE"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "image/tiff,image/png,image/jpeg,image/*,*/*;q=0.8"
     }
 
-    resp = session.get(wms_url, params=params, timeout=timeout)
+    # 3. Combinaciones de compatibilidad: WMS 1.3.0 (CRS) y WMS 1.1.1 (SRS) en TIFF, PNG y JPEG
+    attempts = [
+        ("1.3.0", "image/tiff", "CRS"),
+        ("1.3.0", "image/png", "CRS"),
+        ("1.1.1", "image/tiff", "SRS"),
+        ("1.1.1", "image/png", "SRS"),
+        ("1.3.0", "image/jpeg", "CRS"),
+        ("1.1.1", "image/jpeg", "SRS")
+    ]
 
-    if resp.status_code != 200:
-        raise ValueError(f"El servidor WMS respondió con código de estado HTTP {resp.status_code}")
+    last_error = ""
 
-    content_type = resp.headers.get("Content-Type", "").lower()
-    start_bytes = resp.content[:600]
+    for ver, fmt, crs_param in attempts:
+        params = {
+            "SERVICE": "WMS",
+            "VERSION": ver,
+            "REQUEST": "GetMap",
+            "LAYERS": wms_layer,
+            "STYLES": "",
+            "FORMAT": fmt,
+            crs_param: crs_str,
+            "BBOX": bbox_str,
+            "WIDTH": ancho_px,
+            "HEIGHT": alto_px,
+            "TRANSPARENT": "TRUE"
+        }
 
-    # Detección de error devuelto en formato XML
-    if (
-        "xml" in content_type
-        or start_bytes.startswith(b"<?xml")
-        or b"<ServiceException" in start_bytes
-        or b"<ExceptionReport" in start_bytes
-    ):
-        text = resp.text
-        m = re.search(r"<ServiceException[^>]*>(.*?)</ServiceException>", text, re.DOTALL)
-        if m:
-            clean_err = m.group(1).strip()
-            raise ValueError(f"Servidor WMS (IGN): {clean_err}")
-        else:
-            snippet = text[:300].replace("\n", " ").strip()
-            raise ValueError(f"Excepción de servicio WMS: {snippet}")
+        try:
+            resp = session.get(clean_url, params=params, headers=headers, timeout=timeout)
+            if resp.status_code != 200:
+                last_error = f"Código HTTP {resp.status_code}"
+                continue
 
-    if "image" not in content_type:
-        raise ValueError(f"Respuesta no es imagen (Content-Type: '{content_type}')")
+            content_type = resp.headers.get("Content-Type", "").lower()
+            start_bytes = resp.content[:600]
 
-    return resp.content
+            # Detectar si devolvió XML de excepción
+            if (
+                "xml" in content_type
+                or start_bytes.startswith(b"<?xml")
+                or b"<ServiceException" in start_bytes
+                or b"<ExceptionReport" in start_bytes
+            ):
+                text = resp.text
+                m = re.search(r"<ServiceException[^>]*>(.*?)</ServiceException>", text, re.DOTALL)
+                if m:
+                    last_error = m.group(1).strip()
+                else:
+                    m2 = re.search(r"<ExceptionText[^>]*>(.*?)</ExceptionText>", text, re.DOTALL)
+                    if m2:
+                        last_error = m2.group(1).strip()
+                    else:
+                        last_error = text[:250].replace("\n", " ").strip()
+                continue # Probar siguiente combinación de formato o versión
+
+            # Validar si es una imagen válida
+            is_image = (
+                "image" in content_type
+                or start_bytes.startswith(b"\x89PNG")
+                or start_bytes.startswith(b"II*\x00")
+                or start_bytes.startswith(b"MM\x00*")
+                or start_bytes.startswith(b"\xff\xd8")
+            )
+
+            if is_image:
+                # Si el servidor ya devolvió TIFF nativo
+                if "tiff" in fmt and (start_bytes.startswith(b"II*\x00") or start_bytes.startswith(b"MM\x00*")):
+                    return resp.content
+
+                # Si devolvió PNG o JPEG, convertir a TIFF en memoria para AutoCAD
+                try:
+                    img = Image.open(io.BytesIO(resp.content))
+                    out_tif = io.BytesIO()
+                    img.save(out_tif, format="TIFF")
+                    return out_tif.getvalue()
+                except Exception as conv_err:
+                    last_error = f"Error convirtiendo imagen {content_type} a TIFF: {conv_err}"
+                    continue
+
+        except requests.exceptions.RequestException as req_err:
+            last_error = str(req_err)
+            continue
+
+    raise ValueError(f"Servidor WMS ({host}): {last_error or 'No fue posible obtener imagen en los formatos disponibles (TIFF/PNG/JPEG)'}")
 
 
 def fetch_xyz_ortho(
@@ -1102,7 +1160,7 @@ def generate_preview_map(
     if active_service_key == "custom" and custom_wms_url and custom_wms_layer:
         try:
             folium.WmsTileLayer(
-                url=custom_wms_url,
+                url=custom_wms_url.split("?")[0].strip(),
                 layers=custom_wms_layer,
                 fmt="image/png",
                 transparent=True,
@@ -1417,9 +1475,27 @@ def render_ui():
             💡 <b>Conexión WMS Universal:</b> Puedes conectar cualquier servidor de cartografía u ortofotos oficial del mundo (Australia, Europa, América, etc.).
         </div>
         """, unsafe_allow_html=True)
-        wms_url = st.sidebar.text_input("URL base del servicio WMS:", value=service_info.get("url", ""), placeholder="https://ejemplo.gov/wms", help="URL base del servicio OGC WMS")
-        wms_layer = st.sidebar.text_input("Nombre técnico de la capa (Layer):", value=service_info.get("layer", ""), placeholder="imagery_layer", help="Identificador exacto de la capa en el servidor WMS")
-        wms_tag = st.sidebar.text_input("Etiqueta para archivos (Tag):", value="wms_custom", help="Prefijo corto que se incluirá en los nombres de archivo .tif y .tfw")
+        wms_url = st.sidebar.text_input(
+            "URL base del servicio WMS:",
+            value=st.session_state.get("custom_wms_url_val", ""),
+            placeholder="https://serviciosgis.catastrobogota.gov.co/.../WMSServer",
+            help="URL base del servicio OGC WMS (sin parámetros después del signo ?)"
+        ).split("?")[0].strip()
+        st.session_state["custom_wms_url_val"] = wms_url
+
+        wms_layer = st.sidebar.text_input(
+            "Nombre técnico de la capa (Layer):",
+            value=st.session_state.get("custom_wms_layer_val", ""),
+            placeholder="0 o nombre_capa",
+            help="Identificador exacto de la capa en el servidor WMS (suele ser un número como '0' o el identificador OGC)"
+        ).strip()
+        st.session_state["custom_wms_layer_val"] = wms_layer
+
+        wms_tag = st.sidebar.text_input(
+            "Etiqueta para archivos (Tag):",
+            value="wms_custom",
+            help="Prefijo corto que se incluirá en los nombres de archivo .tif y .tfw"
+        ).strip()
     else:
         st.sidebar.caption(f"ℹ️ **{service_info['badge']}:** {service_info['description']}")
         with st.sidebar.expander("⚙️ Ver detalles técnicos del servicio", expanded=False):
@@ -1856,6 +1932,14 @@ def render_ui():
                 )
 
                 if btn_process:
+                    if selected_service_key == "custom":
+                        if not wms_url.strip():
+                            st.error("⚠️ Debes introducir la URL de tu servidor WMS en la barra lateral para continuar.")
+                            st.stop()
+                        if not wms_layer.strip():
+                            st.error("⚠️ Debes introducir el identificador técnico de la capa (Layer) en la barra lateral.")
+                            st.stop()
+
                     st.session_state["processed_zip_data"] = None
                     st.session_state["processed_summary"] = []
 
