@@ -157,6 +157,18 @@ def sanitize_filename(name: str) -> str:
     return clean or "ortofoto"
 
 
+def format_file_size(num_bytes: int) -> str:
+    """
+    Formatea tamaños de bytes de forma legible y clara (B, KB, MB, GB).
+    """
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    elif num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.1f} KB"
+    else:
+        return f"{num_bytes / (1024 * 1024):.2f} MB"
+
+
 def create_resilient_session(timeout: int = 35) -> requests.Session:
     """
     Crea una sesión HTTP con reintentos exponenciales automáticos para mitigar caídas.
@@ -811,29 +823,49 @@ def fetch_wms_ortho(
 
     host = urlparse(clean_url).netloc or "WMS"
 
-    # 2. Límites de seguridad en píxeles
+    # 2. Límites de seguridad en píxeles y preparación de BBOX con orden de ejes CRS
     ancho_px = min(4000, max(1, int(ancho_px)))
     alto_px = min(4000, max(1, int(alto_px)))
-    bbox_str = f"{bbox_buf[0]},{bbox_buf[1]},{bbox_buf[2]},{bbox_buf[3]}"
+
+    minx, miny, maxx, maxy = bbox_buf
+    bbox_xy = f"{minx},{miny},{maxx},{maxy}"
+    bbox_yx = f"{miny},{minx},{maxy},{maxx}"
+
+    # Determinar orden de coordenadas del CRS según especificación OGC EPSG
+    is_yx = False
+    try:
+        crs_obj = CRS.from_user_input(crs_str)
+        if crs_obj.axis_info and len(crs_obj.axis_info) >= 2:
+            first_dir = str(crs_obj.axis_info[0].direction).lower()
+            if "north" in first_dir or "lat" in first_dir:
+                is_yx = True
+    except Exception:
+        pass
+
+    primary_130_bbox = bbox_yx if is_yx else bbox_xy
+    fallback_130_bbox = bbox_xy if is_yx else bbox_yx
+    bbox_111 = bbox_xy
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "image/tiff,image/png,image/jpeg,image/*,*/*;q=0.8"
     }
 
-    # 3. Combinaciones de compatibilidad: WMS 1.3.0 (CRS) y WMS 1.1.1 (SRS) en TIFF, PNG y JPEG
+    # 3. Combinaciones de compatibilidad: WMS 1.3.0 (con orden nativo y fallback) y WMS 1.1.1
     attempts = [
-        ("1.3.0", "image/tiff", "CRS"),
-        ("1.3.0", "image/png", "CRS"),
-        ("1.1.1", "image/tiff", "SRS"),
-        ("1.1.1", "image/png", "SRS"),
-        ("1.3.0", "image/jpeg", "CRS"),
-        ("1.1.1", "image/jpeg", "SRS")
+        ("1.3.0", "image/tiff", "CRS", primary_130_bbox),
+        ("1.3.0", "image/png", "CRS", primary_130_bbox),
+        ("1.1.1", "image/tiff", "SRS", bbox_111),
+        ("1.1.1", "image/png", "SRS", bbox_111),
+        ("1.3.0", "image/tiff", "CRS", fallback_130_bbox),
+        ("1.3.0", "image/png", "CRS", fallback_130_bbox),
+        ("1.3.0", "image/jpeg", "CRS", primary_130_bbox),
+        ("1.1.1", "image/jpeg", "SRS", bbox_111)
     ]
 
     last_error = ""
 
-    for ver, fmt, crs_param in attempts:
+    for ver, fmt, crs_param, req_bbox in attempts:
         params = {
             "SERVICE": "WMS",
             "VERSION": ver,
@@ -842,7 +874,7 @@ def fetch_wms_ortho(
             "STYLES": "",
             "FORMAT": fmt,
             crs_param: crs_str,
-            "BBOX": bbox_str,
+            "BBOX": req_bbox,
             "WIDTH": ancho_px,
             "HEIGHT": alto_px,
             "TRANSPARENT": "TRUE"
@@ -886,6 +918,19 @@ def fetch_wms_ortho(
             )
 
             if is_image:
+                # Comprobar si la imagen devuelta está 100% vacía/transparente
+                # (típico cuando el orden de ejes BBOX está invertido en WMS 1.3.0)
+                try:
+                    img_check = Image.open(io.BytesIO(resp.content))
+                    if img_check.mode in ("RGBA", "LA") or (img_check.mode == "P" and "transparency" in img_check.info):
+                        extrema = img_check.getextrema()
+                        alpha_ext = extrema[3] if img_check.mode == "RGBA" else (extrema[1] if img_check.mode == "LA" else None)
+                        if alpha_ext and alpha_ext[1] == 0:
+                            last_error = "El servidor devolvió un mosaico vacío (100% transparente) sin datos en estas coordenadas."
+                            continue
+                except Exception:
+                    pass
+
                 # Si el servidor ya devolvió TIFF nativo
                 if "tiff" in fmt and (start_bytes.startswith(b"II*\x00") or start_bytes.startswith(b"MM\x00*")):
                     return resp.content
@@ -2186,8 +2231,10 @@ def render_ui():
             )
 
         with c2:
-            zip_mb = len(st.session_state["processed_zip_data"]) / (1024 * 1024)
-            st.metric("Tamaño del archivo ZIP", f"{zip_mb:.2f} MB")
+            zip_bytes = len(st.session_state["processed_zip_data"])
+            st.metric("Tamaño del archivo ZIP", format_file_size(zip_bytes))
+            if zip_bytes < 5000:
+                st.warning("⚠️ Tamaño muy reducido (< 5 KB): Comprueba que el CRS y las coordenadas del plano DXF coincidan con la cobertura geográfica del servidor WMS.")
 
         if st.session_state.get("processed_summary"):
             st.write("")
