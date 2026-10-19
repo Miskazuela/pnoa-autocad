@@ -49,7 +49,7 @@ import ezdxf
 from shapely.geometry import Polygon
 from pyproj import CRS, Transformer
 import folium
-from folium.plugins import Draw
+from folium.plugins import Draw, LocateControl
 from streamlit_folium import st_folium
 from PIL import Image, ImageDraw, ImageChops
 import xml.etree.ElementTree as ET
@@ -1676,12 +1676,14 @@ def generate_preview_map(
     custom_wms_url: str = "",
     custom_wms_layer: str = "",
     custom_wms_tag: str = "wms_custom",
-    enable_draw: bool = True
+    enable_draw: bool = True,
+    auto_locate: bool = False
 ) -> folium.Map:
     """
     Crea un mapa interactivo con ortofotografía satelital y capas oficiales del IGN.
-    Permite visualizar polígonos existentes (DXF/KML) y trazar nuevas parcelas directamente
-    en el visor mediante la barra de herramientas de dibujo (Draw: polígonos y rectángulos).
+    Permite visualizar polígonos existentes (DXF/KML), geolocalizar la posición actual del
+    navegador (GPS) y trazar nuevas parcelas directamente en el visor mediante la barra
+    de herramientas de dibujo (Draw: polígonos y rectángulos).
     """
     has_polys = bool(polygons)
     all_lats: List[float] = []
@@ -1917,10 +1919,23 @@ def generate_preview_map(
                 "polygon": True,
                 "circle": False,
                 "marker": False,
-                "circlemarker": False
             },
             edit_options={"edit": True, "remove": True}
         ).add_to(m)
+
+    # Botón y servicio de geolocalización GPS del navegador
+    LocateControl(
+        auto_start=auto_locate,
+        position="topleft",
+        strings={
+            "title": "📍 Mostrar mi ubicación actual (GPS del navegador)",
+            "popup": "Estás a una distancia estimada de {distance} {unit} de este punto"
+        },
+        locateOptions={
+            "enableHighAccuracy": True,
+            "maxZoom": 18
+        }
+    ).add_to(m)
 
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
@@ -2297,7 +2312,7 @@ def render_ui():
     # ----------------------------------------------------------------------------------
     # CARGA DE ARCHIVO (DXF / KML / KMZ) Y ACCIONES RÁPIDAS
     # ----------------------------------------------------------------------------------
-    col_up, col_demo = st.columns([2.8, 1.4])
+    col_up, col_demo = st.columns([2.5, 1.6])
 
     with col_up:
         uploaded_file = st.file_uploader(
@@ -2309,20 +2324,27 @@ def render_ui():
     with col_demo:
         st.write("")
         st.markdown("<b style='font-size: 13px; color: #94a3b8;'>⚡ Acciones rápidas:</b>", unsafe_allow_html=True)
-        col_d1, col_d2, col_d3 = st.columns(3)
+        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
         with col_d1:
+            if st.button("📍 Mi GPS", help="Centra el mapa en la ubicación GPS de tu navegador", use_container_width=True):
+                st.session_state["locate_trigger"] = True
+                st.session_state["draw_only_mode"] = True
+                st.session_state["demo_active"] = False
+                st.session_state["processed_zip_data"] = None
+                st.rerun()
+        with col_d2:
             if st.button("✏️ Dibujar", help="Abre el visor para trazar polígonos directamente sin archivo", use_container_width=True):
                 st.session_state["draw_only_mode"] = True
                 st.session_state["demo_active"] = False
                 st.session_state["processed_zip_data"] = None
-        with col_d2:
+        with col_d3:
             if st.button("🇪🇸 Madrid", help="Genera plano DXF demo en Madrid (EPSG:25830)", use_container_width=True):
                 st.session_state["demo_active"] = "madrid"
                 st.session_state["draw_only_mode"] = False
                 st.session_state["pending_epsg_code"] = 25830
                 st.session_state["processed_zip_data"] = None
                 st.rerun()
-        with col_d3:
+        with col_d4:
             if st.button("🇦🇺 Australia", help="Genera plano DXF demo en Melbourne (EPSG:7855)", use_container_width=True):
                 st.session_state["demo_active"] = "australia"
                 st.session_state["draw_only_mode"] = False
@@ -2538,23 +2560,31 @@ def render_ui():
     # VISOR CARTOGRÁFICO INTERACTIVO Y HERRAMIENTA DE TRAZADO
     # ----------------------------------------------------------------------------------
     st.markdown("---")
-    col_map_h, col_map_btn = st.columns([3, 1])
+    col_map_h, col_map_btn = st.columns([2.6, 1.4])
     with col_map_h:
         st.markdown(f"### 🗺️ Visor Cartográfico y Trazado de Áreas ({service_info['badge']})")
         st.caption(
             "Verifica la ubicación de tus geometrías CAD/KML (**contorno sólido**) y el **recuadro de la imagen TIF de salida** (**línea discontinua** con buffer). "
-            "Para trazar una nueva parcela directamente en el mapa, usa las herramientas de **polígono o rectángulo** en la barra superior izquierda (✏️)."
+            "Usa el botón **📍 Mi GPS** para centrar en tu posición actual, y las herramientas de **polígono/rectángulo** en la esquina superior izquierda (✏️) para trazar parcelas."
         )
     with col_map_btn:
         st.write("")
-        if st.session_state.get("persisted_drawings"):
-            if st.button("🗑️ Limpiar dibujos del mapa", use_container_width=True, help="Elimina los polígonos dibujados manualmente"):
-                st.session_state["persisted_drawings"] = []
-                st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
-                st.session_state["processed_zip_data"] = None
+        c_gps, c_clear = st.columns(2)
+        with c_gps:
+            if st.button("📍 Mi GPS", use_container_width=True, help="Centra el mapa en las coordenadas GPS de tu navegador"):
+                st.session_state["locate_trigger"] = True
+                st.session_state["draw_only_mode"] = True
                 st.rerun()
+        with c_clear:
+            if st.session_state.get("persisted_drawings"):
+                if st.button("🗑️ Borrar", use_container_width=True, help="Elimina los polígonos dibujados manualmente"):
+                    st.session_state["persisted_drawings"] = []
+                    st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
+                    st.session_state["processed_zip_data"] = None
+                    st.rerun()
 
     draw_ver = st.session_state.get("draw_version", 0)
+    auto_locate = st.session_state.pop("locate_trigger", False)
     preview_map = generate_preview_map(
         polygons=extracted_polygons if extracted_polygons else None,
         crs_str=crs_str,
@@ -2563,7 +2593,8 @@ def render_ui():
         custom_wms_url=wms_url if selected_service_key == "custom" else "",
         custom_wms_layer=wms_layer if selected_service_key == "custom" else "",
         custom_wms_tag=wms_tag if selected_service_key == "custom" else "custom",
-        enable_draw=True
+        enable_draw=True,
+        auto_locate=auto_locate
     )
 
     if preview_map is not None:
