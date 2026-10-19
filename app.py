@@ -619,6 +619,16 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
         "badge": "Relieve MDT",
         "description": "Sombreado continuo del terreno derivado de LiDAR y MDT para estudios de pendiente.",
         "folium_name": "🏔️ IGN Relieve Sombreado MDT",
+    },
+    "igme_magna50": {
+        "name": "🇪🇸 IGME - Mapa Geológico MAGNA 50 (España)",
+        "type": "wms",
+        "url": "https://mapas.igme.es/gis/services/Cartografia_Geologica/IGME_MAGNA_50/MapServer/WMSServer",
+        "layer": "0,1,2,3",
+        "tag": "igme_magna50",
+        "badge": "Geología MAGNA 50",
+        "description": "Mapa Geológico Nacional de España 1:50.000 (IGME). Litologías color, tramas, fallas y contactos geológicos.",
+        "folium_name": "🇪🇸 IGME Mapa Geológico MAGNA 50",
     }
 }
 
@@ -766,6 +776,38 @@ def compute_tiled_georeferencing(
     return tiles
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_wms_service_layers(clean_url: str) -> List[Tuple[str, str]]:
+    """
+    Consulta el GetCapabilities del servidor WMS para extraer automáticamente
+    las capas disponibles con su código técnico y título legible.
+    """
+    clean_url = clean_url.split("?")[0].strip()
+    if not clean_url or not clean_url.startswith("http"):
+        return []
+    try:
+        session = create_resilient_session(timeout=8)
+        resp = session.get(clean_url, params={"SERVICE": "WMS", "REQUEST": "GetCapabilities"}, timeout=8)
+        if resp.status_code != 200:
+            return []
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(resp.content)
+        layers = []
+        for el in root.iter():
+            if el.tag.endswith("Layer"):
+                name_el = el.find("{*}Name")
+                title_el = el.find("{*}Title")
+                if name_el is not None and name_el.text:
+                    n = name_el.text.strip()
+                    t = title_el.text.strip() if title_el is not None and title_el.text else n
+                    if not n.startswith("<![CDATA") and n.upper() != "WMS":
+                        if not any(x[0] == n for x in layers):
+                            layers.append((n, t))
+        return layers
+    except Exception:
+        return []
+
+
 def fetch_wms_ortho(
     session: requests.Session,
     wms_url: str,
@@ -881,6 +923,18 @@ def fetch_wms_ortho(
         except requests.exceptions.RequestException as req_err:
             last_error = str(req_err)
             continue
+
+    if "LayerNotDefined" in last_error or "unacceptable layer names" in last_error.lower():
+        available = fetch_wms_service_layers(clean_url)
+        if available:
+            layer_sample = ", ".join([f"'{n}' ({t})" if n != t else f"'{n}'" for n, t in available[:8]])
+            if len(available) > 8:
+                layer_sample += f", ... (+{len(available)-8} más)"
+            raise ValueError(
+                f"Servidor WMS ({host}): La capa solicitada '{wms_layer}' no existe en este servidor.\n\n"
+                f"📋 Capas válidas en este servidor: {layer_sample}\n\n"
+                f"👉 Por favor selecciona o introduce una de estas capas (ej: '{available[0][0]}') en la barra lateral."
+            )
 
     raise ValueError(f"Servidor WMS ({host}): {last_error or 'No fue posible obtener imagen en los formatos disponibles (TIFF/PNG/JPEG)'}")
 
@@ -1193,6 +1247,21 @@ def generate_preview_map(
         except Exception:
             pass
 
+    if active_service_key == "igme_magna50":
+        try:
+            folium.WmsTileLayer(
+                url="https://mapas.igme.es/gis/services/Cartografia_Geologica/IGME_MAGNA_50/MapServer/WMSServer",
+                layers="0,1,2,3",
+                fmt="image/png",
+                transparent=True,
+                name="🇪🇸 IGME Mapa Geológico MAGNA 50",
+                overlay=True,
+                control=True,
+                show=True
+            ).add_to(m)
+        except Exception:
+            pass
+
     if active_service_key == "custom" and custom_wms_url and custom_wms_layer:
         try:
             folium.WmsTileLayer(
@@ -1355,13 +1424,16 @@ def render_ui():
     </style>
     """, unsafe_allow_html=True)
 
-    # Sincronización segura de proyección pendiente antes de instanciar widgets de Streamlit
+    # Sincronización segura de estados pendientes antes de instanciar widgets de Streamlit
     if "pending_epsg_code" in st.session_state:
         new_code = st.session_state.pop("pending_epsg_code")
         st.session_state["active_epsg_code"] = int(new_code)
         st.session_state["sidebar_epsg_input"] = str(new_code)
         if int(new_code) not in [25829, 25830, 25831, 32628]:
             st.session_state["selected_service_idx"] = 0
+
+    if "pending_custom_wms_layer" in st.session_state:
+        st.session_state["custom_wms_layer_input"] = str(st.session_state.pop("pending_custom_wms_layer"))
 
     if "active_epsg_code" not in st.session_state:
         st.session_state["active_epsg_code"] = 25830
@@ -1515,16 +1587,47 @@ def render_ui():
         wms_url = st.sidebar.text_input(
             "URL base del servicio WMS:",
             value=st.session_state.get("custom_wms_url_val", ""),
-            placeholder="https://serviciosgis.catastrobogota.gov.co/.../WMSServer",
+            placeholder="https://mapas.igme.es/.../WMSServer",
             help="URL base del servicio OGC WMS (sin parámetros después del signo ?)"
         ).split("?")[0].strip()
         st.session_state["custom_wms_url_val"] = wms_url
 
+        # Detección y exploración inteligente de capas publicadas por el servidor
+        detected_layers = fetch_wms_service_layers(wms_url) if (wms_url and wms_url.startswith("http")) else []
+
+        # Si el usuario cambió la URL del WMS, sincronizar automáticamente a la primera capa
+        last_url = st.session_state.get("last_custom_wms_url", "")
+        if wms_url and wms_url != last_url:
+            st.session_state["last_custom_wms_url"] = wms_url
+            if detected_layers:
+                st.session_state["custom_wms_layer_input"] = detected_layers[0][0]
+
+        if detected_layers:
+            layer_labels = [f"{n} ({t})" if n != t and t else n for n, t in detected_layers]
+            layer_names = [n for n, t in detected_layers]
+
+            def _on_detected_layer_change():
+                sel = st.session_state.get("custom_detected_layer_select")
+                if sel and sel != "(Escribir o editar abajo)":
+                    idx = layer_labels.index(sel)
+                    st.session_state["pending_custom_wms_layer"] = layer_names[idx]
+
+            st.sidebar.selectbox(
+                "📋 Capas disponibles detectadas en este servidor:",
+                options=["(Escribir o editar abajo)"] + layer_labels,
+                key="custom_detected_layer_select",
+                on_change=_on_detected_layer_change,
+                help="Selecciona una capa detectada en el servidor WMS para rellenar automáticamente el campo."
+            )
+
+        if "custom_wms_layer_input" not in st.session_state:
+            st.session_state["custom_wms_layer_input"] = detected_layers[0][0] if detected_layers else "0"
+
         wms_layer = st.sidebar.text_input(
             "Nombre técnico de la capa (Layer):",
-            value=st.session_state.get("custom_wms_layer_val", ""),
-            placeholder="0 o nombre_capa",
-            help="Identificador exacto de la capa en el servidor WMS (suele ser un número como '0' o el identificador OGC)"
+            key="custom_wms_layer_input",
+            placeholder="0, 1 o 0,1,2,3",
+            help="Identificador exacto de la capa en el servidor WMS (ej: 0, 1, 0,1,2,3, ortho2020funcion, etc.)"
         ).strip()
         st.session_state["custom_wms_layer_val"] = wms_layer
 
