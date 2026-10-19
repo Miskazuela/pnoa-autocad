@@ -12,7 +12,7 @@ git add .
 
 echo 2. Creando commit con las ultimas mejoras...
 set "MSG=%~1"
-if "%MSG%"=="" set "MSG=Lanzador ejecutable nativo PNOA_AutoCAD.exe y soporte portable sin Python"
+if "%MSG%"=="" set "MSG=Optimizacion del proyecto para despliegue web en Streamlit Cloud"
 git commit -m "%MSG%"
 
 echo 3. Subiendo cambios a GitHub...

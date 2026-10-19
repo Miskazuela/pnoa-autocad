@@ -21,47 +21,40 @@ Genera directamente para cada polígono los archivos estándar:
 
 ---
 
-## 🚀 Cómo iniciar la aplicación
+## 🌐 Despliegue en la Nube (Streamlit Community Cloud)
 
-### Opción 1: Ejecutable nativo Windows (Recomendada para usuarios)
-Haz doble clic sobre el archivo:
-```text
-PNOA_AutoCAD.exe
-```
-Se abrirá una pequeña ventana de control y automáticamente tu navegador web predeterminado cargará la aplicación en `http://localhost:8501`.
+Esta aplicación está lista para funcionar online en **Streamlit Community Cloud**:
+1. Entra en [share.streamlit.io](https://share.streamlit.io/) e inicia sesión con tu GitHub.
+2. Selecciona el repositorio `Miskazuela/pnoa-autocad`, rama `main` y archivo principal `app.py`.
+3. Haz clic en **Deploy**.
+4. ¡Cualquier persona puede usar la aplicación directamente desde su navegador web sin instalar nada!
 
-### Opción 2: Mediante lanzador `.bat` (Auto-configurable)
+---
+
+## 🚀 Ejecución en Local (Desarrollo y Pruebas)
+
+### Opción 1: Doble clic (Windows)
 Haz doble clic sobre:
 ```text
 iniciar_app.bat
 ```
-> [!TIP]
-> Si el equipo no tiene Python instalado, `iniciar_app.bat` descargará y configurará automáticamente un entorno portable ligero de forma silenciosa. ¡No necesitas instalar Python ni configurar el PATH!
+Esto abrirá automáticamente la aplicación en tu navegador en `http://localhost:8501`.
 
-### Opción 3: Desde la terminal / PowerShell
-Si prefieres ejecutarlo manualmente con tu propio entorno:
+### Opción 2: Desde terminal / PowerShell
 ```bash
+pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
 ---
 
-## 💼 Distribuir Versión Portable a otros usuarios (.ZIP)
-Si deseas compartir la aplicación con clientes, topógrafos o compañeros que no tienen Python ni conexión para configurar dependencias:
-1. Haz doble clic en `crear_version_portable.bat`.
-2. Se generará en la carpeta `dist/` el archivo **`PNOA_to_AutoCAD_Portable.zip`**.
-3. Sube ese `.zip` a las **Releases** de tu GitHub o compártelo por OneDrive / red local. Quien lo descargue solo tiene que descomprimir y hacer doble clic en `PNOA_AutoCAD.exe`.
-
----
-
 ## 📂 Archivos en esta carpeta
-- **`PNOA_AutoCAD.exe`**: Lanzador nativo de Windows (sin ventanas negras de consola).
-- **`iniciar_app.bat`**: Lanzador por lotes con instalador portable automático en caso de no detectar Python.
-- **`crear_version_portable.bat`**: Generador automático del paquete `.zip` independiente para GitHub Releases.
 - **`app.py`**: Código fuente principal de la aplicación web en Streamlit.
 - **`ejemplo_madrid.dxf`**: Plano de prueba con 3 parcelas cerradas en Madrid (`EPSG:25830`) para probar la app de inmediato.
 - **`requirements.txt`**: Librerías necesarias (`streamlit`, `ezdxf`, `shapely`, `pyproj`, `requests`, `pandas`, `folium`, `pillow`).
 - **`.streamlit/config.toml`**: Configuración de tema visual y servidor web.
+- **`iniciar_app.bat`**: Lanzador local para pruebas en Windows.
+- **`subir_a_github.bat`**: Script para subir cambios a GitHub con un solo clic.
 
 ---
 
