@@ -580,16 +580,6 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
         "description": "Introduce la URL y capa de cualquier servidor WMS del mundo (gobiernos estatales, catastro, Australia, etc.).",
         "folium_name": "⚙️ WMS Universal",
     },
-    "bogota_catastro": {
-        "name": "🇨🇴 Catastro Bogotá - Ortofoto 2020 (Colombia)",
-        "type": "wms",
-        "url": "https://serviciosgis.catastrobogota.gov.co/image/services/imagenesfunciones/ortho2020funcion/ImageServer/WMSServer",
-        "layer": "ortho2020funcion",
-        "tag": "bogota_orto2020",
-        "badge": "Ortofoto Bogotá 2020",
-        "description": "Ortofotografía aérea oficial de alta resolución de Bogotá D.C. (Catastro Bogotá). Proyección recomendada: MAGNA Bogotá EPSG:3116.",
-        "folium_name": "🇨🇴 Catastro Bogotá Ortofoto 2020",
-    },
     "pnoa": {
         "name": "🇪🇸 IGN - Ortofoto Aérea PNOA (España - Máxima Resolución)",
         "type": "wms",
@@ -619,16 +609,6 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
         "badge": "Relieve MDT",
         "description": "Sombreado continuo del terreno derivado de LiDAR y MDT para estudios de pendiente.",
         "folium_name": "🏔️ IGN Relieve Sombreado MDT",
-    },
-    "igme_magna50": {
-        "name": "🇪🇸 IGME - Mapa Geológico MAGNA 50 (España)",
-        "type": "wms",
-        "url": "https://mapas.igme.es/gis/services/Cartografia_Geologica/IGME_MAGNA_50/MapServer/WMSServer",
-        "layer": "0,1,2,3",
-        "tag": "igme_magna50",
-        "badge": "Geología MAGNA 50",
-        "description": "Mapa Geológico Nacional de España 1:50.000 (IGME). Litologías color, tramas, fallas y contactos geológicos.",
-        "folium_name": "🇪🇸 IGME Mapa Geológico MAGNA 50",
     }
 }
 
@@ -1232,36 +1212,6 @@ def generate_preview_map(
         show=(active_service_key == "mdt_relieve")
     ).add_to(m)
 
-    if active_service_key == "bogota_catastro":
-        try:
-            folium.WmsTileLayer(
-                url="https://serviciosgis.catastrobogota.gov.co/image/services/imagenesfunciones/ortho2020funcion/ImageServer/WMSServer",
-                layers="ortho2020funcion",
-                fmt="image/png",
-                transparent=True,
-                name="🇨🇴 Catastro Bogotá Ortofoto 2020",
-                overlay=True,
-                control=True,
-                show=True
-            ).add_to(m)
-        except Exception:
-            pass
-
-    if active_service_key == "igme_magna50":
-        try:
-            folium.WmsTileLayer(
-                url="https://mapas.igme.es/gis/services/Cartografia_Geologica/IGME_MAGNA_50/MapServer/WMSServer",
-                layers="0,1,2,3",
-                fmt="image/png",
-                transparent=True,
-                name="🇪🇸 IGME Mapa Geológico MAGNA 50",
-                overlay=True,
-                control=True,
-                show=True
-            ).add_to(m)
-        except Exception:
-            pass
-
     if active_service_key == "custom" and custom_wms_url and custom_wms_layer:
         try:
             folium.WmsTileLayer(
@@ -1587,7 +1537,7 @@ def render_ui():
         wms_url = st.sidebar.text_input(
             "URL base del servicio WMS:",
             value=st.session_state.get("custom_wms_url_val", ""),
-            placeholder="https://mapas.igme.es/.../WMSServer",
+            placeholder="https://servidor-geoportal.com/.../WMSServer",
             help="URL base del servicio OGC WMS (sin parámetros después del signo ?)"
         ).split("?")[0].strip()
         st.session_state["custom_wms_url_val"] = wms_url
