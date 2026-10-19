@@ -36,6 +36,7 @@ import socket
 import zipfile
 import urllib.request
 import traceback
+import concurrent.futures
 from typing import List, Dict, Any, Tuple, Optional
 
 import streamlit as st
@@ -291,16 +292,48 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
 # --------------------------------------------------------------------------------------
 SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
     "pnoa": {
-        "name": "🇪🇸 IGN - Ortofoto Aérea PNOA (Máxima Resolución)",
+        "name": "🇪🇸 IGN - Ortofoto Aérea PNOA (España - Máxima Resolución)",
+        "type": "wms",
         "url": "https://www.ign.es/wms-inspire/pnoa-ma",
         "layer": "OI.OrthoimageCoverage",
         "tag": "pnoa",
         "badge": "Ortofoto PNOA",
-        "description": "Ortofotografías aéreas de España de máxima resolución del PNOA. Ideal para urbanismo, edificación y parcelas.",
+        "description": "Ortofotografías aéreas oficiales de España de máxima resolución del PNOA. Ideal para urbanismo, edificación y parcelas.",
         "folium_name": "🇪🇸 Ortofoto PNOA WMS (IGN)",
+    },
+    "google_sat": {
+        "name": "🌍 Google Satélite (Imágenes Satelitales Mundiales)",
+        "type": "xyz",
+        "url": "https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        "layer": "",
+        "tag": "google_sat",
+        "badge": "Google Satélite",
+        "description": "Fotografía satelital mundial de Google de alta resolución sin rótulos. Cobertura global (España, Latinoamérica y resto del mundo).",
+        "folium_name": "🌍 Google Satélite (Google Maps)",
+    },
+    "google_hybrid": {
+        "name": "🌍 Google Híbrido (Satélite + Vías y Nombres)",
+        "type": "xyz",
+        "url": "https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+        "layer": "",
+        "tag": "google_hybrid",
+        "badge": "Google Híbrido",
+        "description": "Satélite de Google con red de carreteras, calles principales y toponimia sobreimpresas.",
+        "folium_name": "🌍 Google Híbrido (Satélite + Vías)",
+    },
+    "esri_sat": {
+        "name": "🛰️ Esri World Imagery (Satélite Global de Alta Resolución)",
+        "type": "xyz",
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        "layer": "",
+        "tag": "esri_sat",
+        "badge": "Esri Satélite",
+        "description": "Ortofotografía satelital global de Esri / Maxar de alta resolución.",
+        "folium_name": "🛰️ Esri World Imagery",
     },
     "mapa_raster": {
         "name": "🗺️ IGN - Mapa Ráster / MTN Topográfico Nacional",
+        "type": "wms",
         "url": "https://www.ign.es/wms-inspire/mapa-raster",
         "layer": "mtn_rasterizado",
         "tag": "mtn_raster",
@@ -310,6 +343,7 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "mdt_relieve": {
         "name": "🏔️ IGN - Modelo Digital del Terreno (Sombreado Relieve)",
+        "type": "wms",
         "url": "https://servicios.idee.es/wms-inspire/mdt",
         "layer": "EL.GridCoverage",
         "tag": "mdt_relieve",
@@ -319,6 +353,7 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "custom": {
         "name": "⚙️ Personalizado (Servicio WMS propio)",
+        "type": "wms",
         "url": "https://www.ign.es/wms-inspire/pnoa-ma",
         "layer": "OI.OrthoimageCoverage",
         "tag": "custom",
@@ -534,6 +569,137 @@ def fetch_wms_ortho(
     return resp.content
 
 
+def fetch_xyz_ortho(
+    session: requests.Session,
+    tile_url_template: str,
+    crs_str: str,
+    bbox_buf: Tuple[float, float, float, float],
+    ancho_px: int,
+    alto_px: int,
+    timeout: int = 25
+) -> bytes:
+    """
+    Descarga ortofotografía satelital desde servidores de teselas XYZ estándar (Google Maps / Esri)
+    en Web Mercator (EPSG:3857) y rectifica con precisión subpíxel al Bounding Box y resolución
+    exactos del sistema de coordenadas local del dibujo (EPSG:25830, etc.), retornando un archivo TIFF.
+    """
+    ancho_px = min(4000, max(1, int(ancho_px)))
+    alto_px = min(4000, max(1, int(alto_px)))
+
+    t_3857 = Transformer.from_crs(crs_str, "EPSG:3857", always_xy=True)
+    t_4326 = Transformer.from_crs(crs_str, "EPSG:4326", always_xy=True)
+
+    minx, miny, maxx, maxy = bbox_buf
+    target_res_x = (maxx - minx) / ancho_px
+    target_res_y = (maxy - miny) / alto_px
+    target_res = min(target_res_x, target_res_y)
+
+    lon_c, lat_c = t_4326.transform((minx + maxx) / 2.0, (miny + maxy) / 2.0)
+    cos_lat = max(0.05, math.cos(math.radians(lat_c)))
+
+    # Resolución en el ecuador a Zoom 0 es 156543.03392 m/px
+    if target_res > 0:
+        raw_zoom = math.log2((156543.03392 * cos_lat) / target_res)
+        zoom = round(raw_zoom)
+    else:
+        zoom = 18
+    zoom = max(1, min(20, int(zoom)))
+
+    # 4 esquinas del recuadro proyectado en UTM: UL, LL, LR, UR
+    corners = [
+        (minx, maxy),  # Upper-Left
+        (minx, miny),  # Lower-Left
+        (maxx, miny),  # Lower-Right
+        (maxx, maxy)   # Upper-Right
+    ]
+    corners_3857 = [t_3857.transform(x, y) for x, y in corners]
+
+    origin_shift = 20037508.342789244
+
+    def get_pixel_coords(z_level: int):
+        s_world = 256.0 * (2 ** z_level)
+        px_list = []
+        for x, y in corners_3857:
+            px = (x + origin_shift) / (2.0 * origin_shift) * s_world
+            py = (origin_shift - y) / (2.0 * origin_shift) * s_world
+            px_list.append((px, py))
+        return px_list
+
+    px_corners = get_pixel_coords(zoom)
+    min_px_x = min(p[0] for p in px_corners)
+    max_px_x = max(p[0] for p in px_corners)
+    min_px_y = min(p[1] for p in px_corners)
+    max_px_y = max(p[1] for p in px_corners)
+
+    tile_x_min = int(math.floor(min_px_x / 256.0))
+    tile_x_max = int(math.floor(max_px_x / 256.0))
+    tile_y_min = int(math.floor(min_px_y / 256.0))
+    tile_y_max = int(math.floor(max_px_y / 256.0))
+
+    # Control de seguridad: si son más de 64 teselas, retroceder nivel de zoom
+    while (tile_x_max - tile_x_min + 1) * (tile_y_max - tile_y_min + 1) > 64 and zoom > 2:
+        zoom -= 1
+        px_corners = get_pixel_coords(zoom)
+        min_px_x = min(p[0] for p in px_corners)
+        max_px_x = max(p[0] for p in px_corners)
+        min_px_y = min(p[1] for p in px_corners)
+        max_px_y = max(p[1] for p in px_corners)
+        tile_x_min = int(math.floor(min_px_x / 256.0))
+        tile_x_max = int(math.floor(max_px_x / 256.0))
+        tile_y_min = int(math.floor(min_px_y / 256.0))
+        tile_y_max = int(math.floor(max_px_y / 256.0))
+
+    canvas_w = max(256, (tile_x_max - tile_x_min + 1) * 256)
+    canvas_h = max(256, (tile_y_max - tile_y_min + 1) * 256)
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (230, 230, 230))
+
+    def fetch_single_tile(tx, ty):
+        sub = "mt" + str((tx + ty) % 4)
+        url = tile_url_template.format(x=tx, y=ty, z=zoom, s=sub)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8"
+        }
+        try:
+            resp = session.get(url, headers=headers, timeout=timeout)
+            if resp.status_code == 200 and len(resp.content) > 100:
+                return tx, ty, resp.content
+        except Exception:
+            pass
+        return tx, ty, None
+
+    tile_coords = [(tx, ty) for ty in range(tile_y_min, tile_y_max + 1) for tx in range(tile_x_min, tile_x_max + 1)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, len(tile_coords) or 1)) as pool:
+        futures = [pool.submit(fetch_single_tile, tx, ty) for tx, ty in tile_coords]
+        for fut in concurrent.futures.as_completed(futures):
+            tx, ty, data = fut.result()
+            if data:
+                try:
+                    img = Image.open(io.BytesIO(data)).convert("RGB")
+                    cx = (tx - tile_x_min) * 256
+                    cy = (ty - tile_y_min) * 256
+                    canvas.paste(img, (cx, cy))
+                except Exception:
+                    pass
+
+    # Coordenadas relativas en el lienzo para las 4 esquinas: UL, LL, LR, UR
+    quad_data = []
+    for px, py in px_corners:
+        quad_data.append(px - (tile_x_min * 256.0))
+        quad_data.append(py - (tile_y_min * 256.0))
+
+    rectified = canvas.transform(
+        (ancho_px, alto_px),
+        Image.QUAD,
+        tuple(quad_data),
+        resample=Image.BICUBIC
+    )
+
+    out_buf = io.BytesIO()
+    rectified.save(out_buf, format="TIFF")
+    return out_buf.getvalue()
+
+
 # --------------------------------------------------------------------------------------
 # 4. MAPA INTERACTIVO DE CONFIRMACIÓN DE UBICACIÓN
 # --------------------------------------------------------------------------------------
@@ -630,9 +796,25 @@ def generate_preview_map(
     )
 
     folium.TileLayer(
+        tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        attr="Google Maps",
+        name="🌍 Google Satélite (Mundial)",
+        overlay=False,
+        control=True
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+        attr="Google Maps",
+        name="🌍 Google Híbrido (Satélite + Vías)",
+        overlay=False,
+        control=True
+    ).add_to(m)
+
+    folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         attr="Esri Satellite",
-        name="🛰️ Satélite (Esri World Imagery)",
+        name="🛰️ Esri World Imagery",
         overlay=False,
         control=True
     ).add_to(m)
@@ -893,19 +1075,22 @@ def render_ui():
         )
     )
 
-    # 4. Servicio Cartográfico Oficial (WMS IGN / Topográfico / Relieve)
-    st.sidebar.subheader("4. Servicio Cartográfico WMS")
+    # 4. Servicio Cartográfico y Satelital (WMS IGN / Google Satélite / Esri)
+    st.sidebar.subheader("4. Servicio Cartográfico / Satelital")
     service_keys = list(SERVICES_CATALOG.keys())
     service_labels = [SERVICES_CATALOG[k]["name"] for k in service_keys]
 
     selected_service_label = st.sidebar.selectbox(
-        "Servicio cartográfico a descargar:",
+        "Capa o servicio a descargar:",
         options=service_labels,
         index=0,
         help=(
-            "Selecciona la fuente cartográfica oficial de España:\n"
-            "- Ortofoto Aérea PNOA (Imágenes de satélite/vuelo de máxima resolución)\n"
-            "- Mapa Ráster IGN (Cartografía MTN25/MTN50 oficial, topografía, curvas de nivel y toponimia)\n"
+            "Selecciona la fuente de imagen para tu plano CAD:\n"
+            "- Ortofoto Aérea PNOA (IGN España - Vuelo oficial de máxima resolución)\n"
+            "- Google Satélite (Fotografía satelital mundial de alta resolución)\n"
+            "- Google Híbrido (Satélite con carreteras, autopistas y nombres)\n"
+            "- Esri World Imagery (Imágenes satelitales globales de alta resolución)\n"
+            "- Mapa Ráster IGN (Cartografía MTN25/MTN50 oficial con curvas de nivel)\n"
             "- Modelo Digital del Terreno (Sombreado continuo de relieve LiDAR/MDT)\n"
             "- Personalizado (Cualquier servidor WMS 1.3.0)"
         )
@@ -920,13 +1105,16 @@ def render_ui():
         wms_tag = st.sidebar.text_input("Etiqueta para nombres de archivo:", value="custom")
     else:
         st.sidebar.caption(f"ℹ️ **{service_info['badge']}:** {service_info['description']}")
-        with st.sidebar.expander("⚙️ Ver detalles técnicos del WMS", expanded=False):
-            info_tech = f"URL: {service_info['url']}\nCapa: {service_info['layer']}"
-            if selected_service_key == "mapa_raster":
-                info_tech += "\nEndpoint WMTS: https://www.ign.es/wmts/mapa-raster"
+        with st.sidebar.expander("⚙️ Ver detalles técnicos del servicio", expanded=False):
+            if service_info.get("type") == "xyz":
+                info_tech = f"Tipo: Servidor de teselas XYZ (Web Mercator EPSG:3857)\nURL Plantilla: {service_info['url']}"
+            else:
+                info_tech = f"Tipo: OGC WMS 1.3.0\nURL: {service_info['url']}\nCapa: {service_info['layer']}"
+                if selected_service_key == "mapa_raster":
+                    info_tech += "\nEndpoint WMTS: https://www.ign.es/wmts/mapa-raster"
             st.code(info_tech, language="text")
         wms_url = service_info["url"]
-        wms_layer = service_info["layer"]
+        wms_layer = service_info.get("layer", "")
         wms_tag = service_info["tag"]
 
     # 5. Límites de seguridad
@@ -953,8 +1141,8 @@ def render_ui():
     # ----------------------------------------------------------------------------------
     st.markdown("""
     <div class="main-header">
-        <h1>📐 Extractor de Ortofotos PNOA y Cartografía IGN para AutoCAD</h1>
-        <p>Automatización de ortofotos PNOA, mapas topográficos MTN Ráster y modelos de relieve para AutoCAD en formato TIF + TFW georreferenciado.</p>
+        <h1>📐 Extractor de Cartografía Oficial y Google Satélite para AutoCAD</h1>
+        <p>Automatización de Ortofotos PNOA (IGN España), Google Satélite mundial, mapas topográficos MTN Ráster y relieve para AutoCAD en formato TIF + TFW georreferenciado.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1298,15 +1486,25 @@ def render_ui():
                                 )
 
                                 try:
-                                    img_bytes = fetch_wms_ortho(
-                                        session=session,
-                                        wms_url=wms_url,
-                                        wms_layer=wms_layer,
-                                        crs_str=crs_str,
-                                        bbox_buf=job["bbox_buf"],
-                                        ancho_px=job["ancho_px"],
-                                        alto_px=job["alto_px"]
-                                    )
+                                    if service_info.get("type") == "xyz":
+                                        img_bytes = fetch_xyz_ortho(
+                                            session=session,
+                                            tile_url_template=service_info["url"],
+                                            crs_str=crs_str,
+                                            bbox_buf=job["bbox_buf"],
+                                            ancho_px=job["ancho_px"],
+                                            alto_px=job["alto_px"]
+                                        )
+                                    else:
+                                        img_bytes = fetch_wms_ortho(
+                                            session=session,
+                                            wms_url=wms_url,
+                                            wms_layer=wms_layer,
+                                            crs_str=crs_str,
+                                            bbox_buf=job["bbox_buf"],
+                                            ancho_px=job["ancho_px"],
+                                            alto_px=job["alto_px"]
+                                        )
 
                                     zf.writestr(f"{final_name}.tif", img_bytes)
                                     zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
