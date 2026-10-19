@@ -2084,6 +2084,7 @@ def render_ui():
                 )
                 st.session_state[state_key] = edited_df
 
+                selected_rows = edited_df[edited_df["incluir"] == True].to_dict("records")
                 if len(selected_rows) == 0:
                     st.warning("⚠️ No has seleccionado ningún polígono para descargar. Marca las casillas en la tabla o pulsa '✅ Seleccionar todo'.")
                 else:
