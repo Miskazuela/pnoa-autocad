@@ -11,7 +11,9 @@ echo 1. Preparando archivos...
 git add .
 
 echo 2. Creando commit con las ultimas mejoras...
-git commit -m "Soporte multicartografia oficial del IGN: Mapa Raster MTN topografico, PNOA y MDT Relieve"
+set "MSG=%~1"
+if "%MSG%"=="" set "MSG=Lanzador ejecutable nativo PNOA_AutoCAD.exe y soporte portable sin Python"
+git commit -m "%MSG%"
 
 echo 3. Subiendo cambios a GitHub...
 git push origin main

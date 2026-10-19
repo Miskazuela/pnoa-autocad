@@ -23,34 +23,45 @@ Genera directamente para cada polígono los archivos estándar:
 
 ## 🚀 Cómo iniciar la aplicación
 
-### Opción 1: Doble clic (Recomendada en Windows)
-Haz doble clic sobre el archivo ejecutable:
+### Opción 1: Ejecutable nativo Windows (Recomendada para usuarios)
+Haz doble clic sobre el archivo:
+```text
+PNOA_AutoCAD.exe
+```
+Se abrirá una pequeña ventana de control y automáticamente tu navegador web predeterminado cargará la aplicación en `http://localhost:8501`.
+
+### Opción 2: Mediante lanzador `.bat` (Auto-configurable)
+Haz doble clic sobre:
 ```text
 iniciar_app.bat
 ```
-Esto abrirá automáticamente la aplicación en tu navegador web predeterminado en `http://localhost:8501`.
+> [!TIP]
+> Si el equipo no tiene Python instalado, `iniciar_app.bat` descargará y configurará automáticamente un entorno portable ligero de forma silenciosa. ¡No necesitas instalar Python ni configurar el PATH!
 
-### Opción 2: Desde la terminal / PowerShell
-Abre PowerShell o CMD en esta carpeta (`C:\Users\JMN\Documents\PNOA`) y ejecuta:
+### Opción 3: Desde la terminal / PowerShell
+Si prefieres ejecutarlo manualmente con tu propio entorno:
 ```bash
 python -m streamlit run app.py
 ```
 
 ---
 
-## 📦 Instalación de dependencias (si configuras otro equipo)
-```bash
-pip install -r requirements.txt
-```
+## 💼 Distribuir Versión Portable a otros usuarios (.ZIP)
+Si deseas compartir la aplicación con clientes, topógrafos o compañeros que no tienen Python ni conexión para configurar dependencias:
+1. Haz doble clic en `crear_version_portable.bat`.
+2. Se generará en la carpeta `dist/` el archivo **`PNOA_to_AutoCAD_Portable.zip`**.
+3. Sube ese `.zip` a las **Releases** de tu GitHub o compártelo por OneDrive / red local. Quien lo descargue solo tiene que descomprimir y hacer doble clic en `PNOA_AutoCAD.exe`.
 
 ---
 
 ## 📂 Archivos en esta carpeta
+- **`PNOA_AutoCAD.exe`**: Lanzador nativo de Windows (sin ventanas negras de consola).
+- **`iniciar_app.bat`**: Lanzador por lotes con instalador portable automático en caso de no detectar Python.
+- **`crear_version_portable.bat`**: Generador automático del paquete `.zip` independiente para GitHub Releases.
 - **`app.py`**: Código fuente principal de la aplicación web en Streamlit.
-- **`iniciar_app.bat`**: Lanzador directo para Windows con un solo clic.
 - **`ejemplo_madrid.dxf`**: Plano de prueba con 3 parcelas cerradas en Madrid (`EPSG:25830`) para probar la app de inmediato.
-- **`requirements.txt`**: Librerías Python necesarias (`streamlit`, `ezdxf`, `shapely`, `pyproj`, `requests`, `pandas`).
-- **`.streamlit/config.toml`**: Configuración de tema y servidor web.
+- **`requirements.txt`**: Librerías necesarias (`streamlit`, `ezdxf`, `shapely`, `pyproj`, `requests`, `pandas`, `folium`, `pillow`).
+- **`.streamlit/config.toml`**: Configuración de tema visual y servidor web.
 
 ---
 

@@ -13,6 +13,11 @@ __pycache__/
 venv/
 .venv/
 env/
+.runtime/
+runtime/
+dist/
+build/
+*_Portable/
 
 # IDE and OS
 .vscode/
