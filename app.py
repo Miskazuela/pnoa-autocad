@@ -1937,8 +1937,9 @@ def render_ui():
                     *Nota: Cada fila ha sido inicializada automáticamente con la resolución recomendada. Puedes ajustar los valores a tu gusto de manera individual o por lotes.*
                     """)
 
-                q1, q2, q3, q4 = st.columns([2.0, 1.2, 1.4, 1.4])
-                with q1:
+                # 1. Ajuste rápido de resolución por lote
+                r1, r2, r3 = st.columns([2.0, 1.3, 1.3])
+                with r1:
                     preset_res = st.selectbox(
                         "Resolución rápida sugerida:",
                         options=[
@@ -1953,20 +1954,54 @@ def render_ui():
                         index=0
                     )
 
-                with q2:
+                with r2:
                     st.write("")
                     st.write("")
-                    btn_apply_all = st.button("Aplicar a todos", use_container_width=True)
+                    btn_apply_all = st.button("📏 Aplicar a todos", use_container_width=True)
 
-                with q3:
+                with r3:
                     st.write("")
                     st.write("")
                     btn_apply_rec = st.button("🪄 Calidad sugerida", use_container_width=True, help="Restaura la resolución recomendada según el área en m² de cada polígono")
 
-                with q4:
-                    st.write("")
-                    st.write("")
-                    btn_invert_sel = st.button("Alternar selección", use_container_width=True)
+                # 2. Barra de selección rápida de polígonos
+                total_polys = len(active_df)
+                selected_count = int(active_df["incluir"].sum()) if "incluir" in active_df.columns else 0
+
+                s1, s2, s3, s4 = st.columns([2.0, 1.2, 1.2, 1.0])
+                with s1:
+                    st.markdown(
+                        f"<div style='padding-top: 6px; font-weight: 600; font-size: 13.5px; color: #38bdf8;'>"
+                        f"📍 <b>{selected_count}</b> de <b>{total_polys}</b> polígono(s) marcado(s)"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                with s2:
+                    btn_select_all = st.button("✅ Seleccionar todo", use_container_width=True, help="Marca todos los polígonos de la tabla")
+                with s3:
+                    btn_deselect_all = st.button("⬜ Deseleccionar todo", use_container_width=True, help="Desmarca todos los polígonos de la tabla")
+                with s4:
+                    btn_invert_sel = st.button("🔄 Invertir", use_container_width=True, help="Invierte la selección actual de polígonos")
+
+                editor_ver = st.session_state.get(f"ver_{state_key}", 0)
+
+                if btn_select_all:
+                    active_df["incluir"] = True
+                    st.session_state[state_key] = active_df
+                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
+                    st.rerun()
+
+                if btn_deselect_all:
+                    active_df["incluir"] = False
+                    st.session_state[state_key] = active_df
+                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
+                    st.rerun()
+
+                if btn_invert_sel:
+                    active_df["incluir"] = ~active_df["incluir"].astype(bool)
+                    st.session_state[state_key] = active_df
+                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
+                    st.rerun()
 
                 if btn_apply_rec:
                     for idx, row in active_df.iterrows():
@@ -1974,6 +2009,7 @@ def render_ui():
                         active_df.at[idx, "resolucion_m_px"] = rec_res
                         active_df.at[idx, "calidad_sugerida"] = rec_label
                     st.session_state[state_key] = active_df
+                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
                     st.rerun()
 
                 if btn_apply_all and preset_res != "Mantener selección individual":
@@ -1986,11 +2022,7 @@ def render_ui():
                         val = float(preset_res.split(" ")[0])
                         active_df["resolucion_m_px"] = val
                     st.session_state[state_key] = active_df
-                    st.rerun()
-
-                if btn_invert_sel:
-                    active_df["incluir"] = not active_df["incluir"].all()
-                    st.session_state[state_key] = active_df
+                    st.session_state[f"ver_{state_key}"] = editor_ver + 1
                     st.rerun()
 
                 column_config = {
@@ -2048,12 +2080,14 @@ def render_ui():
                     hide_index=True,
                     use_container_width=True,
                     num_rows="fixed",
-                    key=f"editor_{state_key}"
+                    key=f"editor_{state_key}_{editor_ver}"
                 )
                 st.session_state[state_key] = edited_df
 
-                selected_rows = edited_df[edited_df["incluir"] == True].to_dict("records")
-                st.info(f"📍 **{len(selected_rows)}** polígono(s) seleccionado(s) para descarga.")
+                if len(selected_rows) == 0:
+                    st.warning("⚠️ No has seleccionado ningún polígono para descargar. Marca las casillas en la tabla o pulsa '✅ Seleccionar todo'.")
+                else:
+                    st.info(f"📍 **{len(selected_rows)}** polígono(s) seleccionado(s) listos para descargar.")
 
                 # ------------------------------------------------------------------------------
                 # BOTÓN DE DESCARGA WMS
