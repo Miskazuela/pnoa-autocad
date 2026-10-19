@@ -399,6 +399,17 @@ def detect_recommended_epsg(
         })
         return recommendations
 
+    # B2. Colombia - Bogotá D.C. / MAGNA-SIRGAS Bogotá (EPSG:3116)
+    if 700000 <= cx <= 1300000 and 700000 <= cy <= 1300000:
+        recommendations.append({
+            "code": 3116,
+            "name": "MAGNA-SIRGAS / Colombia Bogota zone (EPSG:3116)",
+            "region": "🇨🇴 Colombia - Bogotá D.C. y Cundinamarca",
+            "reason": f"Coordenadas características de Bogotá (X={cx:,.0f} m, Y={cy:,.0f} m) con origen Falso Este 1.000.000 m y Falso Norte 1.000.000 m.",
+            "confidence": "Muy Alta"
+        })
+        return recommendations
+
     # C. Hemisferio Sur - Australia (UTM False Northing = 10.000.000 m)
     # Latitudes de Australia (-44° a -10° S) -> Y entre 5.100.000 m y 8.900.000 m; X entre 150.000 m y 850.000 m.
     if 5000000 <= cy <= 9000000 and 150000 <= cx <= 850000:
@@ -568,6 +579,16 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
         "badge": "WMS Universal",
         "description": "Introduce la URL y capa de cualquier servidor WMS del mundo (gobiernos estatales, catastro, Australia, etc.).",
         "folium_name": "⚙️ WMS Universal",
+    },
+    "bogota_catastro": {
+        "name": "🇨🇴 Catastro Bogotá - Ortofoto 2020 (Colombia)",
+        "type": "wms",
+        "url": "https://serviciosgis.catastrobogota.gov.co/image/services/imagenesfunciones/ortho2020funcion/ImageServer/WMSServer",
+        "layer": "ortho2020funcion",
+        "tag": "bogota_orto2020",
+        "badge": "Ortofoto Bogotá 2020",
+        "description": "Ortofotografía aérea oficial de alta resolución de Bogotá D.C. (Catastro Bogotá). Proyección recomendada: MAGNA Bogotá EPSG:3116.",
+        "folium_name": "🇨🇴 Catastro Bogotá Ortofoto 2020",
     },
     "pnoa": {
         "name": "🇪🇸 IGN - Ortofoto Aérea PNOA (España - Máxima Resolución)",
@@ -1157,6 +1178,21 @@ def generate_preview_map(
         show=(active_service_key == "mdt_relieve")
     ).add_to(m)
 
+    if active_service_key == "bogota_catastro":
+        try:
+            folium.WmsTileLayer(
+                url="https://serviciosgis.catastrobogota.gov.co/image/services/imagenesfunciones/ortho2020funcion/ImageServer/WMSServer",
+                layers="ortho2020funcion",
+                fmt="image/png",
+                transparent=True,
+                name="🇨🇴 Catastro Bogotá Ortofoto 2020",
+                overlay=True,
+                control=True,
+                show=True
+            ).add_to(m)
+        except Exception:
+            pass
+
     if active_service_key == "custom" and custom_wms_url and custom_wms_layer:
         try:
             folium.WmsTileLayer(
@@ -1363,6 +1399,7 @@ def render_ui():
         "🌎 Global - WGS 84 Geográficas (EPSG:4326)": 4326,
         "🇲🇽 México - ITRF2008 / UTM 14N (EPSG:6369)": 6369,
         "🇨🇴 Colombia - MAGNA-SIRGAS Origen Nacional (EPSG:9377)": 9377,
+        "🇨🇴 Colombia - Bogotá / MAGNA Bogotá (EPSG:3116)": 3116,
         "🇨🇱 Chile - SIRGAS-Chile / UTM 19S (EPSG:5361)": 5361,
         "🇦🇷 Argentina - POSGAR 07 / Faja 4 (EPSG:5346)": 5346,
         "🇺🇸 USA - NAD83 / UTM zone 18N (EPSG:26918)": 26918,
