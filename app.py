@@ -800,41 +800,107 @@ def fetch_wms_service_layers(clean_url: str) -> List[Tuple[str, str]]:
         return []
 
 
-def fetch_wms_ortho(
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_wms_server_limits(clean_url: str) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Inspecciona el documento GetCapabilities del servidor WMS para extraer límites
+    nativos de dimensiones (MaxWidth y MaxHeight), previniendo errores HTTP 400 por exceso de píxeles.
+    """
+    clean_url = clean_url.split("?")[0].strip()
+    if not clean_url or not clean_url.startswith("http"):
+        return None, None
+    try:
+        session = create_resilient_session(timeout=8)
+        resp = session.get(clean_url, params={"SERVICE": "WMS", "REQUEST": "GetCapabilities"}, timeout=8)
+        if resp.status_code != 200:
+            return None, None
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(resp.content)
+        max_w, max_h = None, None
+        for el in root.iter():
+            tag = el.tag.lower()
+            if tag.endswith("maxwidth") and el.text and el.text.strip().isdigit():
+                max_w = int(el.text.strip())
+            elif tag.endswith("maxheight") and el.text and el.text.strip().isdigit():
+                max_h = int(el.text.strip())
+        return max_w, max_h
+    except Exception:
+        return None, None
+
+
+def get_compatible_crs_codes(crs_str: str) -> List[str]:
+    """
+    Retorna una lista priorizada de códigos CRS matemáticamente equivalentes o compatibles
+    (con diferencia milimétrica en la cuadrícula de proyección UTM), asegurando interoperabilidad
+    con servidores WMS internacionales (Australia Geoscience DEA, España IGN, Colombia IGAC, EE.UU. USGS).
+    """
+    candidates = [crs_str]
+    m = re.search(r"(\d+)", crs_str)
+    if not m:
+        return candidates
+    code = int(m.group(1))
+
+    # Australia: MGA 2020 (7848-7858), MGA 94 (28348-28358), WGS 84 UTM Sur (32748-32758)
+    if 7848 <= code <= 7858:
+        z = code - 7800
+        candidates.extend([f"EPSG:{32700 + z}", f"EPSG:{28300 + z}"])
+    elif 28348 <= code <= 28358:
+        z = code - 28300
+        candidates.extend([f"EPSG:{32700 + z}", f"EPSG:{7800 + z}"])
+    elif 32748 <= code <= 32758:
+        z = code - 32700
+        candidates.extend([f"EPSG:{7800 + z}", f"EPSG:{28300 + z}"])
+
+    # España / Europa: ETRS89 UTM Norte (25828-25832), WGS 84 UTM Norte (32628-32632), ED50 (23028-23032)
+    elif 25828 <= code <= 25832:
+        z = code - 25800
+        candidates.extend([f"EPSG:{32600 + z}", f"EPSG:{23000 + z}"])
+    elif 23028 <= code <= 23032:
+        z = code - 23000
+        candidates.extend([f"EPSG:{25800 + z}", f"EPSG:{32600 + z}"])
+    elif 32628 <= code <= 32632:
+        z = code - 32600
+        candidates.extend([f"EPSG:{25800 + z}", f"EPSG:{23000 + z}"])
+
+    # Genérico UTM Norte / Sur
+    elif 32601 <= code <= 32660:
+        z = code - 32600
+        if 28 <= z <= 32:
+            candidates.append(f"EPSG:{25800 + z}")
+    elif 32701 <= code <= 32760:
+        z = code - 32700
+        if 48 <= z <= 58:
+            candidates.extend([f"EPSG:{7800 + z}", f"EPSG:{28300 + z}"])
+
+    seen = set()
+    res = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            res.append(c)
+    return res
+
+
+def fetch_single_wms_call(
     session: requests.Session,
-    wms_url: str,
+    clean_url: str,
     wms_layer: str,
-    crs_str: str,
-    bbox_buf: Tuple[float, float, float, float],
-    ancho_px: int,
-    alto_px: int,
-    timeout: int = 35
-) -> bytes:
+    crs_to_use: str,
+    bbox_tuple: Tuple[float, float, float, float],
+    w: int,
+    h: int,
+    timeout: int = 30
+) -> Tuple[bool, str, Optional[bytes], Optional[Image.Image]]:
     """
-    Ejecuta la petición HTTP GetMap bajo los estándares OGC WMS (1.3.0 y 1.1.1)
-    con reintentos multi-formato (TIFF -> PNG -> JPEG), conversión automática a TIFF
-    y limpieza de parámetros en la URL, asegurando compatibilidad con cualquier
-    servidor del mundo (Bogotá, España, Australia, EE.UU., etc.).
+    Intenta descargar una tesela o imagen WMS individual probando versiones OGC (1.3.0 y 1.1.1)
+    y formatos (TIFF, PNG, JPEG), parseando de forma robusta cualquier excepción XML del servidor.
     """
-    # 1. Limpieza de URL (remover cualquier parámetro previo tras el signo ?)
-    clean_url = wms_url.split("?")[0].strip()
-    if not clean_url:
-        raise ValueError("La URL del servidor WMS está vacía. Por favor introduce una URL válida en la barra lateral.")
-
-    host = urlparse(clean_url).netloc or "WMS"
-
-    # 2. Límites de seguridad en píxeles y preparación de BBOX con orden de ejes CRS
-    ancho_px = min(4000, max(1, int(ancho_px)))
-    alto_px = min(4000, max(1, int(alto_px)))
-
-    minx, miny, maxx, maxy = bbox_buf
+    minx, miny, maxx, maxy = bbox_tuple
     bbox_xy = f"{minx},{miny},{maxx},{maxy}"
     bbox_yx = f"{miny},{minx},{maxy},{maxx}"
-
-    # Determinar orden de coordenadas del CRS según especificación OGC EPSG
     is_yx = False
     try:
-        crs_obj = CRS.from_user_input(crs_str)
+        crs_obj = CRS.from_user_input(crs_to_use)
         if crs_obj.axis_info and len(crs_obj.axis_info) >= 2:
             first_dir = str(crs_obj.axis_info[0].direction).lower()
             if "north" in first_dir or "lat" in first_dir:
@@ -846,12 +912,6 @@ def fetch_wms_ortho(
     fallback_130_bbox = bbox_xy if is_yx else bbox_yx
     bbox_111 = bbox_xy
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "image/tiff,image/png,image/jpeg,image/*,*/*;q=0.8"
-    }
-
-    # 3. Combinaciones de compatibilidad: WMS 1.3.0 (con orden nativo y fallback) y WMS 1.1.1
     attempts = [
         ("1.3.0", "image/tiff", "CRS", primary_130_bbox),
         ("1.3.0", "image/png", "CRS", primary_130_bbox),
@@ -862,9 +922,11 @@ def fetch_wms_ortho(
         ("1.3.0", "image/jpeg", "CRS", primary_130_bbox),
         ("1.1.1", "image/jpeg", "SRS", bbox_111)
     ]
-
-    last_error = ""
-
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "image/tiff,image/png,image/jpeg,image/*,*/*;q=0.8"
+    }
+    last_err = ""
     for ver, fmt, crs_param, req_bbox in attempts:
         params = {
             "SERVICE": "WMS",
@@ -873,23 +935,17 @@ def fetch_wms_ortho(
             "LAYERS": wms_layer,
             "STYLES": "",
             "FORMAT": fmt,
-            crs_param: crs_str,
+            crs_param: crs_to_use,
             "BBOX": req_bbox,
-            "WIDTH": ancho_px,
-            "HEIGHT": alto_px,
+            "WIDTH": w,
+            "HEIGHT": h,
             "TRANSPARENT": "TRUE"
         }
-
         try:
             resp = session.get(clean_url, params=params, headers=headers, timeout=timeout)
-            if resp.status_code != 200:
-                last_error = f"Código HTTP {resp.status_code}"
-                continue
-
             content_type = resp.headers.get("Content-Type", "").lower()
             start_bytes = resp.content[:600]
 
-            # Detectar si devolvió XML de excepción
             if (
                 "xml" in content_type
                 or start_bytes.startswith(b"<?xml")
@@ -899,16 +955,23 @@ def fetch_wms_ortho(
                 text = resp.text
                 m = re.search(r"<ServiceException[^>]*>(.*?)</ServiceException>", text, re.DOTALL)
                 if m:
-                    last_error = m.group(1).strip()
+                    last_err = m.group(1).strip()
                 else:
                     m2 = re.search(r"<ExceptionText[^>]*>(.*?)</ExceptionText>", text, re.DOTALL)
                     if m2:
-                        last_error = m2.group(1).strip()
+                        last_err = m2.group(1).strip()
                     else:
-                        last_error = text[:250].replace("\n", " ").strip()
-                continue # Probar siguiente combinación de formato o versión
+                        last_err = text[:250].replace("\n", " ").strip()
 
-            # Validar si es una imagen válida
+                # Si el error es por CRS inválido o dimensiones excedidas, detener reintentos de formato
+                if any(k in last_err.lower() for k in ["invalidcrs", "exceeds supported maximum", "greater than maximum supported"]):
+                    return False, last_err, None, None
+                continue
+
+            if resp.status_code != 200:
+                last_err = f"Código HTTP {resp.status_code}"
+                continue
+
             is_image = (
                 "image" in content_type
                 or start_bytes.startswith(b"\x89PNG")
@@ -916,39 +979,258 @@ def fetch_wms_ortho(
                 or start_bytes.startswith(b"MM\x00*")
                 or start_bytes.startswith(b"\xff\xd8")
             )
-
             if is_image:
-                # Comprobar si la imagen devuelta está 100% vacía/transparente
-                # (típico cuando el orden de ejes BBOX está invertido en WMS 1.3.0)
-                try:
-                    img_check = Image.open(io.BytesIO(resp.content))
-                    if img_check.mode in ("RGBA", "LA") or (img_check.mode == "P" and "transparency" in img_check.info):
-                        extrema = img_check.getextrema()
-                        alpha_ext = extrema[3] if img_check.mode == "RGBA" else (extrema[1] if img_check.mode == "LA" else None)
-                        if alpha_ext and alpha_ext[1] == 0:
-                            last_error = "El servidor devolvió un mosaico vacío (100% transparente) sin datos en estas coordenadas."
-                            continue
-                except Exception:
-                    pass
-
-                # Si el servidor ya devolvió TIFF nativo
-                if "tiff" in fmt and (start_bytes.startswith(b"II*\x00") or start_bytes.startswith(b"MM\x00*")):
-                    return resp.content
-
-                # Si devolvió PNG o JPEG, convertir a TIFF en memoria para AutoCAD
                 try:
                     img = Image.open(io.BytesIO(resp.content))
-                    out_tif = io.BytesIO()
-                    img.save(out_tif, format="TIFF")
-                    return out_tif.getvalue()
-                except Exception as conv_err:
-                    last_error = f"Error convirtiendo imagen {content_type} a TIFF: {conv_err}"
+                    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                        extrema = img.getextrema()
+                        alpha_ext = extrema[3] if img.mode == "RGBA" else (extrema[1] if img.mode == "LA" else None)
+                        if alpha_ext and alpha_ext[1] == 0:
+                            last_err = "El servidor devolvió un mosaico vacío (100% transparente) sin datos en estas coordenadas."
+                            continue
+                    return True, "", resp.content, img
+                except Exception as e:
+                    last_err = f"Error decodificando imagen: {e}"
                     continue
-
-        except requests.exceptions.RequestException as req_err:
-            last_error = str(req_err)
+        except Exception as req_err:
+            last_err = str(req_err)
             continue
+    return False, last_err, None, None
 
+
+def fetch_wms_tiled_subblocks(
+    session: requests.Session,
+    clean_url: str,
+    wms_layer: str,
+    crs_to_use: str,
+    bbox_tuple: Tuple[float, float, float, float],
+    total_w: int,
+    total_h: int,
+    max_tile_side: int = 512,
+    timeout: int = 30
+) -> Tuple[bool, str, Optional[Image.Image]]:
+    """
+    Subdivide una petición WMS en una cuadrícula de subtelas concurrentes cuando el servidor
+    impone límites de tamaño máximo (ej. 512x512 en Geoscience Australia) y las ensambla en una sola imagen.
+    """
+    minx, miny, maxx, maxy = bbox_tuple
+    n_cols = max(1, int(math.ceil(total_w / max_tile_side)))
+    n_rows = max(1, int(math.ceil(total_h / max_tile_side)))
+
+    col_widths = []
+    w_rem = total_w
+    for c in range(n_cols):
+        cw = w_rem // (n_cols - c)
+        col_widths.append(cw)
+        w_rem -= cw
+
+    row_heights = []
+    h_rem = total_h
+    for r in range(n_rows):
+        rh = h_rem // (n_rows - r)
+        row_heights.append(rh)
+        h_rem -= rh
+
+    x_res = (maxx - minx) / total_w
+    y_res = (maxy - miny) / total_h
+
+    tiles_tasks = []
+    curr_y_px = 0
+    curr_y_coord = maxy
+    for r, rh in enumerate(row_heights):
+        next_y_coord = curr_y_coord - (rh * y_res)
+        curr_x_px = 0
+        curr_x_coord = minx
+        for c, cw in enumerate(col_widths):
+            next_x_coord = curr_x_coord + (cw * x_res)
+            tile_bbox = (curr_x_coord, next_y_coord, next_x_coord, curr_y_coord)
+            tiles_tasks.append((c, r, curr_x_px, curr_y_px, cw, rh, tile_bbox))
+            curr_x_coord = next_x_coord
+            curr_x_px += cw
+        curr_y_coord = next_y_coord
+        curr_y_px += rh
+
+    canvas = Image.new("RGB", (total_w, total_h), (255, 255, 255))
+    tile_error = None
+
+    def fetch_subtile(task):
+        c, r, x_px, y_px, cw, rh, sub_bbox = task
+        ok, err_msg, raw_bytes, img_obj = fetch_single_wms_call(
+            session, clean_url, wms_layer, crs_to_use, sub_bbox, cw, rh, timeout=timeout
+        )
+        if ok and img_obj:
+            return x_px, y_px, img_obj
+        raise RuntimeError(err_msg or f"Fallo en subtela ({c},{r})")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(tiles_tasks))) as executor:
+        future_map = {executor.submit(fetch_subtile, t): t for t in tiles_tasks}
+        for fut in concurrent.futures.as_completed(future_map):
+            try:
+                x_px, y_px, img_obj = fut.result()
+                canvas.paste(img_obj.convert("RGB"), (x_px, y_px))
+            except Exception as e:
+                tile_error = str(e)
+
+    if tile_error:
+        return False, tile_error, None
+    return True, "", canvas
+
+
+def fetch_wms_rectified_3857(
+    session: requests.Session,
+    clean_url: str,
+    wms_layer: str,
+    crs_str: str,
+    bbox_tuple: Tuple[float, float, float, float],
+    total_w: int,
+    total_h: int,
+    max_tile_side: int = 512,
+    timeout: int = 30
+) -> bytes:
+    """
+    Fallback universal: Si el servidor WMS rechaza todas las proyecciones UTM locales pero soporta
+    Web Mercator (EPSG:3857), descarga la imagen en EPSG:3857 y la rectifica subpíxel al encuadre CAD.
+    """
+    minx, miny, maxx, maxy = bbox_tuple
+    corners = [(minx, maxy), (minx, miny), (maxx, miny), (maxx, maxy)]
+    t_3857 = Transformer.from_crs(crs_str, "EPSG:3857", always_xy=True)
+    c_3857 = [t_3857.transform(x, y) for x, y in corners]
+    b_minx = min(c[0] for c in c_3857)
+    b_maxx = max(c[0] for c in c_3857)
+    b_miny = min(c[1] for c in c_3857)
+    b_maxy = max(c[1] for c in c_3857)
+
+    n_cols = max(1, int(math.ceil(total_w / max_tile_side)))
+    n_rows = max(1, int(math.ceil(total_h / max_tile_side)))
+    col_w = [total_w // n_cols] * n_cols
+    col_w[-1] += total_w - sum(col_w)
+    row_h = [total_h // n_rows] * n_rows
+    row_h[-1] += total_h - sum(row_h)
+
+    x_res = (b_maxx - b_minx) / total_w
+    y_res = (b_maxy - b_miny) / total_h
+
+    canvas_3857 = Image.new("RGB", (total_w, total_h), (255, 255, 255))
+    curr_y = b_maxy
+    curr_y_px = 0
+    for r, rh in enumerate(row_h):
+        next_y = curr_y - (rh * y_res)
+        curr_x = b_minx
+        curr_x_px = 0
+        for c, cw in enumerate(col_w):
+            next_x = curr_x + (cw * x_res)
+            params = {
+                "SERVICE": "WMS",
+                "VERSION": "1.3.0",
+                "REQUEST": "GetMap",
+                "LAYERS": wms_layer,
+                "STYLES": "",
+                "FORMAT": "image/png",
+                "CRS": "EPSG:3857",
+                "BBOX": f"{curr_x},{next_y},{next_x},{curr_y}",
+                "WIDTH": cw,
+                "HEIGHT": rh,
+                "TRANSPARENT": "TRUE"
+            }
+            resp = session.get(clean_url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout)
+            if resp.status_code == 200 and not b"<ServiceException" in resp.content[:300]:
+                tile_img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                canvas_3857.paste(tile_img, (curr_x_px, curr_y_px))
+            curr_x = next_x
+            curr_x_px += cw
+        curr_y = next_y
+        curr_y_px += rh
+
+    quad_data = []
+    for cx, cy in c_3857:
+        px = (cx - b_minx) / (b_maxx - b_minx) * total_w
+        py = (b_maxy - cy) / (b_maxy - b_miny) * total_h
+        quad_data.extend([px, py])
+
+    rectified = canvas_3857.transform((total_w, total_h), Image.QUAD, tuple(quad_data), resample=Image.BICUBIC)
+    out = io.BytesIO()
+    rectified.save(out, format="TIFF")
+    return out.getvalue()
+
+
+def fetch_wms_ortho(
+    session: requests.Session,
+    wms_url: str,
+    wms_layer: str,
+    crs_str: str,
+    bbox_buf: Tuple[float, float, float, float],
+    ancho_px: int,
+    alto_px: int,
+    timeout: int = 35
+) -> bytes:
+    """
+    Ejecuta la descarga GetMap bajo los estándares OGC WMS (1.3.0 y 1.1.1) con resolución
+    automática de proyecciones equivalentes (UTM/MGA), particionado adaptativo de teselas
+    según límites del servidor (MaxWidth/MaxHeight) y fallback universal en EPSG:3857.
+    """
+    clean_url = wms_url.split("?")[0].strip()
+    if not clean_url:
+        raise ValueError("La URL del servidor WMS está vacía. Por favor introduce una URL válida en la barra lateral.")
+
+    host = urlparse(clean_url).netloc or "WMS"
+    ancho_px = min(4000, max(1, int(ancho_px)))
+    alto_px = min(4000, max(1, int(alto_px)))
+
+    # 1. Obtener límites de dimensiones nativas del servidor WMS
+    srv_w, srv_h = fetch_wms_server_limits(clean_url)
+    max_tile = min(srv_w or 4000, srv_h or 4000, 4000)
+
+    # 2. Generar lista priorizada de códigos CRS compatibles
+    candidate_crss = get_compatible_crs_codes(crs_str)
+    last_error = ""
+
+    # 3. Intentar con cada CRS candidato
+    for cand_crs in candidate_crss:
+        # Petición directa si entra en los límites del servidor
+        if ancho_px <= max_tile and alto_px <= max_tile:
+            ok, err_msg, raw_bytes, img_obj = fetch_single_wms_call(
+                session, clean_url, wms_layer, cand_crs, bbox_buf, ancho_px, alto_px, timeout=timeout
+            )
+            if ok:
+                if raw_bytes and (raw_bytes.startswith(b"II*\x00") or raw_bytes.startswith(b"MM\x00*")):
+                    return raw_bytes
+                out_tif = io.BytesIO()
+                img_obj.save(out_tif, format="TIFF")
+                return out_tif.getvalue()
+
+            last_error = err_msg
+            if "invalidcrs" in err_msg.lower():
+                continue
+
+            # Comprobar si el servidor impone un límite de dimensiones no declarado en GetCapabilities
+            m_lim = re.search(r"(?:exceeds supported maximum|greater than maximum supported|maximum allowed width|maxwidth)\s*(\d+)", err_msg, re.I)
+            if m_lim:
+                max_tile = min(max_tile, int(m_lim.group(1)))
+
+        # Subparticionado en cuadrícula concurrente si excede el límite del servidor
+        if ancho_px > max_tile or alto_px > max_tile:
+            ok_t, err_t, canvas = fetch_wms_tiled_subblocks(
+                session, clean_url, wms_layer, cand_crs, bbox_buf, ancho_px, alto_px, max_tile_side=max_tile, timeout=timeout
+            )
+            if ok_t and canvas:
+                out_tif = io.BytesIO()
+                canvas.save(out_tif, format="TIFF")
+                return out_tif.getvalue()
+
+            last_error = err_t
+            if "invalidcrs" in err_t.lower():
+                continue
+
+    # 4. Fallback universal en EPSG:3857 con rectificación si las proyecciones UTM fueron rechazadas
+    if "invalidcrs" in last_error.lower():
+        try:
+            return fetch_wms_rectified_3857(
+                session, clean_url, wms_layer, crs_str, bbox_buf, ancho_px, alto_px, max_tile_side=max_tile, timeout=timeout
+            )
+        except Exception as e_3857:
+            last_error = f"Fallo en rectificación EPSG:3857: {e_3857}"
+
+    # 5. Diagnóstico guiado si la capa no existe en el servidor
     if "LayerNotDefined" in last_error or "unacceptable layer names" in last_error.lower():
         available = fetch_wms_service_layers(clean_url)
         if available:
