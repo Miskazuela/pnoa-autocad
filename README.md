@@ -1,6 +1,6 @@
 # 🌍 GeoRaster to CAD | Extractor Georreferenciado Universal
 
-Aplicación web desarrollada en **Streamlit** para automatizar la extracción y georreferenciación milimétrica para AutoCAD de **cualquier servidor WMS del mundo**, Google Satélite, Esri y servicios oficiales a partir de polilíneas cerradas de planos CAD (**DXF**).
+Aplicación web desarrollada en **Streamlit** para automatizar la extracción y georreferenciación milimétrica para AutoCAD de **cualquier servidor WMS del mundo**, Google Satélite, Esri y servicios oficiales a partir de polilíneas cerradas de planos CAD (**DXF**), capas GIS Shapefile (**ZIP**), Google Earth (**KML/KMZ**) o polígonos dibujados a mano alzada en el mapa.
 
 Permite descargar e insertar en **AutoCAD, AutoCAD Map 3D, Civil 3D y BricsCAD**:
 - **🌍 Google Satélite (Mundial)**: Fotografía satelital mundial de máxima resolución de Google sin rótulos.
@@ -16,7 +16,9 @@ Genera directamente para cada polígono los archivos estándar:
 - `.tfw`: Archivo de calibración espacial (*World File*) con las coordenadas UTM/proyectadas exactas de georreferenciación.
 
 ### ✨ Características Principales:
-- **🧠 Detección y Recomendación Automática de EPSG/CRS**: Al subir cualquier plano DXF, el sistema analiza instantáneamente sus coordenadas métricas $(X, Y)$, capas y metadatos, detectando la proyección recomendada (ej: Australia `EPSG:7855` / `7856`, España `EPSG:25830`, Colombia `EPSG:9377`, Canarias `EPSG:32628`, etc.) con un botón de **1-clic** para aplicarla y volar el visor satelital a la posición real.
+- **📦 Carga de Shapefile (.ZIP)**: Admite la carga de archivos Shapefile comprimidos en `.zip` (que contengan sus componentes `.shp`, `.shx`, `.dbf` y `.prj`). Lee atributos de parcela/finca, extrae geometrías de polígono y detecta automáticamente la proyección cartográfica oficial desde el archivo `.prj`.
+- **🧩 Mosaico Inteligente y Fusión en 1 Clic**: Para ámbitos grandes, la aplicación divide automáticamente la descarga en teselas a máxima resolución nativa (0.50 m/px) respetando los límites de los servidores WMS, e incluye un botón en los resultados para **ensamblar las teselas en una sola imagen continua (.tif + .tfw)** directamente en memoria RAM sin descargas adicionales.
+- **🧠 Detección y Recomendación Automática de EPSG/CRS**: Al subir cualquier plano DXF o Shapefile, el sistema analiza instantáneamente sus coordenadas métricas $(X, Y)$, capas y metadatos, detectando la proyección recomendada (ej: Australia `EPSG:7855` / `7856`, España `EPSG:25830`, Colombia `EPSG:9377`, Canarias `EPSG:32628`, etc.) con un botón de **1-clic** para aplicarla y volar el visor satelital a la posición real.
 - **🌐 Soporte EPSG Global**: Compatible con cualquier proyección del mundo (ej: Australia `EPSG:7855` / `EPSG:28355`, España `EPSG:25830`, Colombia `EPSG:9377`, Chile `EPSG:5361`, México `EPSG:6369`, EE.UU. `EPSG:26918`, WGS 84 global `EPSG:326xx` / `EPSG:327xx`).
 - **🗺️ Catálogo Multicartográfico Universal**: Elige entre Google Satélite, Google Híbrido, Esri World Imagery, cualquier WMS propio, PNOA o cartografía IGN con un solo clic.
 - **🪄 Recomendación Inteligente de Calidad por Área**: Calcula la resolución óptima ($m/px$) analizando la superficie de cada polígono (< 0.5 ha = 0.25 m/px, 0.5 a 2.5 ha = 0.50 m/px, 2.5 a 15 ha = 1.00 m/px, etc.).
@@ -56,7 +58,7 @@ python -m streamlit run app.py
 ## 📂 Archivos en esta carpeta
 - **`app.py`**: Código fuente principal de la aplicación web en Streamlit.
 - **`ejemplo_madrid.dxf`**: Plano de prueba con 3 parcelas cerradas en Madrid (`EPSG:25830`) para probar la app de inmediato.
-- **`requirements.txt`**: Librerías necesarias (`streamlit`, `ezdxf`, `shapely`, `pyproj`, `requests`, `pandas`, `folium`, `pillow`).
+- **`requirements.txt`**: Librerías necesarias (`streamlit`, `ezdxf`, `shapely`, `pyproj`, `requests`, `pandas`, `folium`, `pillow`, `pyshp`).
 - **`.streamlit/config.toml`**: Configuración de tema visual y servidor web.
 - **`iniciar_app.bat`**: Lanzador local para pruebas en Windows.
 - **`subir_a_github.bat`**: Script para subir cambios a GitHub con un solo clic.

@@ -45,6 +45,7 @@ import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
+import shapefile
 import ezdxf
 from shapely.geometry import Polygon
 from pyproj import CRS, Transformer
@@ -486,6 +487,162 @@ def parse_kml_or_kmz_polygons(
         centroid = (sum(all_lons) / len(all_lons), sum(all_lats) / len(all_lats))
 
     return extracted_polygons, centroid
+
+
+def parse_shapefile_zip(
+    zip_bytes: bytes,
+    filename: str,
+    target_crs_str: str,
+    service_tag: str = "pnoa"
+) -> Tuple[List[Dict[str, Any]], Optional[CRS], Optional[Tuple[float, float]]]:
+    """
+    Extrae polígonos cerrados de un archivo Shapefile comprimido en formato .ZIP (.shp, .shx, .dbf, .prj).
+    Detecta automáticamente la proyección oficial desde el archivo .prj (WKT) y sincroniza o transforma
+    las coordenadas al sistema CAD activo garantizando coincidencia espacial milimétrica.
+    Retorna la lista de polígonos, el CRS oficial detectado y el centroide (lon, lat) para el visor interactivo.
+    """
+    try:
+        z = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except Exception as e:
+        raise ValueError(f"El archivo subido no es un archivo .ZIP válido: {e}")
+
+    shp_names = [n for n in z.namelist() if n.lower().endswith(".shp") and not n.startswith("__MACOSX") and not "/." in n]
+    if not shp_names:
+        raise ValueError("El archivo .ZIP no contiene ningún archivo '.shp'. Asegúrate de incluir el archivo .shp y sus acompañantes (.shx, .dbf, .prj).")
+
+    main_shp = shp_names[0]
+    base_no_ext = os.path.splitext(main_shp)[0]
+    shp_io = io.BytesIO(z.read(main_shp))
+
+    def find_companion(ext: str) -> Optional[io.BytesIO]:
+        target = (base_no_ext + ext).lower()
+        matches = [n for n in z.namelist() if n.lower() == target]
+        if matches:
+            return io.BytesIO(z.read(matches[0]))
+        folder = os.path.dirname(main_shp).lower()
+        cand = [n for n in z.namelist() if n.lower().endswith(ext) and os.path.dirname(n).lower() == folder]
+        return io.BytesIO(z.read(cand[0])) if cand else None
+
+    dbf_io = find_companion(".dbf")
+    shx_io = find_companion(".shx")
+    prj_io = find_companion(".prj")
+
+    detected_crs: Optional[CRS] = None
+    if prj_io:
+        try:
+            prj_wkt = prj_io.getvalue().decode("utf-8", errors="ignore").strip()
+            detected_crs = CRS.from_wkt(prj_wkt)
+        except Exception:
+            pass
+
+    transformer = None
+    crs_to_wgs84 = None
+    if detected_crs is not None:
+        try:
+            if detected_crs.is_geographic:
+                transformer = Transformer.from_crs(detected_crs, target_crs_str, always_xy=True)
+            elif detected_crs.to_string() != CRS.from_user_input(target_crs_str).to_string():
+                transformer = Transformer.from_crs(detected_crs, target_crs_str, always_xy=True)
+            crs_to_wgs84 = Transformer.from_crs(detected_crs, "EPSG:4326", always_xy=True)
+        except Exception:
+            pass
+
+    if crs_to_wgs84 is None:
+        try:
+            crs_to_wgs84 = Transformer.from_crs(target_crs_str, "EPSG:4326", always_xy=True)
+        except Exception:
+            pass
+
+    try:
+        r = shapefile.Reader(shp=shp_io, dbf=dbf_io, shx=shx_io)
+    except Exception as read_err:
+        raise ValueError(f"No fue posible leer el Shapefile: {read_err}")
+
+    extracted_polygons: List[Dict[str, Any]] = []
+    base_file_prefix = os.path.splitext(sanitize_filename(filename))[0]
+    polygon_counter = 1
+    all_lons: List[float] = []
+    all_lats: List[float] = []
+
+    for sr in r.shapeRecords():
+        s = sr.shape
+        if not s.points:
+            continue
+        try:
+            geo = shape(s.__geo_interface__)
+        except Exception:
+            continue
+
+        rec = sr.record.as_dict() if hasattr(sr.record, "as_dict") else {}
+        name_val = (
+            rec.get("NOMBRE") or rec.get("NAME") or rec.get("nombre") or rec.get("name") or
+            rec.get("REF_CATAST") or rec.get("REFCAT") or rec.get("PARCELA") or
+            rec.get("ID") or rec.get("id") or f"Parcela_{polygon_counter}"
+        )
+
+        polys_list = [geo] if geo.geom_type == "Polygon" else (list(geo.geoms) if geo.geom_type == "MultiPolygon" else [])
+
+        for p_idx, poly_geom in enumerate(polys_list):
+            raw_pts = list(poly_geom.exterior.coords)
+            if len(raw_pts) < 3:
+                continue
+
+            cad_pts = []
+            for px, py in raw_pts:
+                if transformer:
+                    try:
+                        tx, ty = transformer.transform(px, py)
+                        cad_pts.append((tx, ty))
+                    except Exception:
+                        cad_pts.append((px, py))
+                else:
+                    cad_pts.append((px, py))
+
+            for px, py in raw_pts:
+                if crs_to_wgs84:
+                    try:
+                        lon, lat = crs_to_wgs84.transform(px, py)
+                        if -180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0:
+                            all_lons.append(lon)
+                            all_lats.append(lat)
+                    except Exception:
+                        pass
+
+            if len(cad_pts) >= 3:
+                final_poly = Polygon(cad_pts)
+                if final_poly.area > 0.01:
+                    minx, miny, maxx, maxy = final_poly.bounds
+                    width = maxx - minx
+                    height = maxy - miny
+
+                    pm_name = f"{name_val}_p{p_idx+1}" if len(polys_list) > 1 else str(name_val)
+                    clean_layer = sanitize_filename(pm_name)
+                    clean_tag = sanitize_filename(service_tag)
+                    output_name = f"{base_file_prefix}_{clean_tag}_{clean_layer}_p{polygon_counter}"
+                    rec_res, rec_label, _ = get_recommended_resolution(final_poly.area)
+
+                    extracted_polygons.append({
+                        "incluir": True,
+                        "id": polygon_counter,
+                        "capa": pm_name,
+                        "nombre_archivo": output_name,
+                        "resolucion_m_px": rec_res,
+                        "calidad_sugerida": rec_label,
+                        "ancho_m": round(width, 2),
+                        "alto_m": round(height, 2),
+                        "area_m2": round(final_poly.area, 2),
+                        "num_vertices": len(cad_pts),
+                        "bounds": (minx, miny, maxx, maxy),
+                        "pts": cad_pts,
+                        "origen": "shapefile"
+                    })
+                    polygon_counter += 1
+
+    centroid = None
+    if all_lons and all_lats:
+        centroid = (sum(all_lons) / len(all_lons), sum(all_lats) / len(all_lats))
+
+    return extracted_polygons, detected_crs, centroid
 
 
 def parse_drawn_features(
@@ -2349,9 +2506,9 @@ def render_ui():
 
     with col_up:
         uploaded_file = st.file_uploader(
-            "📁 Carga tu plano AutoCAD (DXF) o polígonos Google Earth (KML / KMZ):",
-            type=["dxf", "kml", "kmz"],
-            help="Sube un archivo DXF con polilíneas cerradas, o un archivo KML / KMZ exportado desde Google Earth."
+            "📁 Carga tu plano AutoCAD (.dxf), Shapefile (.zip) o Google Earth (.kml / .kmz):",
+            type=["dxf", "kml", "kmz", "zip"],
+            help="Sube un archivo DXF con polilíneas cerradas, un archivo Shapefile comprimido en .ZIP (con .shp, .shx, .dbf, .prj), o un archivo KML / KMZ exportado desde Google Earth."
         )
 
     with col_demo:
@@ -2359,26 +2516,26 @@ def render_ui():
         st.markdown("<b style='font-size: 13px; color: #94a3b8;'>⚡ Acciones rápidas:</b>", unsafe_allow_html=True)
         col_d1, col_d2, col_d3, col_d4 = st.columns(4)
         with col_d1:
-            if st.button("📍 Mi GPS", help="Centra el mapa en la ubicación GPS de tu navegador", use_container_width=True):
+            if st.button("📍 Mi GPS", help="Centra el mapa en la ubicación GPS de tu navegador", width="stretch"):
                 st.session_state["locate_trigger"] = True
                 st.session_state["draw_only_mode"] = True
                 st.session_state["demo_active"] = False
                 st.session_state["processed_zip_data"] = None
                 st.rerun()
         with col_d2:
-            if st.button("✏️ Dibujar", help="Abre el visor para trazar polígonos directamente sin archivo", use_container_width=True):
+            if st.button("✏️ Dibujar", help="Abre el visor para trazar polígonos directamente sin archivo", width="stretch"):
                 st.session_state["draw_only_mode"] = True
                 st.session_state["demo_active"] = False
                 st.session_state["processed_zip_data"] = None
         with col_d3:
-            if st.button("🇪🇸 Madrid", help="Genera plano DXF demo en Madrid (EPSG:25830)", use_container_width=True):
+            if st.button("🇪🇸 Madrid", help="Genera plano DXF demo en Madrid (EPSG:25830)", width="stretch"):
                 st.session_state["demo_active"] = "madrid"
                 st.session_state["draw_only_mode"] = False
                 st.session_state["pending_epsg_code"] = 25830
                 st.session_state["processed_zip_data"] = None
                 st.rerun()
         with col_d4:
-            if st.button("🇦🇺 Australia", help="Genera plano DXF demo en Melbourne (EPSG:7855)", use_container_width=True):
+            if st.button("🇦🇺 Australia", help="Genera plano DXF demo en Melbourne (EPSG:7855)", width="stretch"):
                 st.session_state["demo_active"] = "australia"
                 st.session_state["draw_only_mode"] = False
                 st.session_state["pending_epsg_code"] = 7855
@@ -2401,7 +2558,27 @@ def render_ui():
         dxf_display_name = filename
 
         try:
-            if ext in (".kml", ".kmz"):
+            if ext == ".zip":
+                with st.spinner("Leyendo geometrías y proyección del Shapefile (.zip)..."):
+                    file_polygons, detected_shp_crs, shp_centroid = parse_shapefile_zip(
+                        file_bytes, filename, target_crs_str=crs_str, service_tag=wms_tag
+                    )
+                kml_centroid = shp_centroid
+                is_vector_exportable = True
+                if not file_polygons:
+                    st.warning("⚠️ No se encontraron polígonos cerrados en el archivo Shapefile (.shp). Comprueba que contiene geometrías tipo Polygon o MultiPolygon.")
+                elif detected_shp_crs is not None:
+                    shp_epsg = detected_shp_crs.to_epsg()
+                    crs_info_name = detected_shp_crs.name
+                    if shp_epsg and str(shp_epsg) != crs_str.replace("EPSG:", ""):
+                        st.info(
+                            f"🧭 **Proyección oficial del Shapefile detectada:** `{crs_info_name}` (EPSG:{shp_epsg}).\n\n"
+                            f"Las geometrías ya vienen con coordenadas georreferenciadas exactas. "
+                            f"Si deseas cambiar la proyección activa en el panel lateral a **EPSG:{shp_epsg}**, encajará al milímetro con tu plano."
+                        )
+                    else:
+                        st.success(f"🧭 **Shapefile georreferenciado verificado:** `{crs_info_name}` ({len(file_polygons)} parcela(s) detectadas). Coincidencia perfecta con el mapa.")
+            elif ext in (".kml", ".kmz"):
                 with st.spinner("Leyendo polígonos de Google Earth (KML/KMZ)..."):
                     file_polygons, kml_centroid = parse_kml_or_kmz_polygons(
                         file_bytes, filename, target_crs_str=crs_str, service_tag=wms_tag
@@ -2564,7 +2741,7 @@ def render_ui():
             c_btn_top, c_btn_alts = st.columns([1.6, 2.4])
             with c_btn_top:
                 btn_label = f"✨ Aplicar recomendada: EPSG:{top_rec['code']}"
-                if st.button(btn_label, type="primary", use_container_width=True, key=f"btn_apply_{top_rec['code']}"):
+                if st.button(btn_label, type="primary", width="stretch", key=f"btn_apply_{top_rec['code']}"):
                     st.session_state["pending_epsg_code"] = top_rec["code"]
                     st.rerun()
 
@@ -2575,7 +2752,7 @@ def render_ui():
                     for i, alt in enumerate(alts):
                         with alt_cols[i]:
                             alt_name_short = alt['name'].split('(')[0].replace("GDA2020 / ", "").replace("ETRS89 / ", "").strip()
-                            if st.button(f"Probar EPSG:{alt['code']} ({alt_name_short})", use_container_width=True, key=f"btn_alt_{alt['code']}", help=f"{alt['name']} - {alt['region']}"):
+                            if st.button(f"Probar EPSG:{alt['code']} ({alt_name_short})", width="stretch", key=f"btn_alt_{alt['code']}", help=f"{alt['name']} - {alt['region']}"):
                                 st.session_state["pending_epsg_code"] = alt["code"]
                                 st.rerun()
 
@@ -2585,7 +2762,7 @@ def render_ui():
                         if "alt_code" in r:
                             c_a1, c_a2 = st.columns([3, 1])
                             c_a1.write(f"**{r['alt_name']}** &mdash; {r['region']}")
-                            if c_a2.button(f"Aplicar EPSG:{r['alt_code']}", key=f"btn_apply_alt_{r['alt_code']}", use_container_width=True):
+                            if c_a2.button(f"Aplicar EPSG:{r['alt_code']}", key=f"btn_apply_alt_{r['alt_code']}", width="stretch"):
                                 st.session_state["pending_epsg_code"] = r["alt_code"]
                                 st.rerun()
 
@@ -2604,13 +2781,13 @@ def render_ui():
         st.write("")
         c_gps, c_clear = st.columns(2)
         with c_gps:
-            if st.button("📍 Mi GPS", use_container_width=True, help="Centra el mapa en las coordenadas GPS de tu navegador"):
+            if st.button("📍 Mi GPS", width="stretch", help="Centra el mapa en las coordenadas GPS de tu navegador"):
                 st.session_state["locate_trigger"] = True
                 st.session_state["draw_only_mode"] = True
                 st.rerun()
         with c_clear:
             if st.session_state.get("persisted_drawings"):
-                if st.button("🗑️ Borrar", use_container_width=True, help="Elimina los polígonos dibujados manualmente"):
+                if st.button("🗑️ Borrar", width="stretch", help="Elimina los polígonos dibujados manualmente"):
                     st.session_state["persisted_drawings"] = []
                     st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
                     st.session_state["processed_zip_data"] = None
@@ -2728,12 +2905,12 @@ def render_ui():
         with r2:
             st.write("")
             st.write("")
-            btn_apply_all = st.button("📏 Aplicar a todos", use_container_width=True)
+            btn_apply_all = st.button("📏 Aplicar a todos", width="stretch")
 
         with r3:
             st.write("")
             st.write("")
-            btn_apply_rec = st.button("🪄 Calidad sugerida", use_container_width=True, help="Restaura la resolución recomendada según el área en m² de cada polígono")
+            btn_apply_rec = st.button("🪄 Calidad sugerida", width="stretch", help="Restaura la resolución recomendada según el área en m² de cada polígono")
 
         # 2. Barra de selección rápida de polígonos
         total_polys = len(active_df)
@@ -2748,11 +2925,11 @@ def render_ui():
                 unsafe_allow_html=True
             )
         with s2:
-            btn_select_all = st.button("✅ Seleccionar todo", use_container_width=True, help="Marca todos los polígonos de la tabla")
+            btn_select_all = st.button("✅ Seleccionar todo", width="stretch", help="Marca todos los polígonos de la tabla")
         with s3:
-            btn_deselect_all = st.button("⬜ Deseleccionar todo", use_container_width=True, help="Desmarca todos los polígonos de la tabla")
+            btn_deselect_all = st.button("⬜ Deseleccionar todo", width="stretch", help="Desmarca todos los polígonos de la tabla")
         with s4:
-            btn_invert_sel = st.button("🔄 Invertir", use_container_width=True, help="Invierte la selección actual de polígonos")
+            btn_invert_sel = st.button("🔄 Invertir", width="stretch", help="Invierte la selección actual de polígonos")
 
         editor_ver = st.session_state.get(f"ver_{state_key}", 0)
 
@@ -2849,7 +3026,7 @@ def render_ui():
             column_config=column_config,
             column_order=column_order,
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
             num_rows="fixed",
             key=f"editor_{state_key}_{editor_ver}"
         )
@@ -2923,7 +3100,7 @@ def render_ui():
         btn_process = st.button(
             f"🚀 Descargar Cartografía ({service_info['badge']}) y Generar Georreferenciación",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=(len(selected_rows) == 0)
         )
 
@@ -3024,6 +3201,33 @@ def render_ui():
                         full_bbox = tile_jobs[0]["full_bbox_buf"]
                         full_w_m = tile_jobs[0]["full_width_m"]
                         full_h_m = tile_jobs[0]["full_height_m"]
+
+                        # Protección de memoria en servidor / nube (límite 64 MP)
+                        if tot_w * tot_h > 64_000_000:
+                            log_expander.warning(
+                                f"ℹ️ [{clean_base}] El ámbito ({tot_w} × {tot_h} px = {int(tot_w*tot_h/1e6)} MP) es demasiado grande para ensamblado en memoria continua sin colapsar el servidor. "
+                                f"Se guardan automáticamente las {len(tile_jobs)} teselas individuales a {pixel_size:.2f} m/px (se insertan juntas en AutoCAD con _MAPIINSERT sin consumir memoria)."
+                            )
+                            # Caer a modo teselas individuales seguras
+                            for job in tile_jobs:
+                                suffix = job.get("tile_suffix", "")
+                                final_name = f"{clean_base}{suffix}"
+                                counter = 1
+                                while final_name in used_names:
+                                    final_name = f"{clean_base}{suffix}_{counter}"
+                                    counter += 1
+                                used_names.add(final_name)
+                                status_text.markdown(f"⏳ **Descargando [{final_name}.tif] ({job['ancho_px']} × {job['alto_px']} px a {pixel_size:.2f} m/px)...**")
+                                if service_info.get("type") == "xyz":
+                                    sub_bytes = fetch_xyz_ortho(session=session, tile_url_template=service_info["url"], crs_str=crs_str, bbox_buf=job["bbox_buf"], ancho_px=job["ancho_px"], alto_px=job["alto_px"])
+                                else:
+                                    sub_bytes = fetch_wms_ortho(session=session, wms_url=wms_url, wms_layer=wms_layer, crs_str=crs_str, bbox_buf=job["bbox_buf"], ancho_px=job["ancho_px"], alto_px=job["alto_px"])
+                                zf.writestr(f"{final_name}.tif", sub_bytes)
+                                zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
+                                s_kb = len(sub_bytes) / 1024.0
+                                summary_log.append({"Archivo": final_name, "Servicio": service_info["badge"], "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}", "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}", "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px", "Estado": "Descargado", "Detalle": f"{s_kb:.1f} KB"})
+                                success_count += 1
+                            continue
 
                         status_text.markdown(
                             f"⏳ **Descargando y ensamblando [{idx + 1}/{total_count}] ({service_info['badge']}):** `{clean_base}.tif` "
@@ -3296,7 +3500,7 @@ def render_ui():
                 data=st.session_state["processed_zip_data"],
                 file_name=st.session_state["processed_zip_name"],
                 mime="application/zip",
-                use_container_width=True
+                width="stretch"
             )
 
         with c2:
@@ -3308,7 +3512,7 @@ def render_ui():
         if st.session_state.get("processed_summary"):
             st.write("")
             st.markdown("#### 📑 Resumen de Archivos Generados")
-            st.dataframe(pd.DataFrame(st.session_state["processed_summary"]), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(st.session_state["processed_summary"]), width="stretch", hide_index=True)
 
         # ------------------------------------------------------------------------------
         # SECCIÓN DINÁMICA: UNIR TESELAS APENAS SE GENERAN DIVIDIDAS
@@ -3329,7 +3533,7 @@ def render_ui():
                 btn_stitch_now = st.button(
                     "🪄 Ensamblar teselas ahora en 1 sola imagen (.tif + .tfw)",
                     type="secondary",
-                    use_container_width=True,
+                    width="stretch",
                     help="Cose todas las teselas contiguas en un único ráster continuo preservando el tamaño de celda exacto de 0.50 m/px."
                 )
             with col_note:
@@ -3362,7 +3566,7 @@ def render_ui():
                                 full_w_m = first_job["full_width_m"]
                                 full_h_m = first_job["full_height_m"]
 
-                                if tot_w * tot_h > 100_000_000:
+                                if tot_w * tot_h > 64_000_000:
                                     stitch_error_msg = f"La imagen unida tendría {tot_w} × {tot_h} px ({int(tot_w*tot_h/1e6)} MP) y supera la capacidad de memoria del servidor. Utiliza las teselas separadas en AutoCAD con _MAPIINSERT."
                                     break
 
@@ -3410,7 +3614,7 @@ def render_ui():
                 data=st.session_state["stitched_zip_data"],
                 file_name=st.session_state["stitched_zip_name"],
                 mime="application/zip",
-                use_container_width=True,
+                width="stretch",
                 type="primary"
             )
 
