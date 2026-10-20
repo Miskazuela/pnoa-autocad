@@ -3337,6 +3337,7 @@ def render_ui():
 
             if btn_stitch_now:
                 with st.spinner("Ensamblando teselas en memoria a resolución exacta (0.50 m/px)..."):
+                    stitch_error_msg = None
                     try:
                         stitched_zip_buf = io.BytesIO()
                         with zipfile.ZipFile(stitched_zip_buf, "w", zipfile.ZIP_DEFLATED) as szf:
@@ -3360,6 +3361,10 @@ def render_ui():
                                 full_bbox = first_job["full_bbox_buf"]
                                 full_w_m = first_job["full_width_m"]
                                 full_h_m = first_job["full_height_m"]
+
+                                if tot_w * tot_h > 100_000_000:
+                                    stitch_error_msg = f"La imagen unida tendría {tot_w} × {tot_h} px ({int(tot_w*tot_h/1e6)} MP) y supera la capacidad de memoria del servidor. Utiliza las teselas separadas en AutoCAD con _MAPIINSERT."
+                                    break
 
                                 m_canvas = Image.new("RGB", (tot_w, tot_h), (255, 255, 255))
                                 for td in poly_info["tiles_data"]:
@@ -3388,12 +3393,15 @@ def render_ui():
                                 szf.writestr(f"{stitched_name}.tif", s_bytes)
                                 szf.writestr(f"{stitched_name}.tfw", m_tfw.encode("utf-8"))
 
-                        stitched_zip_buf.seek(0)
-                        st.session_state["stitched_zip_data"] = stitched_zip_buf.getvalue()
-                        st.session_state["stitched_zip_name"] = f"cartografia_{mosaic_cache['wms_tag']}_{mosaic_cache['base_stem']}_UNIDA.zip"
-                        st.rerun()
-                    except Exception as stitch_err:
-                        st.error(f"❌ Error al ensamblar teselas: {stitch_err}")
+                        if not stitch_error_msg:
+                            stitched_zip_buf.seek(0)
+                            st.session_state["stitched_zip_data"] = stitched_zip_buf.getvalue()
+                            st.session_state["stitched_zip_name"] = f"cartografia_{mosaic_cache['wms_tag']}_{mosaic_cache['base_stem']}_UNIDA.zip"
+                    except Exception as e_st:
+                        stitch_error_msg = str(e_st)
+
+                    if stitch_error_msg:
+                        st.error(f"❌ {stitch_error_msg}")
 
         if st.session_state.get("stitched_zip_data") is not None:
             st.success("🎉 **¡Imagen unida generada con éxito a 0.50 m/px!** Ya puedes descargarla a continuación:")
@@ -3419,5 +3427,4 @@ def render_ui():
 # --------------------------------------------------------------------------------------
 # PUNTO DE ENTRADA PRINCIPAL
 # --------------------------------------------------------------------------------------
-if __name__ == "__main__":
-    render_ui()
+render_ui()
