@@ -47,7 +47,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 import shapefile
 import ezdxf
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, LineString, MultiLineString, shape
+from shapely.ops import polygonize
 from pyproj import CRS, Transformer
 import folium
 from folium.plugins import Draw, LocateControl
@@ -497,6 +498,9 @@ def parse_shapefile_zip(
 ) -> Tuple[List[Dict[str, Any]], Optional[CRS], Optional[Tuple[float, float]]]:
     """
     Extrae polígonos cerrados de un archivo Shapefile comprimido en formato .ZIP (.shp, .shx, .dbf, .prj).
+    Soporta múltiples capas/shapefiles dentro del ZIP, geometrías de polígono (Polygon/MultiPolygon),
+    polilíneas cerradas (PolyLine/PolyLineZ), mallas de líneas conectadas mediante poligonización automática,
+    y envolventes de ámbito de trabajo para trazados lineales abiertos.
     Detecta automáticamente la proyección oficial desde el archivo .prj (WKT) y sincroniza o transforma
     las coordenadas al sistema CAD activo garantizando coincidencia espacial milimétrica.
     Retorna la lista de polígonos, el CRS oficial detectado y el centroide (lon, lat) para el visor interactivo.
@@ -510,38 +514,24 @@ def parse_shapefile_zip(
     if not shp_names:
         raise ValueError("El archivo .ZIP no contiene ningún archivo '.shp'. Asegúrate de incluir el archivo .shp y sus acompañantes (.shx, .dbf, .prj).")
 
-    main_shp = shp_names[0]
-    base_no_ext = os.path.splitext(main_shp)[0]
-    shp_io = io.BytesIO(z.read(main_shp))
-
-    def find_companion(ext: str) -> Optional[io.BytesIO]:
-        target = (base_no_ext + ext).lower()
-        matches = [n for n in z.namelist() if n.lower() == target]
-        if matches:
-            return io.BytesIO(z.read(matches[0]))
-        folder = os.path.dirname(main_shp).lower()
-        cand = [n for n in z.namelist() if n.lower().endswith(ext) and os.path.dirname(n).lower() == folder]
-        return io.BytesIO(z.read(cand[0])) if cand else None
-
-    dbf_io = find_companion(".dbf")
-    shx_io = find_companion(".shx")
-    prj_io = find_companion(".prj")
-
+    # 1. Detección de proyección oficial (.prj)
     detected_crs: Optional[CRS] = None
-    if prj_io:
-        try:
-            prj_wkt = prj_io.getvalue().decode("utf-8", errors="ignore").strip()
-            detected_crs = CRS.from_wkt(prj_wkt)
-        except Exception:
-            pass
+    for n in z.namelist():
+        if n.lower().endswith(".prj") and not n.startswith("__MACOSX") and not "/." in n:
+            try:
+                prj_wkt = z.read(n).decode("utf-8", errors="ignore").strip()
+                if prj_wkt:
+                    detected_crs = CRS.from_user_input(prj_wkt)
+                    break
+            except Exception:
+                pass
 
     transformer = None
     crs_to_wgs84 = None
     if detected_crs is not None:
         try:
-            if detected_crs.is_geographic:
-                transformer = Transformer.from_crs(detected_crs, target_crs_str, always_xy=True)
-            elif detected_crs.to_string() != CRS.from_user_input(target_crs_str).to_string():
+            target_crs_obj = CRS.from_user_input(target_crs_str)
+            if detected_crs.is_geographic or detected_crs.to_string() != target_crs_obj.to_string():
                 transformer = Transformer.from_crs(detected_crs, target_crs_str, always_xy=True)
             crs_to_wgs84 = Transformer.from_crs(detected_crs, "EPSG:4326", always_xy=True)
         except Exception:
@@ -553,90 +543,184 @@ def parse_shapefile_zip(
         except Exception:
             pass
 
-    try:
-        r = shapefile.Reader(shp=shp_io, dbf=dbf_io, shx=shx_io)
-    except Exception as read_err:
-        raise ValueError(f"No fue posible leer el Shapefile: {read_err}")
-
     extracted_polygons: List[Dict[str, Any]] = []
     base_file_prefix = os.path.splitext(sanitize_filename(filename))[0]
     polygon_counter = 1
     all_lons: List[float] = []
     all_lats: List[float] = []
 
-    for sr in r.shapeRecords():
-        s = sr.shape
-        if not s.points:
-            continue
+    lines_for_polygonize: List[LineString] = []
+    open_lines_for_fallback: List[Any] = []
+
+    def add_poly_entry(poly_geom: Polygon, pm_name: str):
+        nonlocal polygon_counter
+        raw_pts = list(poly_geom.exterior.coords)
+        if len(raw_pts) < 3:
+            return
+
+        cad_pts = []
+        for px, py in raw_pts:
+            if transformer:
+                try:
+                    tx, ty = transformer.transform(px, py)
+                    cad_pts.append((tx, ty))
+                except Exception:
+                    cad_pts.append((px, py))
+            else:
+                cad_pts.append((px, py))
+
+        for px, py in raw_pts:
+            if crs_to_wgs84:
+                try:
+                    lon, lat = crs_to_wgs84.transform(px, py)
+                    if -180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0:
+                        all_lons.append(lon)
+                        all_lats.append(lat)
+                except Exception:
+                    pass
+
+        if len(cad_pts) >= 3:
+            final_poly = Polygon(cad_pts)
+            if final_poly.area > 0.01:
+                minx, miny, maxx, maxy = final_poly.bounds
+                width = maxx - minx
+                height = maxy - miny
+
+                clean_layer = sanitize_filename(pm_name)
+                clean_tag = sanitize_filename(service_tag)
+                output_name = f"{base_file_prefix}_{clean_tag}_{clean_layer}_p{polygon_counter}"
+                rec_res, rec_label, _ = get_recommended_resolution(final_poly.area)
+
+                extracted_polygons.append({
+                    "incluir": True,
+                    "id": polygon_counter,
+                    "capa": pm_name,
+                    "nombre_archivo": output_name,
+                    "resolucion_m_px": rec_res,
+                    "calidad_sugerida": rec_label,
+                    "ancho_m": round(width, 2),
+                    "alto_m": round(height, 2),
+                    "area_m2": round(final_poly.area, 2),
+                    "num_vertices": len(cad_pts),
+                    "bounds": (minx, miny, maxx, maxy),
+                    "pts": cad_pts,
+                    "origen": "shapefile"
+                })
+                polygon_counter += 1
+
+    # 2. Iterar sobre todos los archivos .shp encontrados en el .ZIP
+    for main_shp in shp_names:
+        base_no_ext = os.path.splitext(main_shp)[0]
+        layer_stem = os.path.basename(base_no_ext)
+        shp_io = io.BytesIO(z.read(main_shp))
+
+        def find_companion(ext: str) -> Optional[io.BytesIO]:
+            target = (base_no_ext + ext).lower()
+            matches = [n for n in z.namelist() if n.lower() == target]
+            if matches:
+                return io.BytesIO(z.read(matches[0]))
+            folder = os.path.dirname(main_shp).lower()
+            cand = [n for n in z.namelist() if n.lower().endswith(ext) and os.path.dirname(n).lower() == folder]
+            return io.BytesIO(z.read(cand[0])) if cand else None
+
+        dbf_io = find_companion(".dbf")
+        shx_io = find_companion(".shx")
+
+        shapes = []
+        records = []
         try:
-            geo = shape(s.__geo_interface__)
+            r = shapefile.Reader(shp=shp_io, dbf=dbf_io, shx=shx_io)
+            shapes = r.shapes()
+            if dbf_io is not None:
+                try:
+                    records = r.records()
+                except Exception:
+                    records = []
         except Exception:
-            continue
-
-        rec = sr.record.as_dict() if hasattr(sr.record, "as_dict") else {}
-        name_val = (
-            rec.get("NOMBRE") or rec.get("NAME") or rec.get("nombre") or rec.get("name") or
-            rec.get("REF_CATAST") or rec.get("REFCAT") or rec.get("PARCELA") or
-            rec.get("ID") or rec.get("id") or f"Parcela_{polygon_counter}"
-        )
-
-        polys_list = [geo] if geo.geom_type == "Polygon" else (list(geo.geoms) if geo.geom_type == "MultiPolygon" else [])
-
-        for p_idx, poly_geom in enumerate(polys_list):
-            raw_pts = list(poly_geom.exterior.coords)
-            if len(raw_pts) < 3:
+            try:
+                shp_io.seek(0)
+                r = shapefile.Reader(shp=shp_io)
+                shapes = r.shapes()
+            except Exception:
                 continue
 
-            cad_pts = []
-            for px, py in raw_pts:
-                if transformer:
-                    try:
-                        tx, ty = transformer.transform(px, py)
-                        cad_pts.append((tx, ty))
-                    except Exception:
-                        cad_pts.append((px, py))
-                else:
-                    cad_pts.append((px, py))
+        for idx, s in enumerate(shapes):
+            if not s.points:
+                continue
 
-            for px, py in raw_pts:
-                if crs_to_wgs84:
-                    try:
-                        lon, lat = crs_to_wgs84.transform(px, py)
-                        if -180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0:
-                            all_lons.append(lon)
-                            all_lats.append(lat)
-                    except Exception:
-                        pass
+            rec_dict = {}
+            if idx < len(records):
+                try:
+                    rec_dict = records[idx].as_dict() if hasattr(records[idx], "as_dict") else {}
+                except Exception:
+                    pass
 
-            if len(cad_pts) >= 3:
-                final_poly = Polygon(cad_pts)
-                if final_poly.area > 0.01:
-                    minx, miny, maxx, maxy = final_poly.bounds
-                    width = maxx - minx
-                    height = maxy - miny
+            name_val = (
+                rec_dict.get("NOMBRE") or rec_dict.get("NAME") or rec_dict.get("nombre") or rec_dict.get("name") or
+                rec_dict.get("REF_CATAST") or rec_dict.get("REFCAT") or rec_dict.get("PARCELA") or
+                rec_dict.get("ID") or rec_dict.get("id") or rec_dict.get("LAYER") or rec_dict.get("layer") or
+                (f"{layer_stem}_{idx+1}" if len(shp_names) > 1 else f"Parcela_{polygon_counter}")
+            )
+            if len(shp_names) > 1 and not str(name_val).startswith(layer_stem):
+                name_val = f"{layer_stem}_{name_val}"
 
+            try:
+                geo = shape(s.__geo_interface__)
+            except Exception:
+                continue
+
+            # Caso A: Polígonos nativos (Polygon / MultiPolygon)
+            if geo.geom_type in ("Polygon", "MultiPolygon"):
+                polys_list = [geo] if geo.geom_type == "Polygon" else list(geo.geoms)
+                for p_idx, poly_geom in enumerate(polys_list):
                     pm_name = f"{name_val}_p{p_idx+1}" if len(polys_list) > 1 else str(name_val)
-                    clean_layer = sanitize_filename(pm_name)
-                    clean_tag = sanitize_filename(service_tag)
-                    output_name = f"{base_file_prefix}_{clean_tag}_{clean_layer}_p{polygon_counter}"
-                    rec_res, rec_label, _ = get_recommended_resolution(final_poly.area)
+                    add_poly_entry(poly_geom, pm_name)
 
-                    extracted_polygons.append({
-                        "incluir": True,
-                        "id": polygon_counter,
-                        "capa": pm_name,
-                        "nombre_archivo": output_name,
-                        "resolucion_m_px": rec_res,
-                        "calidad_sugerida": rec_label,
-                        "ancho_m": round(width, 2),
-                        "alto_m": round(height, 2),
-                        "area_m2": round(final_poly.area, 2),
-                        "num_vertices": len(cad_pts),
-                        "bounds": (minx, miny, maxx, maxy),
-                        "pts": cad_pts,
-                        "origen": "shapefile"
-                    })
-                    polygon_counter += 1
+            # Caso B: Polilíneas (LineString / MultiLineString / PolyLine / PolyLineZ)
+            elif geo.geom_type in ("LineString", "MultiLineString"):
+                lines_list = [geo] if geo.geom_type == "LineString" else list(geo.geoms)
+                for l_idx, line in enumerate(lines_list):
+                    coords = list(line.coords)
+                    if len(coords) >= 3:
+                        # Verificar si es una polilínea cerrada
+                        d_se = ((coords[0][0] - coords[-1][0]) ** 2 + (coords[0][1] - coords[-1][1]) ** 2) ** 0.5
+                        if d_se < 0.1 or coords[0] == coords[-1]:
+                            try:
+                                poly_cand = Polygon([(c[0], c[1]) for c in coords])
+                                if poly_cand.is_valid and poly_cand.area > 0.0000001:
+                                    pm_name = f"{name_val}_l{l_idx+1}" if len(lines_list) > 1 else str(name_val)
+                                    add_poly_entry(poly_cand, pm_name)
+                                    continue
+                            except Exception:
+                                pass
+                    if len(coords) >= 2:
+                        lines_for_polygonize.append(LineString([(c[0], c[1]) for c in coords]))
+                        open_lines_for_fallback.append(line)
+
+    # Caso C: Trazados o líneas conectadas que forman polígonos cerrados mediante poligonización
+    if lines_for_polygonize:
+        try:
+            malla_polys = list(polygonize(lines_for_polygonize))
+            for m_idx, mp in enumerate(malla_polys):
+                if mp.is_valid and mp.area > 0.0000001:
+                    add_poly_entry(mp, f"Poligono_malla_{m_idx+1}")
+        except Exception:
+            pass
+
+    # Caso D: Si no se encontró ningún polígono cerrado pero hay trazados lineales, generar ámbito / envolvente
+    if not extracted_polygons and open_lines_for_fallback:
+        all_x = [pt[0] for l in open_lines_for_fallback for pt in l.coords]
+        all_y = [pt[1] for l in open_lines_for_fallback for pt in l.coords]
+        if all_x and all_y:
+            minx, miny, maxx, maxy = min(all_x), min(all_y), max(all_x), max(all_y)
+            if minx == maxx:
+                minx -= 25.0
+                maxx += 25.0
+            if miny == maxy:
+                miny -= 25.0
+                maxy += 25.0
+            box_poly = Polygon([(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy), (minx, miny)])
+            add_poly_entry(box_poly, "Ambito_General_Traza")
 
     centroid = None
     if all_lons and all_lats:
@@ -2573,9 +2657,12 @@ def render_ui():
                     if shp_epsg and str(shp_epsg) != crs_str.replace("EPSG:", ""):
                         st.info(
                             f"🧭 **Proyección oficial del Shapefile detectada:** `{crs_info_name}` (EPSG:{shp_epsg}).\n\n"
-                            f"Las geometrías ya vienen con coordenadas georreferenciadas exactas. "
-                            f"Si deseas cambiar la proyección activa en el panel lateral a **EPSG:{shp_epsg}**, encajará al milímetro con tu plano."
+                            f"Las geometrías vienen georreferenciadas en **EPSG:{shp_epsg}**. "
+                            f"Haz clic en el siguiente botón para sincronizar el plano al instante:"
                         )
+                        if st.button(f"🧭 Aplicar proyección del Shapefile: EPSG:{shp_epsg} ({crs_info_name})", type="primary", width="stretch", key="btn_sync_shp_crs"):
+                            st.session_state["cad_crs"] = f"EPSG:{shp_epsg}"
+                            st.rerun()
                     else:
                         st.success(f"🧭 **Shapefile georreferenciado verificado:** `{crs_info_name}` ({len(file_polygons)} parcela(s) detectadas). Coincidencia perfecta con el mapa.")
             elif ext in (".kml", ".kmz"):
