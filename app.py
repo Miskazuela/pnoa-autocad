@@ -52,6 +52,7 @@ import folium
 from folium.plugins import Draw, LocateControl
 from streamlit_folium import st_folium
 from PIL import Image, ImageDraw, ImageChops
+Image.MAX_IMAGE_PIXELS = None  # Permitir ensamblado y procesamiento de imágenes y mosaicos de gran tamaño sin límite artificial
 import xml.etree.ElementTree as ET
 
 # Streamlit Page Config debe ser la primera llamada de Streamlit
@@ -993,6 +994,17 @@ def compute_tiled_georeferencing(
     if ancho_px_ideal <= max_tile_side and alto_px_ideal <= max_tile_side:
         res = compute_georeferencing_parameters(bounds, buffer_pct, pixel_size, max_tile_side)
         res["tile_suffix"] = ""
+        res["row_idx"] = 0
+        res["col_idx"] = 0
+        res["n_rows"] = 1
+        res["n_cols"] = 1
+        res["offset_x_px"] = 0
+        res["offset_y_px"] = 0
+        res["total_grid_w"] = res["ancho_px"]
+        res["total_grid_h"] = res["alto_px"]
+        res["full_bbox_buf"] = res["bbox_buf"]
+        res["full_width_m"] = res["width_m"]
+        res["full_height_m"] = res["height_m"]
         return [res]
 
     nx = max(1, math.ceil(ancho_px_ideal / max_tile_side))
@@ -1002,15 +1014,21 @@ def compute_tiled_georeferencing(
     tile_w_m = width_m / nx
     tile_h_m = height_m / ny
 
+    col_w_px = [min(max_tile_side, max(1, round(tile_w_m / pixel_size))) for _ in range(nx)]
+    row_h_px = [min(max_tile_side, max(1, round(tile_h_m / pixel_size))) for _ in range(ny)]
+    total_grid_w = sum(col_w_px)
+    total_grid_h = sum(row_h_px)
+
+    curr_y_offset = 0
     for r in range(ny):
+        sub_maxy = bbox_buf[3] - r * tile_h_m
+        sub_miny = sub_maxy - tile_h_m
+        h_px = row_h_px[r]
+        curr_x_offset = 0
         for c in range(nx):
             sub_minx = bbox_buf[0] + c * tile_w_m
             sub_maxx = sub_minx + tile_w_m
-            sub_maxy = bbox_buf[3] - r * tile_h_m
-            sub_miny = sub_maxy - tile_h_m
-
-            w_px = min(max_tile_side, max(1, round(tile_w_m / pixel_size)))
-            h_px = min(max_tile_side, max(1, round(tile_h_m / pixel_size)))
+            w_px = col_w_px[c]
 
             pix_x = tile_w_m / w_px
             pix_y = - (tile_h_m / h_px)
@@ -1036,8 +1054,21 @@ def compute_tiled_georeferencing(
                 "pixel_y": pix_y,
                 "tfw_content": tfw,
                 "scaled": False,
-                "tile_suffix": f"_t{r+1}_{c+1}" if (nx > 1 or ny > 1) else ""
+                "tile_suffix": f"_t{r+1}_{c+1}" if (nx > 1 or ny > 1) else "",
+                "row_idx": r,
+                "col_idx": c,
+                "n_rows": ny,
+                "n_cols": nx,
+                "offset_x_px": curr_x_offset,
+                "offset_y_px": curr_y_offset,
+                "total_grid_w": total_grid_w,
+                "total_grid_h": total_grid_h,
+                "full_bbox_buf": bbox_buf,
+                "full_width_m": width_m,
+                "full_height_m": height_m
             })
+            curr_x_offset += w_px
+        curr_y_offset += h_px
 
     return tiles
 
@@ -2134,14 +2165,16 @@ def render_ui():
     large_area_mode = st.sidebar.radio(
         "Si la imagen excede el límite del IGN (4000 px):",
         options=[
-            "Ajustar a 4000 px (Imagen única)",
-            "Dividir en mosaico / teselas (Máxima resolución)"
+            "Dividir en mosaico / teselas (Máxima resolución - Recomendado)",
+            "Unir en una sola imagen (Mosaico cosido a máxima resolución)",
+            "Ajustar a 4000 px (Imagen única reducida / menor calidad)"
         ],
         index=0,
         help=(
-            "El servidor del IGN rechaza peticiones mayores a 4096 px. "
-            "'Ajustar a 4000 px' escala suavemente para mantener un único archivo .tif. "
-            "'Dividir en mosaico' crea teselas contiguas respetando la resolución milimétrica exacta."
+            "El servidor del IGN rechaza peticiones mayores a 4096 px.\n\n"
+            "- 'Dividir en mosaico': Descarga teselas contiguas respetando la resolución exacta solicitada (0.50 m/px). Recomendado para AutoCAD Map 3D / Civil 3D ya que no satura la memoria.\n"
+            "- 'Unir en una sola imagen': Descarga por teselas y las cose automáticamente en un único archivo .tif continuo preservando la resolución solicitada (0.50 m/px).\n"
+            "- 'Ajustar a 4000 px': Escala a la baja la resolución (aumenta el tamaño de celda, ej: 2.70 m/px) para forzar un único archivo de tamaño reducido."
         )
     )
 
@@ -2828,6 +2861,61 @@ def render_ui():
         else:
             st.info(f"📍 **{len(selected_rows)}** polígono(s) seleccionado(s) listos para descargar.")
 
+            # Diagnóstico de resolución y aviso preventivo si el tamaño excede 4000 px
+            for r in selected_rows:
+                r_b = r["bounds"]
+                r_res = float(r["resolucion_m_px"])
+                r_dx = (r_b[2] - r_b[0]) * buffer_pct
+                r_dy = (r_b[3] - r_b[1]) * buffer_pct
+                r_wm = (r_b[2] - r_b[0]) + 2 * r_dx
+                r_hm = (r_b[3] - r_b[1]) + 2 * r_dy
+                req_w_px = r_wm / r_res
+                req_h_px = r_hm / r_res
+
+                if req_w_px > 4000 or req_h_px > 4000:
+                    if "ajustar" in large_area_mode.lower():
+                        factor = min(4000 / req_w_px, 4000 / req_h_px, 1.0)
+                        effective_res = r_res / factor
+                        st.warning(
+                            f"⚠️ **Aviso de Resolución en '{r['nombre_archivo']}':** "
+                            f"El ámbito ({r_wm:.0f} × {r_hm:.0f} m) requiere **{int(req_w_px)} × {int(req_h_px)} px** a {r_res:.2f} m/px. "
+                            f"Al tener seleccionada la opción *'Ajustar a 4000 px'*, el servidor limitará la imagen a 4000 px y el **tamaño de celda real será de {effective_res:.2f} m/px** (perdiendo detalle). "
+                            f"👉 Para mantener tu resolución exacta de **{r_res:.2f} m/px**, selecciona en el menú lateral **'Dividir en mosaico'** o **'Unir en una sola imagen'**."
+                        )
+                    elif "unir" in large_area_mode.lower() or "cosido" in large_area_mode.lower():
+                        nx = math.ceil(req_w_px / 4000)
+                        ny = math.ceil(req_h_px / 4000)
+                        st.success(
+                            f"🖼️ **Resolución Exacta ({r_res:.2f} m/px):** '{r['nombre_archivo']}' se descargará en una cuadrícula de {nx} × {ny} ({nx*ny} teselas) "
+                            f"y se unirá automáticamente en **un único archivo .tif continuo de {int(req_w_px)} × {int(req_h_px)} px** con tamaño de celda de {r_res:.2f}."
+                        )
+                    else:
+                        nx = math.ceil(req_w_px / 4000)
+                        ny = math.ceil(req_h_px / 4000)
+                        st.success(
+                            f"🧩 **Resolución Exacta ({r_res:.2f} m/px):** '{r['nombre_archivo']}' se dividirá en **{nx} × {ny} = {nx*ny} teselas independientes** de máx 4000 px cada una, "
+                            f"garantizando el tamaño de celda exacto de {r_res:.2f} m/px. Insértalas juntas en AutoCAD con `_MAPIINSERT`."
+                        )
+
+        # Opción de conveniencia para áreas extensas
+        has_any_multi = False
+        for r in selected_rows:
+            r_b = r["bounds"]
+            r_res = float(r["resolucion_m_px"])
+            r_dx = (r_b[2] - r_b[0]) * buffer_pct
+            r_dy = (r_b[3] - r_b[1]) * buffer_pct
+            if ((r_b[2] - r_b[0]) + 2 * r_dx) / r_res > 4000 or ((r_b[3] - r_b[1]) + 2 * r_dy) / r_res > 4000:
+                has_any_multi = True
+                break
+
+        auto_include_stitched = False
+        if has_any_multi and "mosaico" in large_area_mode.lower():
+            auto_include_stitched = st.checkbox(
+                "📦 Incluir de una vez ambas opciones en el ZIP (teselas separadas + imagen unida)",
+                value=False,
+                help="Añade automáticamente al archivo ZIP tanto las teselas divididas como una copia de la imagen completamente unida a resolución exacta (0.50 m/px)."
+            )
+
         # ------------------------------------------------------------------------------
         # BOTÓN DE DESCARGA WMS / SATÉLITE
         # ------------------------------------------------------------------------------
@@ -2850,6 +2938,8 @@ def render_ui():
 
             st.session_state["processed_zip_data"] = None
             st.session_state["processed_summary"] = []
+            st.session_state["stitched_zip_data"] = None
+            st.session_state["cached_mosaic_data"] = None
 
             progress_bar = st.progress(0.0)
             status_text = st.empty()
@@ -2862,6 +2952,7 @@ def render_ui():
             summary_log = []
             used_names = set()
             total_count = len(selected_rows)
+            cached_mosaic_polygons = []
 
             base_dxf_stem = os.path.splitext(sanitize_filename(dxf_display_name))[0]
             if not base_dxf_stem:
@@ -2894,8 +2985,19 @@ def render_ui():
                     pixel_size = float(row["resolucion_m_px"])
                     bounds = row["bounds"]
 
-                    # Determinar tareas de descarga (única o teselas)
-                    if "mosaico" in large_area_mode.lower():
+                    row_mosaic_cache = {
+                        "clean_base": clean_base,
+                        "bounds": bounds,
+                        "pixel_size": pixel_size,
+                        "tile_jobs": [],
+                        "tiles_data": [],
+                        "is_multi_tile": False
+                    }
+
+                    is_stitch_mode = ("unir" in large_area_mode.lower()) or ("cosido" in large_area_mode.lower())
+                    is_tiled_mode = ("mosaico" in large_area_mode.lower()) or ("teselas" in large_area_mode.lower())
+
+                    if is_stitch_mode or is_tiled_mode:
                         tile_jobs = compute_tiled_georeferencing(
                             bounds=bounds,
                             buffer_pct=buffer_pct,
@@ -2912,75 +3014,235 @@ def render_ui():
                         )
                         tile_jobs = [single_job]
 
-                    for job in tile_jobs:
-                        suffix = job.get("tile_suffix", "")
-                        final_name = f"{clean_base}{suffix}"
-                        
-                        counter = 1
-                        while final_name in used_names:
-                            final_name = f"{clean_base}{suffix}_{counter}"
-                            counter += 1
-                        used_names.add(final_name)
+                    row_mosaic_cache["tile_jobs"] = tile_jobs
+                    row_mosaic_cache["is_multi_tile"] = len(tile_jobs) > 1
+
+                    # MODO UNIR EN UNA SOLA IMAGEN (Si son varias teselas y el usuario solicitó coser)
+                    if is_stitch_mode and len(tile_jobs) > 1:
+                        tot_w = tile_jobs[0]["total_grid_w"]
+                        tot_h = tile_jobs[0]["total_grid_h"]
+                        full_bbox = tile_jobs[0]["full_bbox_buf"]
+                        full_w_m = tile_jobs[0]["full_width_m"]
+                        full_h_m = tile_jobs[0]["full_height_m"]
 
                         status_text.markdown(
-                            f"⏳ **Descargando [{idx + 1}/{total_count}] ({service_info['badge']}):** `{final_name}.tif` "
-                            f"({job['ancho_px']} × {job['alto_px']} px, res: {abs(job['pixel_x']):.2f} m/px)..."
+                            f"⏳ **Descargando y ensamblando [{idx + 1}/{total_count}] ({service_info['badge']}):** `{clean_base}.tif` "
+                            f"({tot_w} × {tot_h} px en {len(tile_jobs)} teselas a {pixel_size:.2f} m/px)..."
                         )
 
-                        try:
-                            if service_info.get("type") == "xyz":
-                                img_bytes = fetch_xyz_ortho(
-                                    session=session,
-                                    tile_url_template=service_info["url"],
-                                    crs_str=crs_str,
-                                    bbox_buf=job["bbox_buf"],
-                                    ancho_px=job["ancho_px"],
-                                    alto_px=job["alto_px"]
-                                )
-                            else:
-                                img_bytes = fetch_wms_ortho(
-                                    session=session,
-                                    wms_url=wms_url,
-                                    wms_layer=wms_layer,
-                                    crs_str=crs_str,
-                                    bbox_buf=job["bbox_buf"],
-                                    ancho_px=job["ancho_px"],
-                                    alto_px=job["alto_px"]
-                                )
+                        master_canvas = Image.new("RGB", (tot_w, tot_h), (255, 255, 255))
+                        sub_errors = []
 
-                            zf.writestr(f"{final_name}.tif", img_bytes)
-                            zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
+                        for t_idx, job in enumerate(tile_jobs):
+                            status_text.markdown(
+                                f"⏳ **Descargando tesela [{t_idx + 1}/{len(tile_jobs)}] de [{idx + 1}/{total_count}]:** "
+                                f"`{clean_base}` ({job['ancho_px']} × {job['alto_px']} px)..."
+                            )
+                            try:
+                                if service_info.get("type") == "xyz":
+                                    sub_bytes = fetch_xyz_ortho(
+                                        session=session,
+                                        tile_url_template=service_info["url"],
+                                        crs_str=crs_str,
+                                        bbox_buf=job["bbox_buf"],
+                                        ancho_px=job["ancho_px"],
+                                        alto_px=job["alto_px"]
+                                    )
+                                else:
+                                    sub_bytes = fetch_wms_ortho(
+                                        session=session,
+                                        wms_url=wms_url,
+                                        wms_layer=wms_layer,
+                                        crs_str=crs_str,
+                                        bbox_buf=job["bbox_buf"],
+                                        ancho_px=job["ancho_px"],
+                                        alto_px=job["alto_px"]
+                                    )
+                                sub_img = Image.open(io.BytesIO(sub_bytes)).convert("RGB")
+                                master_canvas.paste(sub_img, (job["offset_x_px"], job["offset_y_px"]))
+                            except Exception as sub_err:
+                                sub_errors.append(f"Tesela {t_idx + 1}: {sub_err}")
 
-                            size_kb = len(img_bytes) / 1024.0
-                            scaled_note = " (ajustado al límite del IGN)" if job.get("scaled", False) else ""
+                        if sub_errors:
+                            err_msg = "; ".join(sub_errors)
+                            log_expander.error(f"❌ [{clean_base}] Fallo al descargar subteselas: {err_msg}")
+                            summary_log.append({
+                                "Archivo": clean_base,
+                                "Servicio": service_info["badge"],
+                                "Dimensiones (px)": f"{tot_w} × {tot_h}",
+                                "Extensión (m)": f"{full_w_m:.1f} × {full_h_m:.1f}",
+                                "Resolución Real": "-",
+                                "Estado": "Error",
+                                "Detalle": err_msg
+                            })
+                        else:
+                            out_tif = io.BytesIO()
+                            master_canvas.save(out_tif, format="TIFF", compression="tiff_deflate")
+                            stitched_bytes = out_tif.getvalue()
+
+                            pix_x = full_w_m / tot_w
+                            pix_y = - (full_h_m / tot_h)
+                            x_c = full_bbox[0] + (pix_x / 2.0)
+                            y_c = full_bbox[3] + (pix_y / 2.0)
+                            master_tfw = (
+                                f"{pix_x:.10f}\n"
+                                f"0.0000000000\n"
+                                f"0.0000000000\n"
+                                f"{pix_y:.10f}\n"
+                                f"{x_c:.10f}\n"
+                                f"{y_c:.10f}\n"
+                            )
+
+                            final_name = clean_base
+                            counter = 1
+                            while final_name in used_names:
+                                final_name = f"{clean_base}_{counter}"
+                                counter += 1
+                            used_names.add(final_name)
+
+                            zf.writestr(f"{final_name}.tif", stitched_bytes)
+                            zf.writestr(f"{final_name}.tfw", master_tfw.encode("utf-8"))
+
+                            size_mb = len(stitched_bytes) / (1024.0 * 1024.0)
                             log_expander.success(
-                                f"✅ [{final_name}] Descargado ({job['ancho_px']} × {job['alto_px']} px, "
-                                f"{size_kb:.1f} KB, res: {abs(job['pixel_x']):.3f} m/px){scaled_note}"
+                                f"✅ [{final_name}] Imagen cosida continua generada ({tot_w} × {tot_h} px, "
+                                f"{len(tile_jobs)} teselas ensambladas, {size_mb:.2f} MB, res exacta: {abs(pix_x):.3f} m/px)"
                             )
 
                             summary_log.append({
                                 "Archivo": final_name,
                                 "Servicio": service_info["badge"],
-                                "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
-                                "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
-                                "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px",
-                                "Estado": "Descargado",
-                                "Detalle": f"{size_kb:.1f} KB"
+                                "Dimensiones (px)": f"{tot_w} × {tot_h}",
+                                "Extensión (m)": f"{full_w_m:.1f} × {full_h_m:.1f}",
+                                "Resolución Real": f"{abs(pix_x):.3f} m/px",
+                                "Estado": "Descargado (Cosido)",
+                                "Detalle": f"{size_mb:.2f} MB ({len(tile_jobs)} teselas)"
                             })
                             success_count += 1
 
-                        except Exception as err:
-                            err_msg = str(err)
-                            log_expander.error(f"❌ [{final_name}] Error: {err_msg}")
-                            summary_log.append({
-                                "Archivo": final_name,
-                                "Servicio": service_info["badge"],
-                                "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
-                                "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
-                                "Resolución Real": "-",
-                                "Estado": "Error",
-                                "Detalle": err_msg
-                            })
+                    # MODO TESELAS INDIVIDUALES O IMAGEN ÚNICA (<= 4000 px o Ajustada)
+                    else:
+                        for job in tile_jobs:
+                            suffix = job.get("tile_suffix", "")
+                            final_name = f"{clean_base}{suffix}"
+                            
+                            counter = 1
+                            while final_name in used_names:
+                                final_name = f"{clean_base}{suffix}_{counter}"
+                                counter += 1
+                            used_names.add(final_name)
+
+                            status_text.markdown(
+                                f"⏳ **Descargando [{idx + 1}/{total_count}] ({service_info['badge']}):** `{final_name}.tif` "
+                                f"({job['ancho_px']} × {job['alto_px']} px, res: {abs(job['pixel_x']):.2f} m/px)..."
+                            )
+
+                            try:
+                                if service_info.get("type") == "xyz":
+                                    img_bytes = fetch_xyz_ortho(
+                                        session=session,
+                                        tile_url_template=service_info["url"],
+                                        crs_str=crs_str,
+                                        bbox_buf=job["bbox_buf"],
+                                        ancho_px=job["ancho_px"],
+                                        alto_px=job["alto_px"]
+                                    )
+                                else:
+                                    img_bytes = fetch_wms_ortho(
+                                        session=session,
+                                        wms_url=wms_url,
+                                        wms_layer=wms_layer,
+                                        crs_str=crs_str,
+                                        bbox_buf=job["bbox_buf"],
+                                        ancho_px=job["ancho_px"],
+                                        alto_px=job["alto_px"]
+                                    )
+
+                                zf.writestr(f"{final_name}.tif", img_bytes)
+                                zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
+
+                                row_mosaic_cache["tiles_data"].append({
+                                    "job": job,
+                                    "img_bytes": img_bytes,
+                                    "final_name": final_name
+                                })
+
+                                size_kb = len(img_bytes) / 1024.0
+                                scaled_note = " (ajustado al límite del IGN)" if job.get("scaled", False) else ""
+                                log_expander.success(
+                                    f"✅ [{final_name}] Descargado ({job['ancho_px']} × {job['alto_px']} px, "
+                                    f"{size_kb:.1f} KB, res: {abs(job['pixel_x']):.3f} m/px){scaled_note}"
+                                )
+
+                                summary_log.append({
+                                    "Archivo": final_name,
+                                    "Servicio": service_info["badge"],
+                                    "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
+                                    "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
+                                    "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px",
+                                    "Estado": "Descargado",
+                                    "Detalle": f"{size_kb:.1f} KB"
+                                })
+                                success_count += 1
+
+                            except Exception as err:
+                                err_msg = str(err)
+                                log_expander.error(f"❌ [{final_name}] Error: {err_msg}")
+                                summary_log.append({
+                                    "Archivo": final_name,
+                                    "Servicio": service_info["badge"],
+                                    "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}",
+                                    "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}",
+                                    "Resolución Real": "-",
+                                    "Estado": "Error",
+                                    "Detalle": err_msg
+                                })
+
+                        # Si se marcó incluir también la versión unida de una vez en el ZIP
+                        if auto_include_stitched and row_mosaic_cache["is_multi_tile"] and len(row_mosaic_cache["tiles_data"]) == len(tile_jobs):
+                            try:
+                                f_job = tile_jobs[0]
+                                a_w, a_h = f_job["total_grid_w"], f_job["total_grid_h"]
+                                m_canvas_auto = Image.new("RGB", (a_w, a_h), (255, 255, 255))
+                                for td in row_mosaic_cache["tiles_data"]:
+                                    jb = td["job"]
+                                    sim = Image.open(io.BytesIO(td["img_bytes"])).convert("RGB")
+                                    m_canvas_auto.paste(sim, (jb["offset_x_px"], jb["offset_y_px"]))
+
+                                out_auto = io.BytesIO()
+                                m_canvas_auto.save(out_auto, format="TIFF", compression="tiff_deflate")
+                                auto_bytes = out_auto.getvalue()
+
+                                p_x = f_job["full_width_m"] / a_w
+                                p_y = - (f_job["full_height_m"] / a_h)
+                                x_c = f_job["full_bbox_buf"][0] + (p_x / 2.0)
+                                y_c = f_job["full_bbox_buf"][3] + (p_y / 2.0)
+                                auto_tfw = (
+                                    f"{p_x:.10f}\n"
+                                    f"0.0000000000\n"
+                                    f"0.0000000000\n"
+                                    f"{p_y:.10f}\n"
+                                    f"{x_c:.10f}\n"
+                                    f"{y_c:.10f}\n"
+                                )
+                                auto_name = f"{clean_base}_unida"
+                                zf.writestr(f"{auto_name}.tif", auto_bytes)
+                                zf.writestr(f"{auto_name}.tfw", auto_tfw.encode("utf-8"))
+                                auto_mb = len(auto_bytes) / (1024.0 * 1024.0)
+                                log_expander.info(f"🧩 [{auto_name}] Versión unida añadida al ZIP ({a_w} × {a_h} px, {auto_mb:.2f} MB)")
+                                summary_log.append({
+                                    "Archivo": auto_name,
+                                    "Servicio": service_info["badge"],
+                                    "Dimensiones (px)": f"{a_w} × {a_h}",
+                                    "Extensión (m)": f"{f_job['full_width_m']:.1f} × {f_job['full_height_m']:.1f}",
+                                    "Resolución Real": f"{abs(p_x):.3f} m/px",
+                                    "Estado": "Descargado (Unido en ZIP)",
+                                    "Detalle": f"{auto_mb:.2f} MB"
+                                })
+                            except Exception as auto_err:
+                                log_expander.warning(f"⚠️ No se pudo ensamblar versión unida automática: {auto_err}")
+
+                    cached_mosaic_polygons.append(row_mosaic_cache)
 
             progress_bar.progress(1.0)
             status_text.empty()
@@ -2991,6 +3253,16 @@ def render_ui():
                 st.session_state["processed_zip_name"] = f"cartografia_{wms_tag}_{base_dxf_stem}.zip"
                 st.session_state["processed_summary"] = summary_log
                 st.session_state["is_vector_exportable"] = is_vector_exportable
+
+                has_multi = any(p["is_multi_tile"] and len(p["tiles_data"]) > 1 for p in cached_mosaic_polygons)
+                st.session_state["cached_mosaic_data"] = {
+                    "polygons": cached_mosaic_polygons,
+                    "has_multi_tiles": has_multi,
+                    "base_stem": base_dxf_stem,
+                    "service_badge": service_info["badge"],
+                    "wms_tag": wms_tag,
+                    "polys_for_dxf": polys_for_dxf
+                }
                 st.balloons()
             else:
                 st.error("No se pudo descargar ninguna imagen cartográfica. Verifica la conectividad con el servicio WMS y las coordenadas.")
@@ -3038,6 +3310,102 @@ def render_ui():
             st.markdown("#### 📑 Resumen de Archivos Generados")
             st.dataframe(pd.DataFrame(st.session_state["processed_summary"]), use_container_width=True, hide_index=True)
 
+        # ------------------------------------------------------------------------------
+        # SECCIÓN DINÁMICA: UNIR TESELAS APENAS SE GENERAN DIVIDIDAS
+        # ------------------------------------------------------------------------------
+        mosaic_cache = st.session_state.get("cached_mosaic_data")
+        if mosaic_cache and mosaic_cache.get("has_multi_tiles"):
+            st.markdown("---")
+            st.markdown("### 🧩 Unir Teselas en una Sola Imagen Continua")
+            st.markdown(
+                "💡 **¿Prefieres tenerlas unidas en lugar de separadas?** "
+                "Las teselas ya se han generado y están listas en memoria a resolución exacta de **0.50 m/px**. "
+                "Puedes mantenerlas separadas (descargando el ZIP de arriba) o pulsar el siguiente botón para "
+                "**ensamblarlas al instante en una sola imagen continua** (usando los datos en memoria, sin esperar descargas de internet):"
+            )
+
+            col_btn, col_note = st.columns([1.6, 1.4])
+            with col_btn:
+                btn_stitch_now = st.button(
+                    "🪄 Ensamblar teselas ahora en 1 sola imagen (.tif + .tfw)",
+                    type="secondary",
+                    use_container_width=True,
+                    help="Cose todas las teselas contiguas en un único ráster continuo preservando el tamaño de celda exacto de 0.50 m/px."
+                )
+            with col_note:
+                st.caption("⚡ Ensamblado ultrarrápido en memoria RAM. No requiere volver a descargar nada del servidor IGN.")
+
+            if btn_stitch_now:
+                with st.spinner("Ensamblando teselas en memoria a resolución exacta (0.50 m/px)..."):
+                    try:
+                        stitched_zip_buf = io.BytesIO()
+                        with zipfile.ZipFile(stitched_zip_buf, "w", zipfile.ZIP_DEFLATED) as szf:
+                            if st.session_state.get("is_vector_exportable") and mosaic_cache.get("polys_for_dxf"):
+                                try:
+                                    szf.writestr(f"vector_{mosaic_cache['base_stem']}.dxf", export_polygons_to_dxf(mosaic_cache["polys_for_dxf"]))
+                                except Exception:
+                                    pass
+
+                            for poly_info in mosaic_cache["polygons"]:
+                                if not poly_info["is_multi_tile"] or len(poly_info["tiles_data"]) <= 1:
+                                    for td in poly_info["tiles_data"]:
+                                        j = td["job"]
+                                        szf.writestr(f"{poly_info['clean_base']}.tif", td["img_bytes"])
+                                        szf.writestr(f"{poly_info['clean_base']}.tfw", j["tfw_content"].encode("utf-8"))
+                                    continue
+
+                                first_job = poly_info["tile_jobs"][0]
+                                tot_w = first_job["total_grid_w"]
+                                tot_h = first_job["total_grid_h"]
+                                full_bbox = first_job["full_bbox_buf"]
+                                full_w_m = first_job["full_width_m"]
+                                full_h_m = first_job["full_height_m"]
+
+                                m_canvas = Image.new("RGB", (tot_w, tot_h), (255, 255, 255))
+                                for td in poly_info["tiles_data"]:
+                                    j = td["job"]
+                                    s_img = Image.open(io.BytesIO(td["img_bytes"])).convert("RGB")
+                                    m_canvas.paste(s_img, (j["offset_x_px"], j["offset_y_px"]))
+
+                                out_tif_bytes = io.BytesIO()
+                                m_canvas.save(out_tif_bytes, format="TIFF", compression="tiff_deflate")
+                                s_bytes = out_tif_bytes.getvalue()
+
+                                pix_x = full_w_m / tot_w
+                                pix_y = - (full_h_m / tot_h)
+                                x_c = full_bbox[0] + (pix_x / 2.0)
+                                y_c = full_bbox[3] + (pix_y / 2.0)
+                                m_tfw = (
+                                    f"{pix_x:.10f}\n"
+                                    f"0.0000000000\n"
+                                    f"0.0000000000\n"
+                                    f"{pix_y:.10f}\n"
+                                    f"{x_c:.10f}\n"
+                                    f"{y_c:.10f}\n"
+                                )
+
+                                stitched_name = f"{poly_info['clean_base']}_unida"
+                                szf.writestr(f"{stitched_name}.tif", s_bytes)
+                                szf.writestr(f"{stitched_name}.tfw", m_tfw.encode("utf-8"))
+
+                        stitched_zip_buf.seek(0)
+                        st.session_state["stitched_zip_data"] = stitched_zip_buf.getvalue()
+                        st.session_state["stitched_zip_name"] = f"cartografia_{mosaic_cache['wms_tag']}_{mosaic_cache['base_stem']}_UNIDA.zip"
+                        st.rerun()
+                    except Exception as stitch_err:
+                        st.error(f"❌ Error al ensamblar teselas: {stitch_err}")
+
+        if st.session_state.get("stitched_zip_data") is not None:
+            st.success("🎉 **¡Imagen unida generada con éxito a 0.50 m/px!** Ya puedes descargarla a continuación:")
+            st.download_button(
+                label=f"📥 Descargar Paquete con Imagen UNIDA (.tif + .tfw)",
+                data=st.session_state["stitched_zip_data"],
+                file_name=st.session_state["stitched_zip_name"],
+                mime="application/zip",
+                use_container_width=True,
+                type="primary"
+            )
+
     # Pie de página
     st.markdown("---")
     st.markdown("""
@@ -3051,4 +3419,5 @@ def render_ui():
 # --------------------------------------------------------------------------------------
 # PUNTO DE ENTRADA PRINCIPAL
 # --------------------------------------------------------------------------------------
-render_ui()
+if __name__ == "__main__":
+    render_ui()
