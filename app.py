@@ -345,6 +345,16 @@ def detect_epsg_from_lonlat(lon: float, lat: float) -> List[Dict[str, Any]]:
             "confidence": "Muy Alta"
         })
 
+    # Suecia / Escandinavia
+    if 55.0 <= lat <= 69.5 and 10.5 <= lon <= 24.5:
+        recommendations.append({
+            "code": 3006,
+            "name": "SWEREF99 TM (EPSG:3006)",
+            "region": "🇸🇪 Suecia (SWEREF99 TM Oficial)",
+            "reason": f"Ubicación geográfica detectada en Suecia (Lat: {lat:.4f}°, Lon: {lon:.4f}°).",
+            "confidence": "Muy Alta"
+        })
+
     # 2. Colombia
     if -4.5 <= lat <= 13.5 and -80.0 <= lon <= -66.0:
         recommendations.append({
@@ -863,6 +873,11 @@ def detect_recommended_epsg(
             if (28300 + zone) not in explicit_codes:
                 explicit_codes.append(28300 + zone) # GDA94
 
+    # Patrón SWEREF / Suecia
+    if any(w in search_corpus_upper for w in ["SWEREF", "SWEDEN", "SVERIGE"]):
+        if 3006 not in explicit_codes:
+            explicit_codes.append(3006)
+
     # Patrón UTM zone (ej: UTM 30N, UTM30, UTM 55S)
     for m in re.finditer(r"\bUTM[_\-\s]*(\d{1,2})\s*([NSns]?)\b", search_corpus_upper):
         zone = int(m.group(1))
@@ -1035,6 +1050,25 @@ def detect_recommended_epsg(
         })
         return recommendations
 
+    # F1. Suecia / Escandinavia (SWEREF99 TM - EPSG:3006)
+    # Latitudes 55° a 69° N -> Y entre 6.100.000 m y 7.650.000 m; X entre 250.000 m y 950.000 m.
+    if 6100000 <= cy <= 7650000 and 250000 <= cx <= 950000:
+        recommendations.append({
+            "code": 3006,
+            "name": "SWEREF99 TM (EPSG:3006)",
+            "region": "🇸🇪 Suecia (Proyección Oficial Nacional SWEREF99 TM)",
+            "reason": f"Coordenadas métricas características de Suecia con Falso Norte ~{cy:,.0f} m y Falso Este ~{cx:,.0f} m.",
+            "confidence": "Muy Alta"
+        })
+        recommendations.append({
+            "code": 3007,
+            "name": "SWEREF99 12 00 (EPSG:3007)",
+            "region": "🇸🇪 Suecia (Zona Local Oeste 12° 00' E)",
+            "reason": "Zona de proyección local SWEREF99 para el oeste de Suecia.",
+            "confidence": "Media"
+        })
+        return recommendations
+
     # F. México (UTM Husos 11N a 16N)
     if 1550000 <= cy <= 3600000 and 150000 <= cx <= 850000:
         recommendations.append({
@@ -1070,6 +1104,98 @@ def detect_recommended_epsg(
 # 2.2 GESTIÓN INTEGRAL DE SISTEMAS DE COORDENADAS EPSG Y PROYECCIONES PERSONALIZADAS
 # --------------------------------------------------------------------------------------
 CUSTOM_EPSG_FILE = Path(__file__).resolve().parent / "custom_epsg.json"
+
+KNOWN_COUNTRIES = [
+    ("Suecia", "🇸🇪", ["sweden", "sverige", "sweref"]),
+    ("Colombia", "🇨🇴", ["colombia", "magna-sirgas", "magna"]),
+    ("España", "🇪🇸", ["spain", "españa", "canary", "canarias", "balearic", "etrs89 / utm zone 28", "etrs89 / utm zone 29", "etrs89 / utm zone 30", "etrs89 / utm zone 31", "etrs89 / utm 30n", "etrs89 / utm 29n", "etrs89 / utm 31n"]),
+    ("Australia", "🇦🇺", ["australia", "gda2020", "gda94", "mga zone"]),
+    ("México", "🇲🇽", ["mexico", "méxico", "itrf2008", "itrf92"]),
+    ("Chile", "🇨🇱", ["chile", "sirgas-chile"]),
+    ("Argentina", "🇦🇷", ["argentina", "posgar"]),
+    ("Perú", "🇵🇪", ["peru", "perú"]),
+    ("Estados Unidos", "🇺🇸", ["united states", "usa", "nad83"]),
+    ("Francia", "🇫🇷", ["france", "rgf93"]),
+    ("Alemania", "🇩🇪", ["germany", "deutschland", "dhdn"]),
+    ("Reino Unido", "🇬🇧", ["united kingdom", "ukcs", "great britain", "osgb"]),
+    ("Italia", "🇮🇹", ["italy", "italia"]),
+    ("Portugal", "🇵🇹", ["portugal", "azores", "madeira"]),
+    ("Noruega", "🇳🇴", ["norway", "svalbard"]),
+    ("Finlandia", "🇫🇮", ["finland"]),
+    ("Canadá", "🇨🇦", ["canada"]),
+    ("Brasil", "🇧🇷", ["brazil", "brasil"]),
+    ("Ecuador", "🇪🇨", ["ecuador"]),
+]
+
+
+def identify_zone_country(
+    rec_list: Optional[List[Dict[str, Any]]] = None,
+    centroid: Optional[Tuple[float, float]] = None,
+    shp_crs: Any = None
+) -> Optional[Dict[str, str]]:
+    """
+    Identifica de forma automática el país o zona geográfica donde caen las geometrías
+    cargadas (por coordenadas WGS84, recomendaciones espaciales o CRS oficial).
+    """
+    # 1. Por coordenadas geográficas del centroide (Longitud, Latitud)
+    if centroid:
+        lon, lat = centroid
+        if 55.0 <= lat <= 69.5 and 10.5 <= lon <= 24.5:
+            return {"name": "Suecia", "flag": "🇸🇪", "key": "sweden"}
+        elif -4.5 <= lat <= 13.5 and -80.0 <= lon <= -66.0:
+            return {"name": "Colombia", "flag": "🇨🇴", "key": "colombia"}
+        elif (35.0 <= lat <= 44.5 and -10.0 <= lon <= 5.0) or (27.0 <= lat <= 30.0 and -19.0 <= lon <= -13.0):
+            return {"name": "España", "flag": "🇪🇸", "key": "spain"}
+        elif -45.0 <= lat <= -9.0 and 110.0 <= lon <= 155.0:
+            return {"name": "Australia", "flag": "🇦🇺", "key": "australia"}
+        elif 14.0 <= lat <= 33.0 and -118.0 <= lon <= -86.0:
+            return {"name": "México", "flag": "🇲🇽", "key": "mexico"}
+        elif -56.0 <= lat <= -17.5 and -76.0 <= lon <= -66.0:
+            return {"name": "Chile", "flag": "🇨🇱", "key": "chile"}
+        elif -55.5 <= lat <= -21.5 and -74.0 <= lon <= -53.0:
+            return {"name": "Argentina", "flag": "🇦🇷", "key": "argentina"}
+        elif -18.5 <= lat <= 0.0 and -81.5 <= lon <= -68.5:
+            return {"name": "Perú", "flag": "🇵🇪", "key": "peru"}
+        elif 24.0 <= lat <= 50.0 and -125.0 <= lon <= -66.5:
+            return {"name": "Estados Unidos", "flag": "🇺🇸", "key": "united states"}
+
+    # 2. Por CRS del Shapefile (.prj) o recomendaciones geodésicas de coordenadas
+    check_texts = []
+    if shp_crs:
+        check_texts.append(getattr(shp_crs, "name", ""))
+        area_obj = getattr(shp_crs, "area_of_use", None)
+        if area_obj and getattr(area_obj, "name", None):
+            check_texts.append(area_obj.name)
+
+    if rec_list:
+        for r in rec_list[:3]:
+            check_texts.append(r.get("region", ""))
+            check_texts.append(r.get("name", ""))
+            try:
+                c = CRS.from_epsg(r["code"])
+                if c.area_of_use and c.area_of_use.name:
+                    check_texts.append(c.area_of_use.name)
+            except Exception:
+                pass
+
+    full_text = " ".join(check_texts).lower()
+    for name, flag, keys in KNOWN_COUNTRIES:
+        if any(k in full_text for k in keys):
+            return {"name": name, "flag": flag, "key": keys[0]}
+
+    # 3. Fallback genérico a cualquier país de la base de datos de PROJ
+    if rec_list:
+        try:
+            c = CRS.from_epsg(rec_list[0]["code"])
+            if c.area_of_use and c.area_of_use.name:
+                raw_country = c.area_of_use.name.split("-")[0].split(",")[0].split(";")[0].strip()
+                if len(raw_country) > 2 and raw_country not in ["World", "Global", "Europe"]:
+                    return {"name": raw_country, "flag": "📍", "key": raw_country.lower()}
+        except Exception:
+            pass
+
+    return None
+
 
 POPULAR_EPSG_PRESETS: List[Tuple[str, int]] = [
     ("🇪🇸 España - ETRS89 / UTM 30N (EPSG:25830)", 25830),
@@ -1227,11 +1353,13 @@ def extract_epsg_code(item: Any) -> Any:
 def get_epsg_dropdown_options(
     filter_mode: str = "🌐 Todos (7.200+)",
     active_code: Any = 25830,
-    custom_list: Optional[List[Dict[str, Any]]] = None
+    custom_list: Optional[List[Dict[str, Any]]] = None,
+    detected_country: Optional[Dict[str, str]] = None
 ) -> Tuple[List[str], int]:
     """
     Genera dinámicamente la lista de opciones para el desplegable de Streamlit según el
-    filtro seleccionado, garantizando que el código EPSG activo siempre esté presente y seleccionado.
+    filtro seleccionado, garantizando que si se detectó un país específico (ej. Suecia, Colombia, España),
+    el desplegable muestre prioritariamente los sistemas de ese país.
     """
     if custom_list is None:
         custom_list = []
@@ -1241,14 +1369,38 @@ def get_epsg_dropdown_options(
 
     options: List[str] = []
 
-    # 1. Proyecciones instaladas por el usuario (siempre destacadas al inicio)
+    # 1. Proyecciones instaladas por el usuario (siempre destacadas al inicio si aplican)
     for itm in custom_list:
         c_code = itm.get("code")
         c_alias = itm.get("alias", itm.get("name", ""))
         options.append(f"⭐ [Instalado] {c_alias} (EPSG:{c_code})")
 
-    # 2. Filtrado según categoría
-    if filter_mode == "🛠️ Instalados":
+    # 2. Filtrado por País / Zona Detectada (Ej: Suecia -> solo Suecia, Colombia -> solo Colombia)
+    if filter_mode.startswith("🎯") and detected_country:
+        country_key = detected_country["key"].lower()
+        country_name = detected_country["name"].lower()
+        all_crs = get_full_epsg_database()
+
+        # Primero, sistemas populares que pertenezcan a este país
+        matched_popular = set()
+        for lbl, code in POPULAR_EPSG_PRESETS:
+            lbl_lower = lbl.lower()
+            if any(k in lbl_lower for k in [country_name, country_key]):
+                options.append(lbl)
+                matched_popular.add(code)
+
+        # Luego, todos los sistemas oficiales del catálogo que correspondan a este país
+        for c in all_crs:
+            code_num = c["code"]
+            if code_num in matched_popular or code_num in installed_codes:
+                continue
+            area_lower = c["area"].lower()
+            name_lower = c["name"].lower()
+            if country_key in area_lower or country_key in name_lower or country_name in area_lower or country_name in name_lower:
+                area_disp = c["area"][:35] + "..." if len(c["area"]) > 35 else c["area"]
+                options.append(f"EPSG:{code_num} — {c['name']}" + (f" [{area_disp}]" if area_disp else ""))
+
+    elif filter_mode == "🛠️ Instalados":
         pass  # Solo las instaladas
     elif filter_mode == "⭐ Populares":
         for lbl, _ in POPULAR_EPSG_PRESETS:
@@ -2554,6 +2706,7 @@ def render_ui():
             val_code = str(new_code)
         st.session_state["active_epsg_code"] = val_code
         st.session_state["sidebar_epsg_input"] = str(val_code)
+        st.session_state["sidebar_epsg_num_search"] = str(val_code)
         if "sidebar_epsg_select_widget" in st.session_state:
             del st.session_state["sidebar_epsg_select_widget"]
         if isinstance(val_code, int) and val_code not in [25829, 25830, 25831, 32628]:
@@ -2578,48 +2731,87 @@ def render_ui():
     # Cargar sistemas EPSG instalados por el usuario
     custom_epsgs = load_custom_epsgs()
 
-    # Selector de vista / filtro rápido del catálogo
+    # Cargar zona geográfica detectada en el proyecto
+    detected_zone = st.session_state.get("detected_zone_country")
+
+    # Armar opciones del selector de píldoras dinámicamente
+    if detected_zone:
+        pill_detected_lbl = f"🎯 {detected_zone['flag']} {detected_zone['name']} (Zona detectada)"
+        pill_options = [pill_detected_lbl, "🌐 Todos (7.200+)", "⭐ Populares", "🛠️ Instalados"]
+        default_pill = pill_detected_lbl
+    else:
+        pill_options = ["🌐 Todos (7.200+)", "⭐ Populares", "🇪🇸 España", "🌎 Latam", "🛠️ Instalados"]
+        default_pill = "🌐 Todos (7.200+)"
+
+    if "epsg_view_mode" in st.session_state and st.session_state["epsg_view_mode"] not in pill_options:
+        st.session_state["epsg_view_mode"] = default_pill
+
     epsg_filter_view = st.sidebar.pills(
         "Filtro de visualización:",
-        options=["🌐 Todos (7.200+)", "⭐ Populares", "🇪🇸 España", "🌎 Latam", "🛠️ Instalados"],
-        default="🌐 Todos (7.200+)",
+        options=pill_options,
+        default=default_pill,
         key="epsg_view_mode",
-        help="Elige qué conjunto de sistemas EPSG desplegar en la lista (o explora los más de 7.200 códigos oficiales)."
+        help="Elige qué conjunto de sistemas EPSG desplegar. Se acota automáticamente al país detectado en tu plano o archivo."
     )
+
+    curr_active_code = st.session_state.get("active_epsg_code", 25830)
+
+    # Buscador directo por número EPSG
+    epsg_search_num = st.sidebar.text_input(
+        "🔍 Buscar por código EPSG (escribe el número):",
+        value=str(curr_active_code),
+        key="sidebar_epsg_num_search",
+        placeholder="Ej: 25830, 9377, 3006, 7855...",
+        help="Escribe directamente el número del código EPSG (ej: 25830, 9377, 3006, 7855) y pulsa Enter para buscarlo y activarlo al instante."
+    ).strip().upper().replace("EPSG:", "").strip()
+
+    if epsg_search_num and epsg_search_num.isdigit():
+        num_code = int(epsg_search_num)
+        if num_code != curr_active_code:
+            try:
+                _ = CRS.from_epsg(num_code)
+                st.session_state["active_epsg_code"] = num_code
+                if num_code not in [25829, 25830, 25831, 32628]:
+                    st.session_state["selected_service_idx"] = 0
+                if "sidebar_epsg_select_widget" in st.session_state:
+                    del st.session_state["sidebar_epsg_select_widget"]
+                st.rerun()
+            except Exception:
+                st.sidebar.warning(f"⚠️ El código EPSG:{num_code} no existe en la base de datos oficial.")
 
     curr_active_code = st.session_state.get("active_epsg_code", 25830)
     epsg_options, default_epsg_idx = get_epsg_dropdown_options(
         filter_mode=epsg_filter_view,
         active_code=curr_active_code,
-        custom_list=custom_epsgs
+        custom_list=custom_epsgs,
+        detected_country=detected_zone
     )
 
+    if detected_zone and epsg_filter_view.startswith("🎯"):
+        st.sidebar.markdown(f"""
+        <div style="background: rgba(14, 165, 233, 0.12); border: 1px solid #0284c7; border-radius: 8px; padding: 7px 11px; margin-top: 4px; margin-bottom: 8px;">
+            <div style="color: #38bdf8; font-weight: 700; font-size: 12px;">🎯 Zona detectada: {detected_zone['flag']} {detected_zone['name']}</div>
+            <div style="color: #94a3b8; font-size: 11px; margin-top: 2px;">Mostrando en el desplegable únicamente los <b>{len(epsg_options)} sistemas oficiales</b> de {detected_zone['name']}.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Lista desplegable completa de Sistemas de Coordenadas
     selected_epsg_item = st.sidebar.selectbox(
-        "Sistema de Coordenadas (EPSG):",
+        "📋 O selecciona de la lista desplegable:",
         options=epsg_options,
         index=default_epsg_idx,
         key="sidebar_epsg_select_widget",
-        accept_new_options=True,
-        help="Desplegable con todos los códigos EPSG mundiales. Escribe el número o país para filtrar al instante, o ingresa un código nuevo y pulsa Enter."
+        help="Desplegable con todos los sistemas EPSG oficiales. Puedes abrirlo para explorar o buscar por nombre."
     )
 
-    # Procesar selección
+    # Procesar selección de la lista desplegable
     parsed_code = extract_epsg_code(selected_epsg_item)
     if parsed_code is not None and str(parsed_code) != str(curr_active_code):
-        # Si fue introducido manualmente y no existía en las opciones
-        if selected_epsg_item not in epsg_options:
-            ok, msg, entry = save_custom_epsg_entry(parsed_code)
-            if ok:
-                st.session_state["active_epsg_code"] = entry["code"]
-                st.toast(f"✅ EPSG:{entry['code']} instalado y activado")
-                st.rerun()
-            else:
-                st.sidebar.error(f"⚠️ {msg}")
-        else:
-            st.session_state["active_epsg_code"] = parsed_code
-            if isinstance(parsed_code, int) and parsed_code not in [25829, 25830, 25831, 32628]:
-                st.session_state["selected_service_idx"] = 0
-            st.rerun()
+        st.session_state["active_epsg_code"] = parsed_code
+        st.session_state["sidebar_epsg_num_search"] = str(parsed_code)
+        if isinstance(parsed_code, int) and parsed_code not in [25829, 25830, 25831, 32628]:
+            st.session_state["selected_service_idx"] = 0
+        st.rerun()
 
     epsg_code = st.session_state.get("active_epsg_code", 25830)
     crs_str = f"EPSG:{epsg_code}" if str(epsg_code).isdigit() else str(epsg_code)
@@ -2902,9 +3094,9 @@ def render_ui():
     with col_demo:
         st.write("")
         st.markdown("<b style='font-size: 13px; color: #94a3b8;'>⚡ Acciones rápidas:</b>", unsafe_allow_html=True)
-        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+        col_d1, col_d2, col_d3, col_d4, col_d5, col_d6 = st.columns(6)
         with col_d1:
-            if st.button("📍 Mi GPS", help="Centra el mapa en la ubicación GPS de tu navegador", width="stretch"):
+            if st.button("📍 GPS", help="Centra el mapa en la ubicación GPS de tu navegador", width="stretch"):
                 st.session_state["locate_trigger"] = True
                 st.session_state["draw_only_mode"] = True
                 st.session_state["demo_active"] = False
@@ -2916,17 +3108,39 @@ def render_ui():
                 st.session_state["demo_active"] = False
                 st.session_state["processed_zip_data"] = None
         with col_d3:
-            if st.button("🇪🇸 Madrid", help="Genera plano DXF demo en Madrid (EPSG:25830)", width="stretch"):
+            if st.button("🇪🇸 Madrid", help="Genera plano demo en Madrid (EPSG:25830)", width="stretch"):
                 st.session_state["demo_active"] = "madrid"
                 st.session_state["draw_only_mode"] = False
                 st.session_state["pending_epsg_code"] = 25830
+                st.session_state["detected_zone_country"] = {"name": "España", "flag": "🇪🇸", "key": "spain"}
+                st.session_state["epsg_view_mode"] = "🎯 🇪🇸 España (Zona detectada)"
                 st.session_state["processed_zip_data"] = None
                 st.rerun()
         with col_d4:
-            if st.button("🇦🇺 Australia", help="Genera plano DXF demo en Melbourne (EPSG:7855)", width="stretch"):
+            if st.button("🇨🇴 Colombia", help="Genera plano demo en Bogotá (EPSG:9377)", width="stretch"):
+                st.session_state["demo_active"] = "colombia"
+                st.session_state["draw_only_mode"] = False
+                st.session_state["pending_epsg_code"] = 9377
+                st.session_state["detected_zone_country"] = {"name": "Colombia", "flag": "🇨🇴", "key": "colombia"}
+                st.session_state["epsg_view_mode"] = "🎯 🇨🇴 Colombia (Zona detectada)"
+                st.session_state["processed_zip_data"] = None
+                st.rerun()
+        with col_d5:
+            if st.button("🇸🇪 Suecia", help="Genera plano demo en Estocolmo (EPSG:3006)", width="stretch"):
+                st.session_state["demo_active"] = "suecia"
+                st.session_state["draw_only_mode"] = False
+                st.session_state["pending_epsg_code"] = 3006
+                st.session_state["detected_zone_country"] = {"name": "Suecia", "flag": "🇸🇪", "key": "sweden"}
+                st.session_state["epsg_view_mode"] = "🎯 🇸🇪 Suecia (Zona detectada)"
+                st.session_state["processed_zip_data"] = None
+                st.rerun()
+        with col_d6:
+            if st.button("🇦🇺 Australia", help="Genera plano demo en Melbourne (EPSG:7855)", width="stretch"):
                 st.session_state["demo_active"] = "australia"
                 st.session_state["draw_only_mode"] = False
                 st.session_state["pending_epsg_code"] = 7855
+                st.session_state["detected_zone_country"] = {"name": "Australia", "flag": "🇦🇺", "key": "australia"}
+                st.session_state["epsg_view_mode"] = "🎯 🇦🇺 Australia (Zona detectada)"
                 st.session_state["processed_zip_data"] = None
                 st.rerun()
 
@@ -3014,6 +3228,38 @@ def render_ui():
             dxf_bytes = out_str.getvalue().encode("utf-8")
             dxf_display_name = "demo_melbourne_australia.dxf"
             st.info("💡 Modo de demostración activo: Plano con 2 geometrías en Melbourne, Australia.")
+        elif demo_mode == "suecia":
+            demo_doc = ezdxf.new("R2010")
+            demo_msp = demo_doc.modelspace()
+            p1 = [(674000, 6580700), (674120, 6580700), (674120, 6580850), (674000, 6580850)]
+            poly1 = demo_msp.add_lwpolyline(p1, close=True)
+            poly1.dxf.layer = "PARCELA_ESTOCOLMO"
+
+            p2 = [(674300, 6581100), (674480, 6581100), (674480, 6581250), (674300, 6581250)]
+            poly2 = demo_msp.add_lwpolyline(p2, close=True)
+            poly2.dxf.layer = "AMBITO_OBRA_SWEREF99"
+
+            out_str = io.StringIO()
+            demo_doc.write(out_str)
+            dxf_bytes = out_str.getvalue().encode("utf-8")
+            dxf_display_name = "demo_estocolmo_suecia.dxf"
+            st.info("💡 Modo de demostración activo: Plano con 2 geometrías en Estocolmo, Suecia (EPSG:3006 SWEREF99 TM).")
+        elif demo_mode == "colombia":
+            demo_doc = ezdxf.new("R2010")
+            demo_msp = demo_doc.modelspace()
+            p1 = [(4882000, 2065000), (4882120, 2065000), (4882120, 2065150), (4882000, 2065150)]
+            poly1 = demo_msp.add_lwpolyline(p1, close=True)
+            poly1.dxf.layer = "PARCELA_BOGOTA"
+
+            p2 = [(4882300, 2065300), (4882450, 2065300), (4882450, 2065450), (4882300, 2065450)]
+            poly2 = demo_msp.add_lwpolyline(p2, close=True)
+            poly2.dxf.layer = "AMBITO_OBRA_MAGNA"
+
+            out_str = io.StringIO()
+            demo_doc.write(out_str)
+            dxf_bytes = out_str.getvalue().encode("utf-8")
+            dxf_display_name = "demo_bogota_colombia.dxf"
+            st.info("💡 Modo de demostración activo: Plano con 2 geometrías en Bogotá, Colombia (EPSG:9377 MAGNA-SIRGAS Origen Nacional).")
         else:
             demo_doc = ezdxf.new("R2010")
             demo_msp = demo_doc.modelspace()
@@ -3054,108 +3300,6 @@ def render_ui():
     extracted_polygons = file_polygons + drawn_polys
     if not dxf_display_name:
         dxf_display_name = "trazado_mapa.dxf" if drawn_polys else "proyecto.dxf"
-
-    # ----------------------------------------------------------------------------------
-    # RECOMENDACIÓN INTELIGENTE DE PROYECCIÓN CARTOGRÁFICA (CRS / EPSG)
-    # ----------------------------------------------------------------------------------
-    rec_crs_list: List[Dict[str, Any]] = []
-    if kml_centroid is not None:
-        rec_crs_list = detect_epsg_from_lonlat(kml_centroid[0], kml_centroid[1])
-    elif persisted_drawings and not file_polygons:
-        all_draw_lons: List[float] = []
-        all_draw_lats: List[float] = []
-        for d in persisted_drawings:
-            coords = d.get("geometry", {}).get("coordinates", [])
-            def _extract_c(c_arr):
-                for item in c_arr:
-                    if isinstance(item, (list, tuple)) and len(item) >= 2 and isinstance(item[0], (int, float)):
-                        all_draw_lons.append(float(item[0]))
-                        all_draw_lats.append(float(item[1]))
-                    elif isinstance(item, (list, tuple)):
-                        _extract_c(item)
-            _extract_c(coords)
-        if all_draw_lons and all_draw_lats:
-            rec_crs_list = detect_epsg_from_lonlat(
-                sum(all_draw_lons) / len(all_draw_lons),
-                sum(all_draw_lats) / len(all_draw_lats)
-            )
-    elif file_polygons:
-        all_minx = min(p["bounds"][0] for p in file_polygons)
-        all_miny = min(p["bounds"][1] for p in file_polygons)
-        all_maxx = min(p["bounds"][2] for p in file_polygons)
-        all_maxy = min(p["bounds"][3] for p in file_polygons)
-        total_bounds = (all_minx, all_miny, all_maxx, all_maxy)
-        layers_found = list(set(p["capa"] for p in file_polygons))
-        rec_crs_list = detect_recommended_epsg(total_bounds, layer_names=layers_found, raw_text=raw_dxf_snippet)
-
-    if rec_crs_list:
-        top_rec = rec_crs_list[0]
-        if epsg_code == top_rec["code"]:
-            st.markdown(f"""
-            <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid #059669; border-radius: 10px; padding: 12px 16px; margin: 12px 0 16px 0;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 18px;">✅</span>
-                    <div style="color: #10b981; font-weight: 700; font-size: 14px;">
-                        Proyección Activa Verificada: Coincide con EPSG:{epsg_code} ({top_rec['name']})
-                    </div>
-                </div>
-                <div style="color: #cbd5e1; font-size: 12px; margin-top: 3px; padding-left: 26px;">
-                    📍 <b>Ámbito:</b> {top_rec['region']} &mdash; <i>{top_rec['reason']}</i>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
-                        border: 2px solid #38bdf8; border-radius: 12px; padding: 16px 20px; margin: 12px 0 16px 0;
-                        box-shadow: 0 8px 24px rgba(56, 189, 248, 0.18);">
-                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <span style="font-size: 22px;">💡</span>
-                        <span style="color: #38bdf8; font-size: 1.15rem; font-weight: 700;">
-                            Sugerencia Inteligente de Coordenadas: ¿Tu plano es EPSG:{top_rec['code']}?
-                        </span>
-                    </div>
-                    <span style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.4);">
-                        Confianza {top_rec['confidence']}
-                    </span>
-                </div>
-                <div style="color: #f1f5f9; font-size: 0.95rem; font-weight: 600; margin-bottom: 4px;">
-                    🎯 <b>{top_rec['name']}</b> &mdash; <span style="color: #94a3b8; font-weight: 400;">{top_rec['region']}</span>
-                </div>
-                <div style="color: #cbd5e1; font-size: 0.88rem; margin-bottom: 12px; line-height: 1.4;">
-                    {top_rec['reason']} Actualmente tienes seleccionada en la barra lateral la proyección <b>{crs_str}</b>.
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            c_btn_top, c_btn_alts = st.columns([1.6, 2.4])
-            with c_btn_top:
-                btn_label = f"✨ Aplicar recomendada: EPSG:{top_rec['code']}"
-                if st.button(btn_label, type="primary", width="stretch", key=f"btn_apply_{top_rec['code']}"):
-                    st.session_state["pending_epsg_code"] = top_rec["code"]
-                    st.rerun()
-
-            with c_btn_alts:
-                if len(rec_crs_list) > 1:
-                    alts = rec_crs_list[1:3]
-                    alt_cols = st.columns(len(alts))
-                    for i, alt in enumerate(alts):
-                        with alt_cols[i]:
-                            alt_name_short = alt['name'].split('(')[0].replace("GDA2020 / ", "").replace("ETRS89 / ", "").strip()
-                            if st.button(f"Probar EPSG:{alt['code']} ({alt_name_short})", width="stretch", key=f"btn_alt_{alt['code']}", help=f"{alt['name']} - {alt['region']}"):
-                                st.session_state["pending_epsg_code"] = alt["code"]
-                                st.rerun()
-
-            if len(rec_crs_list) > 3 or any("alt_code" in r for r in rec_crs_list):
-                with st.expander("🔍 Ver otras opciones geodésicas detectadas (ej. GDA94 / Husos secundarios)", expanded=False):
-                    for r in rec_crs_list:
-                        if "alt_code" in r:
-                            c_a1, c_a2 = st.columns([3, 1])
-                            c_a1.write(f"**{r['alt_name']}** &mdash; {r['region']}")
-                            if c_a2.button(f"Aplicar EPSG:{r['alt_code']}", key=f"btn_apply_alt_{r['alt_code']}", width="stretch"):
-                                st.session_state["pending_epsg_code"] = r["alt_code"]
-                                st.rerun()
 
     # ----------------------------------------------------------------------------------
     # VISOR CARTOGRÁFICO INTERACTIVO Y HERRAMIENTA DE TRAZADO
