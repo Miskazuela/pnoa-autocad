@@ -3,13 +3,34 @@
 Aplicación web desarrollada en **Streamlit** para automatizar la extracción y georreferenciación milimétrica para AutoCAD de **cualquier servidor WMS del mundo**, Google Satélite, Esri y servicios oficiales a partir de polilíneas cerradas de planos CAD (**DXF**), capas GIS Shapefile (**ZIP**), Google Earth (**KML/KMZ**) o polígonos dibujados a mano alzada en el mapa.
 
 Permite descargar e insertar en **AutoCAD, AutoCAD Map 3D, Civil 3D y BricsCAD**:
-- **🌍 Google Satélite (Mundial)**: Fotografía satelital mundial de máxima resolución de Google sin rótulos.
-- **🌍 Google Híbrido (Mundial)**: Satélite de Google con carreteras, calles principales y toponimia sobreimpresas.
-- **🛰️ Esri World Imagery (Mundial)**: Ortofotografía satelital global de alta resolución de Esri.
-- **⚙️ Servidor WMS Universal**: Conexión a cualquier servicio WMS 1.3.0 o 1.1.1 oficial del mundo (Australia, Europa, América, etc.).
-- **🇪🇸 Ortofoto Aérea PNOA (IGN)**: Fotografías aéreas y satelitales oficiales de España de máxima nitidez.
-- **🗺️ Mapa Ráster IGN (MTN25 / MTN50 Topográfico)**: Cartografía topográfica oficial con curvas de nivel, toponimia y altitudes.
-- **🏔️ Modelo Digital del Terreno - Relieve (MDT / LiDAR)**: Sombreado continuo de pendientes y relieve.
+- **⚙️ Agregar WMS externo**: Conexión directa a cualquier servidor WMS del mundo.
+- **Camino de Santiago**: Trazados oficiales del Camino de Santiago (IGN).
+- **Cartografía raster (MTN Topográfico - IGN)**: Mapa ráster MTN25/MTN50 oficial con curvas de nivel y toponimia.
+- **Cuadrículas cartográficas**: Hojas y cuadrículas MTN oficiales del IGN.
+- **Direcciones y Códigos Postales**: Callejero y códigos postales de CartoCiudad (IGN).
+- **Esri World Imagery (Mundial - Alta Resolución)**: Satélite global de alta resolución.
+- **Fototeca (Vuelos históricos IGN)**: Vuelos históricos de España (años 30, 40, vuelo americano 1956).
+- **Google Híbrido (Mundial)**: Satélite con vías y toponimia sobreimpresas.
+- **Google Satélite (Mundial - Máxima Resolución)**: Fotografía satelital mundial nítida.
+- **Hidrografía - Información Geográfica de Referencia**: Red hidrográfica y masas de agua oficiales.
+- **Hojas kilométricas (Madrid - 1860)**: Cartografía histórica parcelaria de Madrid y alrededores (1860).
+- **Información sísmica (IGN)**: Epicentros de terremotos y sismicidad histórica y en tiempo real.
+- **Mapa base (IGN Base)**: Cartografía continua integrada oficial de España.
+- **Modelo Digital de Pendientes (MDP05)**: Mapa ráster de pendientes e inclinación del terreno.
+- **Modelos Digitales del Terreno (Relieve LiDAR - IGN)**: Sombreado continuo de relieve LiDAR/MDT.
+- **Mosaicos de Satélite históricos de España (Sentinel)**: Mosaicos multiespectrales estacionales Sentinel-2.
+- **Nombres Geográficos (NGBE - IGN)**: Nomenclátor oficial y toponimia normalizada.
+- **Ocupación de Suelo histórico (CORINE)**: Series históricas CORINE Land Cover y SIOSE.
+- **Ocupación del Suelo (SIOSE)**: Coberturas y usos del suelo actuales.
+- **Ortofotos históricas y PNOA anual**: Campañas aéreas ortofotográficas de años anteriores.
+- **Ortofotos máxima actualidad del PNOA**: Vuelo ortofotográfico oficial de máxima resolución de España.
+- **Ortofotos provisionales del PNOA**: Ortoimágenes rápidas provisionales y de emergencia.
+- **Planimetrías (Minutas cartográficas)**: Planimetrías y altimetrías manuscritas del siglo XIX y principios del XX.
+- **Primera edición MTN**: Primera edición histórica impresa del Mapa Topográfico Nacional.
+- **Red de Transporte - IGR**: Redes viarias, ferroviarias y marítimo-aéreas oficiales.
+- **Red de Vigilancia Volcánica del IGN**: Estaciones de vigilancia y monitoreo volcánico.
+- **Redes geodésicas (IGN)**: Vértices geodésicos REGENTE, ROI, nivelación REDNAP y GNSS.
+- **Unidades administrativas**: Límites oficiales de municipios, provincias y comunidades autónomas.
 
 Genera directamente para cada polígono los archivos estándar:
 - `.tif`: Imagen raster descargada del servicio en máxima resolución y nitidez nativa.
