@@ -357,20 +357,35 @@ def detect_epsg_from_lonlat(lon: float, lat: float) -> List[Dict[str, Any]]:
 
     # 2. Colombia
     if -4.5 <= lat <= 13.5 and -80.0 <= lon <= -66.0:
-        recommendations.append({
-            "code": 9377,
-            "name": "MAGNA-SIRGAS / Origen Nacional (EPSG:9377)",
-            "region": "🇨🇴 Colombia (Proyección Oficial Nacional)",
-            "reason": "Ubicación geográfica dentro del territorio de Colombia.",
-            "confidence": "Muy Alta"
-        })
         if 4.0 <= lat <= 5.5 and -75.0 <= lon <= -73.5:
             recommendations.append({
                 "code": 3116,
                 "name": "MAGNA-SIRGAS / Colombia Bogota zone (EPSG:3116)",
                 "region": "🇨🇴 Colombia (Bogotá D.C. / Cundinamarca)",
-                "reason": "Zona central de Bogotá D.C. y Sabana de Bogotá.",
+                "reason": f"Ubicación geográfica detectada en Bogotá D.C. / Sabana de Bogotá (Lat: {lat:.4f}°, Lon: {lon:.4f}°).",
+                "confidence": "Muy Alta"
+            })
+            recommendations.append({
+                "code": 9377,
+                "name": "MAGNA-SIRGAS / Origen Nacional (EPSG:9377)",
+                "region": "🇨🇴 Colombia (Proyección Oficial Nacional)",
+                "reason": "Sistema nacional oficial único de Colombia.",
                 "confidence": "Alta"
+            })
+        else:
+            recommendations.append({
+                "code": 9377,
+                "name": "MAGNA-SIRGAS / Origen Nacional (EPSG:9377)",
+                "region": "🇨🇴 Colombia (Proyección Oficial Nacional)",
+                "reason": f"Ubicación geográfica detectada en Colombia (Lat: {lat:.4f}°, Lon: {lon:.4f}°).",
+                "confidence": "Muy Alta"
+            })
+            recommendations.append({
+                "code": 3116,
+                "name": "MAGNA-SIRGAS / Colombia Bogota zone (EPSG:3116)",
+                "region": "🇨🇴 Colombia (Bogotá D.C. / Cundinamarca)",
+                "reason": "Zona central de Bogotá D.C. y Cundinamarca.",
+                "confidence": "Media"
             })
 
     # 3. Australia
@@ -874,9 +889,31 @@ def detect_recommended_epsg(
                 explicit_codes.append(28300 + zone) # GDA94
 
     # Patrón SWEREF / Suecia
-    if any(w in search_corpus_upper for w in ["SWEREF", "SWEDEN", "SVERIGE"]):
+    if any(w in search_corpus_upper for w in ["SWEREF", "SWEDEN", "SVERIGE", "STOCKHOLM", "ESTOCOLMO", "GOTEBORG", "MALMO"]):
         if 3006 not in explicit_codes:
             explicit_codes.append(3006)
+
+    # Patrón Colombia / Bogotá
+    if any(w in search_corpus_upper for w in ["BOGOTA", "BOGOTÁ", "CUNDINAMARCA"]):
+        if 3116 not in explicit_codes:
+            explicit_codes.append(3116)
+    if any(w in search_corpus_upper for w in ["MAGNA", "COLOMBIA", "ORIGEN NACIONAL", "ORIGEN-NACIONAL", "SIRGAS"]):
+        if 9377 not in explicit_codes:
+            explicit_codes.append(9377)
+
+    # Patrón España Peninsular
+    if any(w in search_corpus_upper for w in ["MADRID", "ESPAÑA", "ESPANA", "ETRS89", "PNOA"]):
+        if 25830 not in explicit_codes:
+            explicit_codes.append(25830)
+
+    # Patrón Australia
+    if any(w in search_corpus_upper for w in ["AUSTRALIA", "MELBOURNE", "SYDNEY", "BRISBANE", "PERTH", "GDA2020", "GDA94"]):
+        if 7855 not in explicit_codes and "MELBOURNE" in search_corpus_upper:
+            explicit_codes.append(7855)
+        elif 7856 not in explicit_codes and any(k in search_corpus_upper for k in ["SYDNEY", "BRISBANE"]):
+            explicit_codes.append(7856)
+        elif 7855 not in explicit_codes:
+            explicit_codes.append(7855)
 
     # Patrón UTM zone (ej: UTM 30N, UTM30, UTM 55S)
     for m in re.finditer(r"\bUTM[_\-\s]*(\d{1,2})\s*([NSns]?)\b", search_corpus_upper):
@@ -2719,6 +2756,43 @@ def render_ui():
         st.session_state["active_epsg_code"] = 25830
     if "sidebar_epsg_input" not in st.session_state:
         st.session_state["sidebar_epsg_input"] = str(st.session_state["active_epsg_code"])
+    if "sidebar_epsg_num_search" not in st.session_state:
+        st.session_state["sidebar_epsg_num_search"] = str(st.session_state["active_epsg_code"])
+
+    # Callbacks de sincronización bidireccional segura para los widgets de coordenadas
+    def _on_sidebar_epsg_num_search_change():
+        raw_val = st.session_state.get("sidebar_epsg_num_search", "").strip().upper().replace("EPSG:", "").strip()
+        if raw_val.isdigit():
+            num_code = int(raw_val)
+            try:
+                _ = CRS.from_epsg(num_code)
+                st.session_state["active_epsg_code"] = num_code
+                if num_code not in [25829, 25830, 25831, 32628]:
+                    st.session_state["selected_service_idx"] = 0
+                if "sidebar_epsg_select_widget" in st.session_state:
+                    del st.session_state["sidebar_epsg_select_widget"]
+                st.session_state["sidebar_epsg_search_error"] = None
+            except Exception:
+                st.session_state["sidebar_epsg_search_error"] = f"⚠️ El código EPSG:{num_code} no existe en la base de datos oficial."
+        elif raw_val:
+            st.session_state["sidebar_epsg_search_error"] = f"⚠️ '{raw_val}' no es un código numérico EPSG válido."
+        else:
+            st.session_state["sidebar_epsg_search_error"] = None
+
+    def _on_sidebar_epsg_select_change():
+        selected_item = st.session_state.get("sidebar_epsg_select_widget")
+        if selected_item:
+            parsed_code = extract_epsg_code(selected_item)
+            if parsed_code is not None:
+                st.session_state["active_epsg_code"] = parsed_code
+                st.session_state["sidebar_epsg_num_search"] = str(parsed_code)
+                st.session_state["sidebar_epsg_search_error"] = None
+                if isinstance(parsed_code, int) and parsed_code not in [25829, 25830, 25831, 32628]:
+                    st.session_state["selected_service_idx"] = 0
+
+    def _on_epsg_view_mode_change():
+        if "sidebar_epsg_select_widget" in st.session_state:
+            del st.session_state["sidebar_epsg_select_widget"]
 
     # ----------------------------------------------------------------------------------
     # BARRA LATERAL (SIDEBAR): CONFIGURACIÓN GLOBAL
@@ -2751,7 +2825,8 @@ def render_ui():
         options=pill_options,
         default=default_pill,
         key="epsg_view_mode",
-        help="Elige qué conjunto de sistemas EPSG desplegar. Se acota automáticamente al país detectado en tu plano o archivo."
+        help="Elige qué conjunto de sistemas EPSG desplegar. Se acota automáticamente al país detectado en tu plano o archivo.",
+        on_change=_on_epsg_view_mode_change
     )
 
     curr_active_code = st.session_state.get("active_epsg_code", 25830)
@@ -2759,25 +2834,14 @@ def render_ui():
     # Buscador directo por número EPSG
     epsg_search_num = st.sidebar.text_input(
         "🔍 Buscar por código EPSG (escribe el número):",
-        value=str(curr_active_code),
         key="sidebar_epsg_num_search",
         placeholder="Ej: 25830, 9377, 3006, 7855...",
-        help="Escribe directamente el número del código EPSG (ej: 25830, 9377, 3006, 7855) y pulsa Enter para buscarlo y activarlo al instante."
-    ).strip().upper().replace("EPSG:", "").strip()
+        help="Escribe directamente el número del código EPSG (ej: 25830, 9377, 3006, 7855) y pulsa Enter para buscarlo y activarlo al instante.",
+        on_change=_on_sidebar_epsg_num_search_change
+    )
 
-    if epsg_search_num and epsg_search_num.isdigit():
-        num_code = int(epsg_search_num)
-        if num_code != curr_active_code:
-            try:
-                _ = CRS.from_epsg(num_code)
-                st.session_state["active_epsg_code"] = num_code
-                if num_code not in [25829, 25830, 25831, 32628]:
-                    st.session_state["selected_service_idx"] = 0
-                if "sidebar_epsg_select_widget" in st.session_state:
-                    del st.session_state["sidebar_epsg_select_widget"]
-                st.rerun()
-            except Exception:
-                st.sidebar.warning(f"⚠️ El código EPSG:{num_code} no existe en la base de datos oficial.")
+    if st.session_state.get("sidebar_epsg_search_error"):
+        st.sidebar.warning(st.session_state["sidebar_epsg_search_error"])
 
     curr_active_code = st.session_state.get("active_epsg_code", 25830)
     epsg_options, default_epsg_idx = get_epsg_dropdown_options(
@@ -2801,17 +2865,9 @@ def render_ui():
         options=epsg_options,
         index=default_epsg_idx,
         key="sidebar_epsg_select_widget",
-        help="Desplegable con todos los sistemas EPSG oficiales. Puedes abrirlo para explorar o buscar por nombre."
+        help="Desplegable con todos los sistemas EPSG oficiales. Puedes abrirlo para explorar o buscar por nombre.",
+        on_change=_on_sidebar_epsg_select_change
     )
-
-    # Procesar selección de la lista desplegable
-    parsed_code = extract_epsg_code(selected_epsg_item)
-    if parsed_code is not None and str(parsed_code) != str(curr_active_code):
-        st.session_state["active_epsg_code"] = parsed_code
-        st.session_state["sidebar_epsg_num_search"] = str(parsed_code)
-        if isinstance(parsed_code, int) and parsed_code not in [25829, 25830, 25831, 32628]:
-            st.session_state["selected_service_idx"] = 0
-        st.rerun()
 
     epsg_code = st.session_state.get("active_epsg_code", 25830)
     crs_str = f"EPSG:{epsg_code}" if str(epsg_code).isdigit() else str(epsg_code)
@@ -3080,69 +3136,13 @@ def render_ui():
         st.session_state["is_vector_exportable"] = False
 
     # ----------------------------------------------------------------------------------
-    # CARGA DE ARCHIVO (DXF / KML / KMZ) Y ACCIONES RÁPIDAS
+    # CARGA DE ARCHIVO (DXF / SHAPEFILE / KML / KMZ)
     # ----------------------------------------------------------------------------------
-    col_up, col_demo = st.columns([2.5, 1.6])
-
-    with col_up:
-        uploaded_file = st.file_uploader(
-            "📁 Carga tu plano AutoCAD (.dxf), Shapefile (.zip) o Google Earth (.kml / .kmz):",
-            type=["dxf", "kml", "kmz", "zip"],
-            help="Sube un archivo DXF con polilíneas cerradas, un archivo Shapefile comprimido en .ZIP (con .shp, .shx, .dbf, .prj), o un archivo KML / KMZ exportado desde Google Earth."
-        )
-
-    with col_demo:
-        st.write("")
-        st.markdown("<b style='font-size: 13px; color: #94a3b8;'>⚡ Acciones rápidas:</b>", unsafe_allow_html=True)
-        col_d1, col_d2, col_d3, col_d4, col_d5, col_d6 = st.columns(6)
-        with col_d1:
-            if st.button("📍 GPS", help="Centra el mapa en la ubicación GPS de tu navegador", width="stretch"):
-                st.session_state["locate_trigger"] = True
-                st.session_state["draw_only_mode"] = True
-                st.session_state["demo_active"] = False
-                st.session_state["processed_zip_data"] = None
-                st.rerun()
-        with col_d2:
-            if st.button("✏️ Dibujar", help="Abre el visor para trazar polígonos directamente sin archivo", width="stretch"):
-                st.session_state["draw_only_mode"] = True
-                st.session_state["demo_active"] = False
-                st.session_state["processed_zip_data"] = None
-        with col_d3:
-            if st.button("🇪🇸 Madrid", help="Genera plano demo en Madrid (EPSG:25830)", width="stretch"):
-                st.session_state["demo_active"] = "madrid"
-                st.session_state["draw_only_mode"] = False
-                st.session_state["pending_epsg_code"] = 25830
-                st.session_state["detected_zone_country"] = {"name": "España", "flag": "🇪🇸", "key": "spain"}
-                st.session_state["epsg_view_mode"] = "🎯 🇪🇸 España (Zona detectada)"
-                st.session_state["processed_zip_data"] = None
-                st.rerun()
-        with col_d4:
-            if st.button("🇨🇴 Colombia", help="Genera plano demo en Bogotá (EPSG:9377)", width="stretch"):
-                st.session_state["demo_active"] = "colombia"
-                st.session_state["draw_only_mode"] = False
-                st.session_state["pending_epsg_code"] = 9377
-                st.session_state["detected_zone_country"] = {"name": "Colombia", "flag": "🇨🇴", "key": "colombia"}
-                st.session_state["epsg_view_mode"] = "🎯 🇨🇴 Colombia (Zona detectada)"
-                st.session_state["processed_zip_data"] = None
-                st.rerun()
-        with col_d5:
-            if st.button("🇸🇪 Suecia", help="Genera plano demo en Estocolmo (EPSG:3006)", width="stretch"):
-                st.session_state["demo_active"] = "suecia"
-                st.session_state["draw_only_mode"] = False
-                st.session_state["pending_epsg_code"] = 3006
-                st.session_state["detected_zone_country"] = {"name": "Suecia", "flag": "🇸🇪", "key": "sweden"}
-                st.session_state["epsg_view_mode"] = "🎯 🇸🇪 Suecia (Zona detectada)"
-                st.session_state["processed_zip_data"] = None
-                st.rerun()
-        with col_d6:
-            if st.button("🇦🇺 Australia", help="Genera plano demo en Melbourne (EPSG:7855)", width="stretch"):
-                st.session_state["demo_active"] = "australia"
-                st.session_state["draw_only_mode"] = False
-                st.session_state["pending_epsg_code"] = 7855
-                st.session_state["detected_zone_country"] = {"name": "Australia", "flag": "🇦🇺", "key": "australia"}
-                st.session_state["epsg_view_mode"] = "🎯 🇦🇺 Australia (Zona detectada)"
-                st.session_state["processed_zip_data"] = None
-                st.rerun()
+    uploaded_file = st.file_uploader(
+        "📁 Carga tu plano AutoCAD (.dxf), Shapefile (.zip) o Google Earth (.kml / .kmz):",
+        type=["dxf", "kml", "kmz", "zip"],
+        help="Sube un archivo DXF con polilíneas cerradas, un archivo Shapefile comprimido en .ZIP (con .shp, .shx, .dbf, .prj), o un archivo KML / KMZ exportado desde Google Earth."
+    )
 
     file_polygons: List[Dict[str, Any]] = []
     dxf_display_name = ""
@@ -3152,12 +3152,14 @@ def render_ui():
     dxf_bytes = None
 
     if uploaded_file is not None:
-        st.session_state["demo_active"] = False
-        st.session_state["draw_only_mode"] = False
         filename = uploaded_file.name
         ext = os.path.splitext(filename)[1].lower()
         file_bytes = uploaded_file.getvalue()
         dxf_display_name = filename
+        file_signature = f"{filename}_{len(file_bytes)}"
+
+        auto_detected_code = None
+        auto_detected_zone = None
 
         try:
             if ext == ".zip":
@@ -3172,17 +3174,12 @@ def render_ui():
                 elif detected_shp_crs is not None:
                     shp_epsg = detected_shp_crs.to_epsg()
                     crs_info_name = detected_shp_crs.name
-                    if shp_epsg and str(shp_epsg) != crs_str.replace("EPSG:", ""):
-                        st.info(
-                            f"🧭 **Proyección oficial del Shapefile detectada:** `{crs_info_name}` (EPSG:{shp_epsg}).\n\n"
-                            f"Las geometrías vienen georreferenciadas en **EPSG:{shp_epsg}**. "
-                            f"Haz clic en el siguiente botón para sincronizar el plano al instante:"
-                        )
-                        if st.button(f"🧭 Aplicar proyección del Shapefile: EPSG:{shp_epsg} ({crs_info_name})", type="primary", width="stretch", key="btn_sync_shp_crs"):
-                            st.session_state["cad_crs"] = f"EPSG:{shp_epsg}"
-                            st.rerun()
+                    if shp_epsg:
+                        auto_detected_code = shp_epsg
+                        auto_detected_zone = identify_zone_country(centroid=shp_centroid, shp_crs=detected_shp_crs)
                     else:
-                        st.success(f"🧭 **Shapefile georreferenciado verificado:** `{crs_info_name}` ({len(file_polygons)} parcela(s) detectadas). Coincidencia perfecta con el mapa.")
+                        st.info(f"🧭 **Shapefile georreferenciado verificado:** `{crs_info_name}` ({len(file_polygons)} geometrías detectadas).")
+
             elif ext in (".kml", ".kmz"):
                 with st.spinner("Leyendo polígonos de Google Earth (KML/KMZ)..."):
                     file_polygons, kml_centroid = parse_kml_or_kmz_polygons(
@@ -3191,11 +3188,47 @@ def render_ui():
                 is_vector_exportable = True
                 if not file_polygons:
                     st.warning("⚠️ No se encontraron polígonos cerrados en el archivo KML/KMZ. Comprueba que contiene geometrías tipo Polygon o rutas cerradas en Google Earth.")
+                elif kml_centroid:
+                    recs = detect_epsg_from_lonlat(kml_centroid[0], kml_centroid[1])
+                    if recs:
+                        auto_detected_code = recs[0]["code"]
+                        auto_detected_zone = identify_zone_country(rec_list=recs, centroid=kml_centroid)
+
             elif ext == ".dxf":
                 with st.spinner("Leyendo entidades del plano DXF..."):
                     file_polygons = parse_dxf_polygons(file_bytes, filename, service_tag=wms_tag)
                 dxf_bytes = file_bytes
                 raw_dxf_snippet = file_bytes[:100000].decode("latin-1", errors="ignore")
+
+                # Extraer puntos del plano para análisis de coordenadas espaciales
+                all_xs = [pt[0] for p in file_polygons for pt in p.get("pts", [])]
+                all_ys = [pt[1] for p in file_polygons for pt in p.get("pts", [])]
+                if not all_xs:
+                    try:
+                        doc = load_dxf_document(file_bytes)
+                        msp = doc.modelspace()
+                        for e in msp:
+                            dxft = e.dxftype()
+                            if dxft in ("LINE", "POINT"):
+                                p1 = getattr(e.dxf, "start", None) or getattr(e.dxf, "location", None)
+                                if p1:
+                                    all_xs.append(float(p1.x))
+                                    all_ys.append(float(p1.y))
+                            elif dxft in ("LWPOLYLINE", "POLYLINE"):
+                                for pt in e.get_points("xy") if dxft == "LWPOLYLINE" else e.points():
+                                    all_xs.append(float(pt[0] if dxft == "LWPOLYLINE" else pt.x))
+                                    all_ys.append(float(pt[1] if dxft == "LWPOLYLINE" else pt.y))
+                    except Exception:
+                        pass
+
+                if all_xs and all_ys:
+                    dxf_bounds = (min(all_xs), min(all_ys), max(all_xs), max(all_ys))
+                    dxf_layers = list(set(p.get("capa", "") for p in file_polygons))
+                    recs = detect_recommended_epsg(dxf_bounds, layer_names=dxf_layers, raw_text=raw_dxf_snippet)
+                    if recs:
+                        auto_detected_code = recs[0]["code"]
+                        auto_detected_zone = identify_zone_country(rec_list=recs)
+
                 if not file_polygons:
                     st.warning("""
                     ⚠️ **No se encontraron polilíneas cerradas en el espacio modelo del archivo DXF.**
@@ -3205,85 +3238,39 @@ def render_ui():
                     - Selecciona la polilínea, abre la paleta de Propiedades (`Ctrl+1`) y verifica que **Cerrada = Sí**.
                     - En la línea de comandos, ejecuta `EDITPOL` (`PEDIT`) y elige la opción **Cerrar**.
                     """)
+
+            # Sincronización y ajuste automático de coordenadas al cargar un nuevo archivo
+            if auto_detected_code is not None:
+                if st.session_state.get("last_auto_detected_file") != file_signature:
+                    st.session_state["last_auto_detected_file"] = file_signature
+                    if auto_detected_zone:
+                        st.session_state["detected_zone_country"] = auto_detected_zone
+                        st.session_state["epsg_view_mode"] = f"🎯 {auto_detected_zone['flag']} {auto_detected_zone['name']} (Zona detectada)"
+
+                    curr_code = st.session_state.get("active_epsg_code", 25830)
+                    if str(auto_detected_code) != str(curr_code):
+                        st.session_state["pending_epsg_code"] = auto_detected_code
+                        st.session_state["just_auto_detected"] = {
+                            "code": auto_detected_code,
+                            "zone": auto_detected_zone["name"] if auto_detected_zone else f"EPSG:{auto_detected_code}",
+                            "flag": auto_detected_zone["flag"] if auto_detected_zone else "📍"
+                        }
+                        st.rerun()
+
+            just_info = st.session_state.pop("just_auto_detected", None)
+            if just_info:
+                st.success(
+                    f"🎯 **Ubicación detectada automáticamente:** Se configuró el sistema en "
+                    f"**EPSG:{just_info['code']}** ({just_info['flag']} {just_info['zone']}). "
+                    f"El visor se ha centrado directamente en las coordenadas de tu archivo."
+                )
+
         except Exception as e:
             st.error(f"❌ Error al procesar el archivo `{filename}`: {e}")
             with st.expander("Detalle del error técnico"):
                 st.code(traceback.format_exc())
-
-    elif st.session_state.get("demo_active"):
-        demo_mode = st.session_state.get("demo_active")
-        if demo_mode == "australia":
-            demo_doc = ezdxf.new("R2010")
-            demo_msp = demo_doc.modelspace()
-            p1 = [(320650, 5812850), (320750, 5812850), (320750, 5812950), (320650, 5812950)]
-            poly1 = demo_msp.add_lwpolyline(p1, close=True)
-            poly1.dxf.layer = "PARCELA_MELBOURNE_VIC"
-
-            p2 = [(321100, 5813200), (321280, 5813200), (321280, 5813350), (321100, 5813350)]
-            poly2 = demo_msp.add_lwpolyline(p2, close=True)
-            poly2.dxf.layer = "AMBITO_OBRA_AUSTRALIA"
-
-            out_str = io.StringIO()
-            demo_doc.write(out_str)
-            dxf_bytes = out_str.getvalue().encode("utf-8")
-            dxf_display_name = "demo_melbourne_australia.dxf"
-            st.info("💡 Modo de demostración activo: Plano con 2 geometrías en Melbourne, Australia.")
-        elif demo_mode == "suecia":
-            demo_doc = ezdxf.new("R2010")
-            demo_msp = demo_doc.modelspace()
-            p1 = [(674000, 6580700), (674120, 6580700), (674120, 6580850), (674000, 6580850)]
-            poly1 = demo_msp.add_lwpolyline(p1, close=True)
-            poly1.dxf.layer = "PARCELA_ESTOCOLMO"
-
-            p2 = [(674300, 6581100), (674480, 6581100), (674480, 6581250), (674300, 6581250)]
-            poly2 = demo_msp.add_lwpolyline(p2, close=True)
-            poly2.dxf.layer = "AMBITO_OBRA_SWEREF99"
-
-            out_str = io.StringIO()
-            demo_doc.write(out_str)
-            dxf_bytes = out_str.getvalue().encode("utf-8")
-            dxf_display_name = "demo_estocolmo_suecia.dxf"
-            st.info("💡 Modo de demostración activo: Plano con 2 geometrías en Estocolmo, Suecia (EPSG:3006 SWEREF99 TM).")
-        elif demo_mode == "colombia":
-            demo_doc = ezdxf.new("R2010")
-            demo_msp = demo_doc.modelspace()
-            p1 = [(4882000, 2065000), (4882120, 2065000), (4882120, 2065150), (4882000, 2065150)]
-            poly1 = demo_msp.add_lwpolyline(p1, close=True)
-            poly1.dxf.layer = "PARCELA_BOGOTA"
-
-            p2 = [(4882300, 2065300), (4882450, 2065300), (4882450, 2065450), (4882300, 2065450)]
-            poly2 = demo_msp.add_lwpolyline(p2, close=True)
-            poly2.dxf.layer = "AMBITO_OBRA_MAGNA"
-
-            out_str = io.StringIO()
-            demo_doc.write(out_str)
-            dxf_bytes = out_str.getvalue().encode("utf-8")
-            dxf_display_name = "demo_bogota_colombia.dxf"
-            st.info("💡 Modo de demostración activo: Plano con 2 geometrías en Bogotá, Colombia (EPSG:9377 MAGNA-SIRGAS Origen Nacional).")
-        else:
-            demo_doc = ezdxf.new("R2010")
-            demo_msp = demo_doc.modelspace()
-            p1 = [(441300, 4478100), (441360, 4478100), (441360, 4478150), (441300, 4478150)]
-            poly1 = demo_msp.add_lwpolyline(p1, close=True)
-            poly1.dxf.layer = "SOLAR_EDIFICACION"
-
-            p2 = [(441800, 4473800), (441920, 4473800), (441920, 4473900), (441800, 4473900)]
-            poly2 = demo_msp.add_lwpolyline(p2, close=True)
-            poly2.dxf.layer = "PARCELA_INDUSTRIAL"
-
-            p3 = [(441300, 4476800), (441600, 4476980), (441480, 4477180), (441180, 4477000)]
-            poly3 = demo_msp.add_lwpolyline(p3, close=True)
-            poly3.dxf.layer = "AMBITO_OBRA"
-
-            out_str = io.StringIO()
-            demo_doc.write(out_str)
-            dxf_bytes = out_str.getvalue().encode("utf-8")
-            dxf_display_name = "demo_madrid_pnoa.dxf"
-            st.info("💡 Modo de demostración activo: Plano con 3 geometrías en Madrid (EPSG:25830).")
-
-        file_polygons = parse_dxf_polygons(dxf_bytes, dxf_display_name, service_tag=wms_tag)
-        raw_dxf_snippet = dxf_bytes[:100000].decode("latin-1", errors="ignore")
-        is_vector_exportable = True
+    else:
+        st.session_state.pop("last_auto_detected_file", None)
 
     # Integrar geometrías dibujadas interactivamente en el mapa
     persisted_drawings = st.session_state.get("persisted_drawings", [])
