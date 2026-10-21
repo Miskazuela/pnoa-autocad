@@ -2735,6 +2735,12 @@ def render_ui():
     """, unsafe_allow_html=True)
 
     # Sincronización segura de estados pendientes antes de instanciar widgets de Streamlit
+    if "pending_detected_zone" in st.session_state:
+        zone_info = st.session_state.pop("pending_detected_zone")
+        st.session_state["detected_zone_country"] = zone_info
+        if "epsg_view_mode" in st.session_state:
+            del st.session_state["epsg_view_mode"]
+
     if "pending_epsg_code" in st.session_state:
         new_code = st.session_state.pop("pending_epsg_code")
         try:
@@ -3243,11 +3249,13 @@ def render_ui():
             if auto_detected_code is not None:
                 if st.session_state.get("last_auto_detected_file") != file_signature:
                     st.session_state["last_auto_detected_file"] = file_signature
-                    if auto_detected_zone:
-                        st.session_state["detected_zone_country"] = auto_detected_zone
-                        st.session_state["epsg_view_mode"] = f"🎯 {auto_detected_zone['flag']} {auto_detected_zone['name']} (Zona detectada)"
-
                     curr_code = st.session_state.get("active_epsg_code", 25830)
+                    needs_rerun = False
+
+                    if auto_detected_zone:
+                        st.session_state["pending_detected_zone"] = auto_detected_zone
+                        needs_rerun = True
+
                     if str(auto_detected_code) != str(curr_code):
                         st.session_state["pending_epsg_code"] = auto_detected_code
                         st.session_state["just_auto_detected"] = {
@@ -3255,6 +3263,15 @@ def render_ui():
                             "zone": auto_detected_zone["name"] if auto_detected_zone else f"EPSG:{auto_detected_code}",
                             "flag": auto_detected_zone["flag"] if auto_detected_zone else "📍"
                         }
+                        needs_rerun = True
+                    elif auto_detected_zone:
+                        st.session_state["just_auto_detected"] = {
+                            "code": auto_detected_code,
+                            "zone": auto_detected_zone["name"],
+                            "flag": auto_detected_zone["flag"]
+                        }
+
+                    if needs_rerun:
                         st.rerun()
 
             just_info = st.session_state.pop("just_auto_detected", None)
