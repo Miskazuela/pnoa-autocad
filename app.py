@@ -4213,7 +4213,7 @@ def render_ui():
                     "wms_tag": wms_tag,
                     "polys_for_dxf": polys_for_dxf
                 }
-                st.balloons()
+                st.toast(f"🛰️ ¡Cartografía {service_info['badge']} calibrada y lista para AutoCAD!", icon="📡")
             else:
                 st.error("No se pudo descargar ninguna imagen cartográfica. Verifica la conectividad con el servicio WMS y las coordenadas.")
 
@@ -4223,6 +4223,143 @@ def render_ui():
     if st.session_state.get("processed_zip_data") is not None:
         st.markdown("---")
         st.markdown("### 📦 Descarga de Resultados")
+
+        radar_hud_html = f"""
+        <style>
+        @keyframes radarSweep {{
+            0% {{ transform: rotate(0deg); }}
+            100% {{ transform: rotate(360deg); }}
+        }}
+        @keyframes radarPulse {{
+            0% {{ transform: scale(0.4); opacity: 1; }}
+            100% {{ transform: scale(2.0); opacity: 0; }}
+        }}
+        @keyframes laserScan {{
+            0% {{ top: 0%; opacity: 0.8; }}
+            50% {{ opacity: 1; }}
+            100% {{ top: 100%; opacity: 0.2; }}
+        }}
+        @keyframes borderGlow {{
+            0%, 100% {{ border-color: rgba(6, 182, 212, 0.4); box-shadow: 0 0 15px rgba(6, 182, 212, 0.2); }}
+            50% {{ border-color: rgba(16, 185, 129, 0.9); box-shadow: 0 0 25px rgba(16, 185, 129, 0.4); }}
+        }}
+        .radar-hud-card {{
+            position: relative;
+            overflow: hidden;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(8, 47, 73, 0.85) 100%);
+            border: 2px solid rgba(6, 182, 212, 0.6);
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin: 10px 0 20px 0;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            animation: borderGlow 3s infinite ease-in-out;
+        }}
+        .radar-scan-line {{
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #06b6d4, #10b981, transparent);
+            box-shadow: 0 0 10px #06b6d4;
+            animation: laserScan 2.5s ease-in-out infinite;
+            pointer-events: none;
+        }}
+        .radar-scope {{
+            position: relative;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: 2px solid rgba(6, 182, 212, 0.7);
+            background: radial-gradient(circle, rgba(6, 182, 212, 0.15) 0%, rgba(15, 23, 42, 0.9) 70%);
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .radar-scope::before {{
+            content: '';
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 1px dashed rgba(6, 182, 212, 0.5);
+        }}
+        .radar-wave {{
+            position: absolute;
+            width: 25px;
+            height: 25px;
+            border-radius: 50%;
+            border: 2px solid #10b981;
+            animation: radarPulse 2s infinite ease-out;
+        }}
+        .radar-sweeper {{
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: conic-gradient(from 0deg, rgba(6, 182, 212, 0) 0deg, rgba(6, 182, 212, 0) 270deg, rgba(16, 185, 129, 0.65) 360deg);
+            animation: radarSweep 2s linear infinite;
+        }}
+        .radar-target-dot {{
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background: #22c55e;
+            border-radius: 50%;
+            box-shadow: 0 0 8px #22c55e;
+            z-index: 2;
+        }}
+        .radar-info {{
+            flex-grow: 1;
+        }}
+        .radar-title {{
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: #38bdf8;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        .radar-desc {{
+            font-size: 13px;
+            color: #cbd5e1;
+            line-height: 1.5;
+        }}
+        .radar-badge {{
+            background: rgba(16, 185, 129, 0.15);
+            border: 1px solid #10b981;
+            color: #34d399;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 12px;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+        }}
+        </style>
+        <div class="radar-hud-card">
+            <div class="radar-scan-line"></div>
+            <div class="radar-scope">
+                <div class="radar-wave"></div>
+                <div class="radar-sweeper"></div>
+                <div class="radar-target-dot"></div>
+            </div>
+            <div class="radar-info">
+                <div class="radar-title">
+                    <span>🛰️ ESCANEO SATELITAL & GEORREFERENCIACIÓN COMPLETADA</span>
+                    <span class="radar-badge">🟢 ENLACE CALIBRADO</span>
+                </div>
+                <div class="radar-desc">
+                    Cartografía <b>{service_info['badge']}</b> enlazada y calibrada milimétricamente en <b>{crs_str}</b> | Archivo World File <b>.TFW</b> listo para inserción automática en AutoCAD.
+                </div>
+            </div>
+        </div>
+        """
+        st.markdown(radar_hud_html, unsafe_allow_html=True)
 
         c1, c2 = st.columns([2, 1])
         with c1:
