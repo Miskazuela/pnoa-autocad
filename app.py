@@ -45,6 +45,8 @@ import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import shapefile
 import ezdxf
 from shapely.geometry import Polygon, LineString, MultiLineString, shape
@@ -181,6 +183,7 @@ def create_resilient_session(timeout: int = 35) -> requests.Session:
     Crea una sesión HTTP con reintentos exponenciales automáticos para mitigar caídas.
     """
     session = requests.Session()
+    session.verify = False
     retries = Retry(
         total=5,
         backoff_factor=1.5,
@@ -1510,28 +1513,58 @@ def get_epsg_dropdown_options(
 # 3. CATÁLOGO DE SERVICIOS CARTOGRÁFICOS Y SATELITALES (MUNDIAL Y NACIONAL)
 # --------------------------------------------------------------------------------------
 SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
-    "google_sat": {
-        "name": "🌍 Google Satélite (Mundial - Máxima Resolución)",
-        "type": "xyz",
-        "url": "https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+    "custom": {
+        "name": "⚙️ Agregar WMS externo (Cualquier servidor WMS del mundo)",
+        "type": "wms",
+        "url": "",
         "layer": "",
-        "tag": "google_sat",
-        "badge": "Google Satélite",
-        "description": "Fotografía satelital mundial de Google de alta resolución sin rótulos. Cobertura global (Australia, América, Europa, Asia y resto del mundo).",
-        "folium_name": "🌍 Google Satélite (Google Maps)",
+        "tag": "wms_custom",
+        "badge": "WMS Externo",
+        "description": "Introduce la URL y capa de cualquier servidor WMS del mundo (gobiernos estatales, catastro, etc.).",
+        "folium_name": "⚙️ WMS Externo",
     },
-    "google_hybrid": {
-        "name": "🌍 Google Híbrido (Mundial - Satélite + Vías y Nombres)",
-        "type": "xyz",
-        "url": "https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
-        "layer": "",
-        "tag": "google_hybrid",
-        "badge": "Google Híbrido",
-        "description": "Satélite de Google con red de carreteras, calles principales y toponimia sobreimpresas.",
-        "folium_name": "🌍 Google Híbrido (Satélite + Vías)",
+    "camino_santiago": {
+        "name": "Camino de Santiago",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/camino-santiago",
+        "layer": "camino_frances,caminos_galicia,caminos_norte,caminos_andaluces",
+        "tag": "camino_santiago",
+        "badge": "Camino Santiago",
+        "description": "Trazados oficiales del Camino de Santiago (Camino Francés, Caminos del Norte, Galicia y Andalucía).",
+        "folium_name": "Camino de Santiago (IGN)",
+    },
+    "mapa_raster": {
+        "name": "Cartografía raster (MTN Topográfico - IGN)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/mapa-raster",
+        "layer": "mtn_rasterizado",
+        "tag": "mtn_raster",
+        "badge": "Mapa Ráster MTN",
+        "description": "Cartografía topográfica oficial con curvas de nivel, toponimia y altitudes del IGN.",
+        "folium_name": "Cartografía raster (MTN)",
+    },
+    "cuadriculas": {
+        "name": "Cuadrículas cartográficas (IGN)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/cuadriculas",
+        "layer": "cuadricula-mtn25-actual,cuadricula-mtn50-actual",
+        "tag": "cuadriculas",
+        "badge": "Cuadrículas MTN",
+        "description": "Distribución de hojas y cuadrículas cartográficas oficiales MTN25 y MTN50 del IGN.",
+        "folium_name": "Cuadrículas cartográficas",
+    },
+    "direcciones_ccpp": {
+        "name": "Direcciones y Códigos Postales (CartoCiudad)",
+        "type": "wms",
+        "url": "https://www.cartociudad.es/wms-inspire/direcciones-ccpp",
+        "layer": "codigo-postal,AD.Address",
+        "tag": "direcciones_ccpp",
+        "badge": "Direcciones y CCPP",
+        "description": "Delimitación oficial de códigos postales y direcciones de CartoCiudad (IGN).",
+        "folium_name": "Direcciones y Códigos Postales",
     },
     "esri_sat": {
-        "name": "🛰️ Esri World Imagery (Mundial - Alta Resolución)",
+        "name": "Esri World Imagery (Mundial - Alta Resolución)",
         "type": "xyz",
         "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         "layer": "",
@@ -1540,46 +1573,226 @@ SERVICES_CATALOG: Dict[str, Dict[str, Any]] = {
         "description": "Ortofotografía satelital global de Esri / Maxar de alta resolución.",
         "folium_name": "🛰️ Esri World Imagery",
     },
-    "custom": {
-        "name": "⚙️ Servidor WMS Universal (Cualquier país / organismo del mundo)",
+    "fototeca": {
+        "name": "Fototeca (Vuelos históricos IGN)",
         "type": "wms",
-        "url": "",
+        "url": "https://wms-fototeca.idee.es/fototeca",
+        "layer": "infoVuelos,anos30,anos40,anos50",
+        "tag": "fototeca",
+        "badge": "Fototeca Histórica",
+        "description": "Fotogramas y vuelos aéreos históricos de España (años 30, 40, vuelo americano de los 50).",
+        "folium_name": "Fototeca Histórica IGN",
+    },
+    "google_hybrid": {
+        "name": "Google Híbrido (Mundial - Satélite + Vías y Nombres)",
+        "type": "xyz",
+        "url": "https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
         "layer": "",
-        "tag": "wms_custom",
-        "badge": "WMS Universal",
-        "description": "Introduce la URL y capa de cualquier servidor WMS del mundo (gobiernos estatales, catastro, Australia, etc.).",
-        "folium_name": "⚙️ WMS Universal",
+        "tag": "google_hybrid",
+        "badge": "Google Híbrido",
+        "description": "Satélite de Google con red de carreteras, calles principales y toponimia sobreimpresas.",
+        "folium_name": "🌍 Google Híbrido (Satélite + Vías)",
+    },
+    "google_sat": {
+        "name": "Google Satélite (Mundial - Máxima Resolución)",
+        "type": "xyz",
+        "url": "https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        "layer": "",
+        "tag": "google_sat",
+        "badge": "Google Satélite",
+        "description": "Fotografía satelital mundial de Google de alta resolución sin rótulos.",
+        "folium_name": "🌍 Google Satélite (Google Maps)",
+    },
+    "hidrografia": {
+        "name": "Hidrografía - Información Geográfica de Referencia",
+        "type": "wms",
+        "url": "https://servicios.idee.es/wms-inspire/hidrografia",
+        "layer": "HY.Network,HY.PhysicalWaters.Waterbodies",
+        "tag": "hidrografia",
+        "badge": "Hidrografía IGR",
+        "description": "Red fluvial, cursos de agua, masas de agua y puntos de interés hidrográfico oficial.",
+        "folium_name": "Hidrografía IGR",
+    },
+    "hojas_kilometricas": {
+        "name": "Hojas kilométricas (Madrid - 1860)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms/hojas-kilometricas",
+        "layer": "Mapas,Parcelas_Catastrales",
+        "tag": "hojas_kilometricas",
+        "badge": "Hojas Kilométricas 1860",
+        "description": "Cartografía histórica detallada parcelaria de Madrid y municipios circundantes (1860-1870).",
+        "folium_name": "Hojas kilométricas (1860)",
+    },
+    "geofisica_sismica": {
+        "name": "Información sísmica (IGN)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/geofisica",
+        "layer": "Ultimos365dias,NZ.ObservedEvent",
+        "tag": "sismica",
+        "badge": "Información Sísmica",
+        "description": "Registro oficial y mapa de epicentros de terremotos y estaciones sísmicas del IGN.",
+        "folium_name": "Información sísmica (IGN)",
+    },
+    "ign_base": {
+        "name": "Mapa base (IGN Base)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/ign-base",
+        "layer": "IGNBaseTodo",
+        "tag": "ign_base",
+        "badge": "IGN Base",
+        "description": "Cartografía vectorial continua y callejero integrado oficial de toda España.",
+        "folium_name": "Mapa base (IGN Base)",
+    },
+    "mdp05": {
+        "name": "Modelo Digital de Pendientes (MDP05)",
+        "type": "wms",
+        "url": "https://wms-pendientes.idee.es/pendientes",
+        "layer": "MDP05",
+        "tag": "mdp05",
+        "badge": "Pendientes MDP05",
+        "description": "Mapa raster continuo del porcentaje de inclinación y pendientes del terreno (LiDAR 5m).",
+        "folium_name": "Modelo Digital de Pendientes",
+    },
+    "mdt_relieve": {
+        "name": "Modelos Digitales del Terreno (Relieve LiDAR - IGN)",
+        "type": "wms",
+        "url": "https://servicios.idee.es/wms-inspire/mdt",
+        "layer": "EL.ElevationGridCoverage",
+        "tag": "mdt_relieve",
+        "badge": "Relieve MDT",
+        "description": "Sombreado continuo del terreno derivado de LiDAR y MDT para análisis topográfico.",
+        "folium_name": "Modelos Digitales del Terreno",
+    },
+    "satelites_historicos": {
+        "name": "Mosaicos de Satélite históricos de España (Sentinel)",
+        "type": "wms",
+        "url": "https://wms-satelites-historicos.idee.es/satelites-historicos",
+        "layer": "SENTINEL.2026verano_432-1184,teselas_sentinel2_espanna",
+        "tag": "satelites_historicos",
+        "badge": "Satélites Históricos",
+        "description": "Mosaicos satelitales estacionales multiespectrales de España (misiones Sentinel-2).",
+        "folium_name": "Mosaicos Satélite Históricos",
+    },
+    "nombres_geograficos": {
+        "name": "Nombres Geográficos (NGBE - IGN)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/ngbe",
+        "layer": "GN.GeographicalNames",
+        "tag": "nombres_geograficos",
+        "badge": "Nombres Geográficos",
+        "description": "Nomenclátor Geográfico Básico de España: toponimia oficial normalizada.",
+        "folium_name": "Nombres Geográficos (NGBE)",
+    },
+    "ocupacion_suelo_historico": {
+        "name": "Ocupación de Suelo histórico (CORINE)",
+        "type": "wms",
+        "url": "https://servicios.idee.es/wms-inspire/ocupacion-suelo-historico",
+        "layer": "corine2018",
+        "tag": "corine_historico",
+        "badge": "Suelo Histórico",
+        "description": "Evolución histórica de coberturas de suelo en España (series CORINE Land Cover y SIOSE).",
+        "folium_name": "Ocupación de Suelo Histórico",
+    },
+    "ocupacion_suelo": {
+        "name": "Ocupación del Suelo (SIOSE / Cubierta Terrestre)",
+        "type": "wms",
+        "url": "https://servicios.idee.es/wms-inspire/ocupacion-suelo",
+        "layer": "LC.LandCoverSurfaces",
+        "tag": "ocupacion_suelo",
+        "badge": "Ocupación del Suelo",
+        "description": "Información oficial sobre coberturas y usos del suelo en España (SIOSE / INSPIRE).",
+        "folium_name": "Ocupación del Suelo",
+    },
+    "pnoa_historico": {
+        "name": "Ortofotos históricas y PNOA anual",
+        "type": "wms",
+        "url": "https://www.ign.es/wms/pnoa-historico",
+        "layer": "PNOA2024,PNOA2023",
+        "tag": "pnoa_historico",
+        "badge": "PNOA Histórico",
+        "description": "Vuelos aéreos ortofotográficos anuales de campañas anteriores del PNOA.",
+        "folium_name": "Ortofotos históricas PNOA",
     },
     "pnoa": {
-        "name": "🇪🇸 IGN - Ortofoto Aérea PNOA (España - Máxima Resolución)",
+        "name": "Ortofotos máxima actualidad del PNOA (Vuelo Oficial)",
         "type": "wms",
         "url": "https://www.ign.es/wms-inspire/pnoa-ma",
         "layer": "OI.OrthoimageCoverage",
         "tag": "pnoa",
         "badge": "Ortofoto PNOA",
         "description": "Ortofotografías aéreas oficiales de España de máxima resolución del PNOA. Ideal para urbanismo y edificación.",
-        "folium_name": "🇪🇸 Ortofoto PNOA WMS (IGN)",
+        "folium_name": "Ortofotos PNOA Máxima Actualidad",
     },
-    "mapa_raster": {
-        "name": "🗺️ IGN - Mapa Ráster / MTN Topográfico (España)",
+    "pnoa_provisionales": {
+        "name": "Ortofotos provisionales del PNOA",
         "type": "wms",
-        "url": "https://www.ign.es/wms-inspire/mapa-raster",
-        "layer": "mtn_rasterizado",
-        "tag": "mtn_raster",
-        "badge": "Mapa Ráster MTN",
-        "description": "Cartografía topográfica oficial con curvas de nivel, toponimia y altitudes.",
-        "folium_name": "🗺️ IGN Mapa Ráster MTN Topográfico",
+        "url": "https://wms-pnoa.idee.es/pnoa-provisionales",
+        "layer": "OrtoimagenRapida",
+        "tag": "pnoa_provisionales",
+        "badge": "PNOA Provisionales",
+        "description": "Ortoimágenes rápidas de emergencia y provisionales previas a la publicación oficial.",
+        "folium_name": "Ortofotos provisionales PNOA",
     },
-    "mdt_relieve": {
-        "name": "🏔️ IGN - Modelo Digital del Terreno Relieve (España)",
+    "planimetrias": {
+        "name": "Planimetrías (Minutas cartográficas)",
         "type": "wms",
-        "url": "https://servicios.idee.es/wms-inspire/mdt",
-        "layer": "EL.GridCoverage",
-        "tag": "mdt_relieve",
-        "badge": "Relieve MDT",
-        "description": "Sombreado continuo del terreno derivado de LiDAR y MDT para estudios de pendiente.",
-        "folium_name": "🏔️ IGN Relieve Sombreado MDT",
-    }
+        "url": "https://www.ign.es/wms/minutas-cartograficas",
+        "layer": "Minutas",
+        "tag": "planimetrias",
+        "badge": "Minutas Históricas",
+        "description": "Planimetrías y altimetrías manuscritas históricas levantadas a finales del siglo XIX y principios del XX.",
+        "folium_name": "Planimetrías (Minutas)",
+    },
+    "primera_edicion_mtn": {
+        "name": "Primera edición de los Mapas Topográficos Nacionales (MTN)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms/primera-edicion-mtn",
+        "layer": "MTN50,MTN25",
+        "tag": "primera_edicion_mtn",
+        "badge": "MTN 1ª Edición",
+        "description": "Primera edición histórica impresa del Mapa Topográfico Nacional a escala 1:50.000 y 1:25.000.",
+        "folium_name": "Primera edición MTN",
+    },
+    "transporte": {
+        "name": "Red de Transporte - Información Geográfica de Referencia",
+        "type": "wms",
+        "url": "https://servicios.idee.es/wms-inspire/transportes",
+        "layer": "TN.RoadTransportNetwork.RoadLink,TN.RailTransportNetwork.RailwayLink",
+        "tag": "transporte",
+        "badge": "Red de Transporte",
+        "description": "Redes de carreteras, vías férreas, aeropuertos y navegación aérea y marítima de España.",
+        "folium_name": "Red de Transporte IGR",
+    },
+    "volcanologia": {
+        "name": "Red de Vigilancia Volcánica del IGN",
+        "type": "wms",
+        "url": "https://wms-volcanologia.ign.es/volcanologia",
+        "layer": "sis,gps",
+        "tag": "volcanologia",
+        "badge": "Vigilancia Volcánica",
+        "description": "Estaciones sísmicas, deformación GNSS y seguimiento volcánico del IGN.",
+        "folium_name": "Red Vigilancia Volcánica",
+    },
+    "redes_geodesicas": {
+        "name": "Redes geodésicas (IGN)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/redes-geodesicas",
+        "layer": "RED_REGENTE,RED_NAP,RED_ERGNSS",
+        "tag": "redes_geodesicas",
+        "badge": "Redes Geodésicas",
+        "description": "Red de vértices geodésicos (REGENTE, ROI), nivelación de alta precisión (REDNAP) y estaciones GNSS.",
+        "folium_name": "Redes geodésicas (IGN)",
+    },
+    "unidades_administrativas": {
+        "name": "Unidades administrativas (Límites oficiales)",
+        "type": "wms",
+        "url": "https://www.ign.es/wms-inspire/unidades-administrativas",
+        "layer": "AU.AdministrativeBoundary,AU.AdministrativeUnit",
+        "tag": "unidades_admin",
+        "badge": "Unidades Administrativas",
+        "description": "Límites y divisiones territoriales oficiales de municipios, provincias y comunidades autónomas.",
+        "folium_name": "Unidades administrativas",
+    },
 }
 
 
@@ -2505,38 +2718,26 @@ def generate_preview_map(
         control=True
     ).add_to(m)
 
-    folium.WmsTileLayer(
-        url="https://www.ign.es/wms-inspire/pnoa-ma",
-        layers="OI.OrthoimageCoverage",
-        fmt="image/png",
-        transparent=True,
-        name="🇪🇸 Ortofoto PNOA WMS (IGN)",
-        overlay=True,
-        control=True,
-        show=(active_service_key == "pnoa")
-    ).add_to(m)
-
-    folium.WmsTileLayer(
-        url="https://www.ign.es/wms-inspire/mapa-raster",
-        layers="mtn_rasterizado",
-        fmt="image/png",
-        transparent=True,
-        name="🗺️ IGN Mapa Ráster MTN Topográfico",
-        overlay=True,
-        control=True,
-        show=(active_service_key == "mapa_raster")
-    ).add_to(m)
-
-    folium.WmsTileLayer(
-        url="https://servicios.idee.es/wms-inspire/mdt",
-        layers="EL.GridCoverage",
-        fmt="image/png",
-        transparent=True,
-        name="🏔️ IGN Modelo Digital Relieve (MDT)",
-        overlay=True,
-        control=True,
-        show=(active_service_key == "mdt_relieve")
-    ).add_to(m)
+    # Si el servicio seleccionado es un WMS de SERVICES_CATALOG
+    if active_service_key in SERVICES_CATALOG and SERVICES_CATALOG[active_service_key].get("type") == "wms":
+        serv = SERVICES_CATALOG[active_service_key]
+        w_url = serv.get("url", "")
+        w_layer = serv.get("layer", "")
+        w_name = serv.get("folium_name", serv.get("name", "Capa WMS"))
+        if w_url and w_layer:
+            try:
+                folium.WmsTileLayer(
+                    url=w_url.split("?")[0].strip(),
+                    layers=w_layer,
+                    fmt="image/png",
+                    transparent=True,
+                    name=w_name,
+                    overlay=True,
+                    control=True,
+                    show=True
+                ).add_to(m)
+            except Exception:
+                pass
 
     if active_service_key == "custom" and custom_wms_url and custom_wms_layer:
         try:
@@ -2753,7 +2954,7 @@ def render_ui():
         if "sidebar_epsg_select_widget" in st.session_state:
             del st.session_state["sidebar_epsg_select_widget"]
         if isinstance(val_code, int) and val_code not in [25829, 25830, 25831, 32628]:
-            st.session_state["selected_service_idx"] = 0
+            st.session_state["selected_service_idx"] = list(SERVICES_CATALOG.keys()).index("google_sat") if "google_sat" in SERVICES_CATALOG else 8
 
     if "pending_custom_wms_layer" in st.session_state:
         st.session_state["custom_wms_layer_input"] = str(st.session_state.pop("pending_custom_wms_layer"))
@@ -2774,7 +2975,7 @@ def render_ui():
                 _ = CRS.from_epsg(num_code)
                 st.session_state["active_epsg_code"] = num_code
                 if num_code not in [25829, 25830, 25831, 32628]:
-                    st.session_state["selected_service_idx"] = 0
+                    st.session_state["selected_service_idx"] = list(SERVICES_CATALOG.keys()).index("google_sat") if "google_sat" in SERVICES_CATALOG else 8
                 if "sidebar_epsg_select_widget" in st.session_state:
                     del st.session_state["sidebar_epsg_select_widget"]
                 st.session_state["sidebar_epsg_search_error"] = None
@@ -2794,7 +2995,7 @@ def render_ui():
                 st.session_state["sidebar_epsg_num_search"] = str(parsed_code)
                 st.session_state["sidebar_epsg_search_error"] = None
                 if isinstance(parsed_code, int) and parsed_code not in [25829, 25830, 25831, 32628]:
-                    st.session_state["selected_service_idx"] = 0
+                    st.session_state["selected_service_idx"] = list(SERVICES_CATALOG.keys()).index("google_sat") if "google_sat" in SERVICES_CATALOG else 8
 
     def _on_epsg_view_mode_change():
         if "sidebar_epsg_select_widget" in st.session_state:
@@ -2982,9 +3183,15 @@ def render_ui():
     service_keys = list(SERVICES_CATALOG.keys())
     service_labels = [SERVICES_CATALOG[k]["name"] for k in service_keys]
 
-    default_serv_idx = st.session_state.get("selected_service_idx", 0)
+    pnoa_idx = service_keys.index("pnoa") if "pnoa" in service_keys else 20
+    google_sat_idx = service_keys.index("google_sat") if "google_sat" in service_keys else 8
+
+    if "selected_service_idx" not in st.session_state:
+        st.session_state["selected_service_idx"] = pnoa_idx
+
+    default_serv_idx = st.session_state.get("selected_service_idx", pnoa_idx)
     if default_serv_idx >= len(service_labels):
-        default_serv_idx = 0
+        default_serv_idx = pnoa_idx
 
     selected_service_label = st.sidebar.selectbox(
         "Capa o servicio a descargar:",
