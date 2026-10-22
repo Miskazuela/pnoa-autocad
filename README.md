@@ -88,9 +88,15 @@ python -m streamlit run app.py
 ---
 
 ## 🧭 Inserción en AutoCAD en posición UTM exacta
-- **En AutoCAD Map 3D / Civil 3D:**
-  1. Ejecuta el comando `_MAPIINSERT` (o ve a *Insertar* -> *Imagen ráster*).
-  2. Selecciona el archivo `.tif` descargado.
-  3. AutoCAD detectará automáticamente el archivo `.tfw` asociado y colocará la ortofoto en sus coordenadas reales sin necesidad de mover ni escalar.
+- **En AutoCAD Map 3D / Civil 3D / BricsCAD (Recomendado):**
+  1. Descomprime el archivo `.zip` en la carpeta de tu proyecto.
+  2. Ejecuta el comando `_MAPIINSERT` (o ve a *Insertar* -> *Imagen ráster*).
+  3. Selecciona los archivos `.tif` descargados.
+  4. AutoCAD detectará automáticamente los archivos `.tfw` asociados y colocará las ortofotos en sus coordenadas UTM reales sin necesidad de mover ni escalar.
 - **En AutoCAD Clásico / LT:**
   1. Utiliza el comando `_IMAGEATTACH` (`ENLAZARIMG`).
+- **Recorte de minutas o ámbitos inclinados (`DELIMIMG`):**
+  1. Ejecuta el comando `_IMAGECLIP` (o `DELIMIMG`).
+  2. Selecciona la imagen ráster.
+  3. Elige la opción *Nuevo contorno* (`N`) y luego *Seleccionar polilínea* (`S`).
+  4. Toca tu polilínea cerrada: AutoCAD ocultará los bordes sobrantes al instante manteniendo la georreferenciación perfecta.

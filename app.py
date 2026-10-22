@@ -2932,6 +2932,26 @@ def render_ui():
             border-radius: 12px;
             border: 1px solid #334155;
         }
+
+        /* Tarjetas de información y resumen estructurado */
+        .summary-card {
+            background-color: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 1.2rem 1.4rem;
+            margin: 0.8rem 0;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+        }
+        .cad-kbd {
+            background: #0f172a;
+            color: #38bdf8;
+            border: 1px solid #38bdf8;
+            border-radius: 5px;
+            padding: 2px 7px;
+            font-family: monospace;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -3315,21 +3335,42 @@ def render_ui():
     """, unsafe_allow_html=True)
 
     with st.expander("📖 Guía de uso rápido y cómo insertar en AutoCAD / Civil 3D", expanded=False):
-        st.markdown("""
-        **Instrucciones para delineantes, topógrafos e ingenieros de cualquier país:**
-        1. **Define la proyección (CRS)**: En la barra lateral, escribe directamente el código **EPSG** de tu plano (ej. `7855` para Australia GDA2020, `25830` para España ETRS89, `9377` para Colombia MAGNA, `32618` para WGS84 UTM 18N, etc.) o elige un preajuste regional.
-        2. **Selecciona la fuente de imagen**: Elige **Google Satélite** (mundial limpio), **Google Híbrido** (con vías y nombres), **Esri World Imagery**, **Cualquier servidor WMS del mundo** o servicios nacionales (PNOA/IGN).
-        3. **Carga tu archivo `.dxf`**: El dibujo debe contener polilíneas cerradas (`LWPOLYLINE` o `POLYLINE`) que delimiten el ámbito de trabajo o parcelas.
-        4. **Verifica la ubicación en el visor interactivo**: Confirma visualmente que las geometrías caen sobre la imagen en la posición real de tu proyecto y revisa el recuadro de salida.
-        5. **Descarga el `.zip`**: Contiene los archivos georreferenciados para cada polígono:
-           - **`.tif`**: Imagen ráster recortada en máxima resolución.
-           - **`.tfw`**: Archivo *World File* de calibración espacial con coordenadas UTM/proyectadas exactas.
-        
-        **Cómo insertar en AutoCAD en su posición proyectada exacta:**
-        - **AutoCAD Map 3D / Civil 3D**: Ejecuta el comando `_MAPIINSERT` (o ve a *Insertar* -> *Imagen ráster*). Al seleccionar los archivos `.tif`, AutoCAD detectará automáticamente los archivos `.tfw` asociados e insertará las ortofotos en sus **coordenadas reales de proyecto**.
-        - **AutoCAD Estándar / LT**: Inserta mediante el comando `_IMAGEATTACH` (`ENLAZARIMG`).
-        - **Consejo para minutas o parcelas en diagonal**: Para recortar la ortofoto siguiendo la forma exacta de una minuta inclinada en AutoCAD, usa el comando nativo `_IMAGECLIP` (`DELIMIMG`) -> *Nuevo contorno* (`N`) -> *Seleccionar polilínea* (`S`) y toca tu polilínea. AutoCAD ocultará los bordes sobrantes al instante manteniendo la georreferenciación perfecta.
-        """)
+        g_tab1, g_tab2, g_tab3, g_tab4 = st.tabs([
+            "🚀 Flujo en 4 Pasos",
+            "🖥️ Inserción en AutoCAD / Civil 3D",
+            "✂️ Recorte de Minutas (DELIMIMG)",
+            "🌐 Proyecciones (CRS / EPSG)"
+        ])
+        with g_tab1:
+            st.markdown("""
+            1. **Define la proyección (CRS)**: En la barra lateral, escribe el código **EPSG** de tu plano (ej. `25830` España ETRS89, `9377` Colombia MAGNA, `7855` Australia GDA2020, `32618` WGS84 UTM 18N) o selecciona un filtro regional entre los más de 7.200 sistemas oficiales.
+            2. **Selecciona la fuente de imagen**: Elige **Google Satélite** (mundial nítido), **Google Híbrido** (con carreteras), **Esri World Imagery**, servicios oficiales (**PNOA / IGN**) o **Cualquier servidor WMS del mundo**.
+            3. **Carga tu archivo o dibuja**: Admite planos **AutoCAD (.dxf)** con polilíneas cerradas, Shapefiles **(.zip)** con sus componentes (.shp, .prj, etc.), Google Earth **(.kml / .kmz)** o trazado interactivo directamente en el mapa.
+            4. **Verifica y Descarga**: Comprueba el encuadre en el visor, ajusta la resolución ($m/px$) y descarga el paquete `.zip` con los pares **`.tif` + `.tfw`** listos para CAD.
+            """)
+        with g_tab2:
+            st.markdown("""
+            - **AutoCAD Map 3D / Civil 3D / BricsCAD (Recomendado):**
+              1. Ejecuta el comando <span class="cad-kbd">_MAPIINSERT</span> (o menú *Insertar* → *Imagen ráster*).
+              2. Selecciona todos los archivos `.tif` generados.
+              3. AutoCAD detectará automáticamente los archivos `.tfw` asociados e insertará las ortofotos en su **posición UTM exacta al milímetro**, sin necesidad de escalar ni desplazar.
+            - **AutoCAD Estándar / LT:**
+              - Inserta mediante el comando <span class="cad-kbd">_IMAGEATTACH</span> (`ENLAZARIMG`) especificando el punto de inserción y escala indicados en la tabla resumen.
+            """)
+        with g_tab3:
+            st.markdown("""
+            **Cómo recortar una ortofoto inclinada siguiendo la forma exacta de tu parcela:**
+            1. En AutoCAD, escribe el comando <span class="cad-kbd">_IMAGECLIP</span> (o <span class="cad-kbd">DELIMIMG</span> en español).
+            2. Selecciona el borde de la imagen ráster descargada.
+            3. Elige la opción **Nuevo contorno** (<span class="cad-kbd">N</span>).
+            4. Elige **Seleccionar polilínea** (<span class="cad-kbd">S</span>) y toca la polilínea de tu parcela o minuta.
+            5. AutoCAD ocultará instantáneamente el fondo sobrante, conservando la georreferenciación milimétrica intacta.
+            """)
+        with g_tab4:
+            st.markdown("""
+            - **Detección inteligente de zona**: Al subir tu archivo DXF o Shapefile, el sistema analiza las coordenadas métricas $(X, Y)$ y recomienda automáticamente la proyección oficial con 1 clic.
+            - **Catálogo Geodésico Mundial**: Compatible con más de 7.200 códigos EPSG oficiales de 120+ países, además de soporte para códigos personalizados mediante WKT / PROJ.4.
+            """)
 
     if "processed_zip_data" not in st.session_state:
         st.session_state["processed_zip_data"] = None
@@ -3594,12 +3635,32 @@ def render_ui():
             "- O trazar directamente una parcela en el visor usando la herramienta de **polígono o rectángulo** en la barra superior izquierda del mapa (✏️)."
         )
     else:
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        total_area_m2 = sum(float(p.get("area_m2", 0)) for p in extracted_polygons)
+        if total_area_m2 >= 10000:
+            area_str = f"{total_area_m2 / 10000:.2f} ha"
+        else:
+            area_str = f"{total_area_m2:,.0f} m²"
+
+        all_min_x = min(p["bounds"][0] for p in extracted_polygons)
+        all_min_y = min(p["bounds"][1] for p in extracted_polygons)
+        all_max_x = max(p["bounds"][2] for p in extracted_polygons)
+        all_max_y = max(p["bounds"][3] for p in extracted_polygons)
+        bb_w = all_max_x - all_min_x
+        bb_h = all_max_y - all_min_y
+        if bb_w >= 1000 or bb_h >= 1000:
+            extent_str = f"{bb_w/1000:.2f} × {bb_h/1000:.2f} km"
+        else:
+            extent_str = f"{bb_w:,.0f} × {bb_h:,.0f} m"
+
         layers_found = list(set(p["capa"] for p in extracted_polygons))
-        col_m1.metric("Polígonos detectados", len(extracted_polygons))
-        col_m2.metric("Capas / Orígenes", len(layers_found))
-        col_m3.metric("Proyección activa", crs_str)
-        col_m4.metric("Servicio activo", service_info["badge"])
+
+        st.markdown("#### 📊 Resumen del Ámbito del Proyecto")
+        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+        col_m1.metric("Polígonos", len(extracted_polygons), help="Total de geometrías cerradas identificadas")
+        col_m2.metric("Superficie Total", area_str, help=f"Área acumulada: {total_area_m2:,.1f} m²")
+        col_m3.metric("Extensión BBox", extent_str, help="Encuadre total del proyecto (Ancho × Alto)")
+        col_m4.metric("Capas CAD", len(layers_found), help="Capas o fuentes detectadas en el plano")
+        col_m5.metric("Proyección (CRS)", crs_str, help=f"Sistema cartográfico activo: {crs_str}")
 
         # Inicializar y sincronizar el estado de la tabla
         state_key = f"df_{dxf_display_name}_{len(extracted_polygons)}_{crs_str}_{wms_tag}"
@@ -3784,7 +3845,8 @@ def render_ui():
         else:
             st.info(f"📍 **{len(selected_rows)}** polígono(s) seleccionado(s) listos para descargar.")
 
-            # Diagnóstico de resolución y aviso preventivo si el tamaño excede 4000 px
+            # Diagnóstico de resolución y aviso preventivo para ámbitos extensos
+            large_polys = []
             for r in selected_rows:
                 r_b = r["bounds"]
                 r_res = float(r["resolucion_m_px"])
@@ -3796,29 +3858,32 @@ def render_ui():
                 req_h_px = r_hm / r_res
 
                 if req_w_px > 4000 or req_h_px > 4000:
-                    if "ajustar" in large_area_mode.lower():
-                        factor = min(4000 / req_w_px, 4000 / req_h_px, 1.0)
-                        effective_res = r_res / factor
-                        st.warning(
-                            f"⚠️ **Aviso de Resolución en '{r['nombre_archivo']}':** "
-                            f"El ámbito ({r_wm:.0f} × {r_hm:.0f} m) requiere **{int(req_w_px)} × {int(req_h_px)} px** a {r_res:.2f} m/px. "
-                            f"Al tener seleccionada la opción *'Ajustar a 4000 px'*, el servidor limitará la imagen a 4000 px y el **tamaño de celda real será de {effective_res:.2f} m/px** (perdiendo detalle). "
-                            f"👉 Para mantener tu resolución exacta de **{r_res:.2f} m/px**, selecciona en el menú lateral **'Dividir en mosaico'** o **'Unir en una sola imagen'**."
-                        )
-                    elif "unir" in large_area_mode.lower() or "cosido" in large_area_mode.lower():
-                        nx = math.ceil(req_w_px / 4000)
-                        ny = math.ceil(req_h_px / 4000)
-                        st.success(
-                            f"🖼️ **Resolución Exacta ({r_res:.2f} m/px):** '{r['nombre_archivo']}' se descargará en una cuadrícula de {nx} × {ny} ({nx*ny} teselas) "
-                            f"y se unirá automáticamente en **un único archivo .tif continuo de {int(req_w_px)} × {int(req_h_px)} px** con tamaño de celda de {r_res:.2f}."
-                        )
-                    else:
-                        nx = math.ceil(req_w_px / 4000)
-                        ny = math.ceil(req_h_px / 4000)
-                        st.success(
-                            f"🧩 **Resolución Exacta ({r_res:.2f} m/px):** '{r['nombre_archivo']}' se dividirá en **{nx} × {ny} = {nx*ny} teselas independientes** de máx 4000 px cada una, "
-                            f"garantizando el tamaño de celda exacto de {r_res:.2f} m/px. Insértalas juntas en AutoCAD con `_MAPIINSERT`."
-                        )
+                    large_polys.append({
+                        "nombre": r["nombre_archivo"],
+                        "wm": r_wm,
+                        "hm": r_hm,
+                        "w_px": int(req_w_px),
+                        "h_px": int(req_h_px),
+                        "res": r_res
+                    })
+
+            if large_polys:
+                if "ajustar" in large_area_mode.lower():
+                    st.warning(
+                        f"⚠️ **Aviso de Resolución en Áreas Extensas ({len(large_polys)} polígono(s) superan 4.000 px):**\n\n"
+                        f"Al estar activa la opción *'Ajustar a 4000 px'*, el servidor limitará el tamaño y reducirá la resolución de celda para no sobrepasar el límite. "
+                        f"👉 Para mantener tu resolución exacta sin perder nitidez, selecciona en el menú lateral **'Dividir en mosaico'** o **'Unir en una sola imagen'**."
+                    )
+                elif "unir" in large_area_mode.lower() or "cosido" in large_area_mode.lower():
+                    st.success(
+                        f"🖼️ **Resolución Exacta Preservada ({len(large_polys)} polígono(s) extensos):** "
+                        f"Se descargarán en cuadrícula de teselas a resolución nativa y se ensamblarán automáticamente en memoria en **un único archivo .tif continuo** por polígono."
+                    )
+                else:
+                    st.success(
+                        f"🧩 **Resolución Exacta Preservada ({len(large_polys)} polígono(s) extensos):** "
+                        f"Se dividirán automáticamente en teselas de máx. 4.000 px garantizando la resolución solicitada. Se insertan juntas en 1 paso en AutoCAD con `_MAPIINSERT`."
+                    )
 
         # Opción de conveniencia para áreas extensas
         has_any_multi = False
@@ -4217,47 +4282,88 @@ def render_ui():
                 st.error("No se pudo descargar ninguna imagen cartográfica. Verifica la conectividad con el servicio WMS y las coordenadas.")
 
     # ----------------------------------------------------------------------------------
-    # ENTREGA DE RESULTADOS: BOTÓN DE DESCARGA FINAL
+    # ENTREGA DE RESULTADOS: BOTÓN DE DESCARGA FINAL Y RESUMEN ESTRUCTURADO
     # ----------------------------------------------------------------------------------
     if st.session_state.get("processed_zip_data") is not None:
         st.markdown("---")
-        st.markdown("### 📦 Descarga de Resultados")
+        st.markdown("### 📦 Descarga de Resultados y Entrega Georreferenciada")
 
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.success(f"🎉 **¡Paquete de georreferenciación ({service_info['badge']}) generado exitosamente!**")
-            st.markdown(
-                f"El paquete ZIP contiene la cartografía **{service_info['name']}** en archivos **`.tif` + `.tfw`** listos para ser "
-                "insertados en AutoCAD mediante `_MAPIINSERT` o `_IMAGEATTACH`."
-            )
-            if st.session_state.get("is_vector_exportable"):
-                st.info(
-                    "📐 **¡Incluye archivo CAD vectorial complementario!**\n\n"
-                    "El archivo `.zip` incluye `vector_*.dxf` con las líneas de las parcelas proyectadas en las coordenadas oficiales de tu plano. "
-                    "Puedes abrirlo directamente en AutoCAD o Civil 3D e insertar las ortofotos mediante `_MAPIINSERT` para una concordancia perfecta."
-                )
+        zip_bytes = len(st.session_state["processed_zip_data"])
+        processed_items = st.session_state.get("processed_summary", [])
+        success_count = sum(1 for item in processed_items if item.get("Estado") != "Error")
+
+        # Tarjetas de resumen ejecutivo de entrega (KPIs)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("📦 Tamaño Paquete ZIP", format_file_size(zip_bytes))
+        k2.metric("🖼️ Archivos Ráster", f"{success_count} par(es) .tif + .tfw")
+        k3.metric("🌐 Sistema CRS", crs_str)
+        k4.metric("🗺️ Servicio Cartográfico", service_info["badge"])
+
+        if zip_bytes < 5000:
+            st.warning("⚠️ **Tamaño muy reducido (< 5 KB):** Comprueba que el CRS y las coordenadas del plano DXF coincidan con la cobertura geográfica del servidor WMS.")
+
+        st.success(f"🎉 **¡Paquete de georreferenciación ({service_info['badge']}) generado exitosamente!**")
+
+        st.download_button(
+            label=f"📥 Descargar Paquete ZIP para AutoCAD ({service_info['badge']} - {format_file_size(zip_bytes)})",
+            data=st.session_state["processed_zip_data"],
+            file_name=st.session_state["processed_zip_name"],
+            mime="application/zip",
+            width="stretch"
+        )
+
+        if st.session_state.get("is_vector_exportable"):
             st.info(
-                "💡 **Consejo para minutas o ámbitos en diagonal en AutoCAD:**\n\n"
-                "Para recortar la imagen siguiendo la forma exacta de tu minuta en el dibujo, usa el comando nativo `_IMAGECLIP` (`DELIMIMG`) -> *Nuevo contorno* (`N`) -> *Seleccionar polilínea* (`S`) y selecciona tu polilínea. AutoCAD ocultará las esquinas sobrantes al instante manteniendo la georreferenciación perfecta."
-            )
-            st.download_button(
-                label=f"📥 Descargar Paquete ZIP para AutoCAD ({service_info['badge']})",
-                data=st.session_state["processed_zip_data"],
-                file_name=st.session_state["processed_zip_name"],
-                mime="application/zip",
-                width="stretch"
+                "📐 **Incluye archivo CAD vectorial complementario:** "
+                "El archivo `.zip` incluye `vector_*.dxf` con los contornos de las parcelas proyectados en las coordenadas oficiales de tu plano."
             )
 
-        with c2:
-            zip_bytes = len(st.session_state["processed_zip_data"])
-            st.metric("Tamaño del archivo ZIP", format_file_size(zip_bytes))
-            if zip_bytes < 5000:
-                st.warning("⚠️ Tamaño muy reducido (< 5 KB): Comprueba que el CRS y las coordenadas del plano DXF coincidan con la cobertura geográfica del servidor WMS.")
+        # Instrucciones organizadas en pestañas para AutoCAD
+        with st.expander("📖 Guía de inserción en AutoCAD / Civil 3D y recorte por contorno", expanded=False):
+            r_tab1, r_tab2, r_tab3 = st.tabs([
+                "🖥️ AutoCAD Map 3D / Civil 3D",
+                "📐 AutoCAD Estándar / LT",
+                "✂️ Recorte de Minutas (DELIMIMG)"
+            ])
+            with r_tab1:
+                st.markdown("""
+                **Inserción automática en coordenadas reales con `_MAPIINSERT`:**
+                1. Descomprime el archivo `.zip` en la carpeta de tu proyecto.
+                2. En AutoCAD Map 3D, Civil 3D o BricsCAD, ejecuta el comando <span class="cad-kbd">_MAPIINSERT</span> (o menú *Insertar* → *Imagen ráster*).
+                3. Selecciona todos los archivos `.tif`.
+                4. AutoCAD detectará automáticamente los archivos de calibración `.tfw` asociados e insertará las ortofotos en su **posición métrica exacta al milímetro**.
+                """)
+            with r_tab2:
+                st.markdown("""
+                **Inserción en AutoCAD Clásico / LT:**
+                1. Ejecuta el comando <span class="cad-kbd">_IMAGEATTACH</span> (`ENLAZARIMG`).
+                2. Selecciona el archivo `.tif`.
+                3. Introduce el punto de inserción y escala indicados en el archivo `.tfw` o en la tabla resumen.
+                """)
+            with r_tab3:
+                st.markdown("""
+                **Recorte exacto por polilínea con `_IMAGECLIP` (`DELIMIMG`):**
+                1. Ejecuta el comando <span class="cad-kbd">_IMAGECLIP</span> (o <span class="cad-kbd">DELIMIMG</span> en español).
+                2. Selecciona el borde de la imagen ráster.
+                3. Elige la opción **Nuevo contorno** (<span class="cad-kbd">N</span>).
+                4. Elige **Seleccionar polilínea** (<span class="cad-kbd">S</span>) y haz clic sobre tu polilínea.
+                5. AutoCAD ocultará las esquinas sobrantes al instante, manteniendo intacta la georreferenciación.
+                """)
 
-        if st.session_state.get("processed_summary"):
+        if processed_items:
             st.write("")
-            st.markdown("#### 📑 Resumen de Archivos Generados")
-            st.dataframe(pd.DataFrame(st.session_state["processed_summary"]), width="stretch", hide_index=True)
+            st.markdown("#### 📑 Resumen Detallado de Archivos Generados")
+            summary_df = pd.DataFrame(processed_items)
+            col_cfg = {
+                "Archivo": st.column_config.TextColumn("Archivo Ráster", help="Nombre del archivo TIFF y calibración TFW"),
+                "Servicio": st.column_config.TextColumn("Servicio"),
+                "Dimensiones (px)": st.column_config.TextColumn("Dimensiones (px)"),
+                "Extensión (m)": st.column_config.TextColumn("Extensión Terreno (m)"),
+                "Resolución Real": st.column_config.TextColumn("Tamaño de Celda"),
+                "Estado": st.column_config.TextColumn("Estado"),
+                "Detalle": st.column_config.TextColumn("Tamaño / Teselas")
+            }
+            st.dataframe(summary_df, column_config=col_cfg, width="stretch", hide_index=True)
 
         # ------------------------------------------------------------------------------
         # SECCIÓN DINÁMICA: UNIR TESELAS APENAS SE GENERAN DIVIDIDAS
@@ -4353,9 +4459,11 @@ def render_ui():
                         st.error(f"❌ {stitch_error_msg}")
 
         if st.session_state.get("stitched_zip_data") is not None:
-            st.success("🎉 **¡Imagen unida generada con éxito a 0.50 m/px!** Ya puedes descargarla a continuación:")
+            st.markdown("---")
+            stitched_bytes = len(st.session_state["stitched_zip_data"])
+            st.success(f"🎉 **¡Imagen unida generada con éxito a resolución nativa (0.50 m/px)!** Paquete listo ({format_file_size(stitched_bytes)}):")
             st.download_button(
-                label=f"📥 Descargar Paquete con Imagen UNIDA (.tif + .tfw)",
+                label=f"📥 Descargar Paquete con Imagen UNIDA (.tif + .tfw - {format_file_size(stitched_bytes)})",
                 data=st.session_state["stitched_zip_data"],
                 file_name=st.session_state["stitched_zip_name"],
                 mime="application/zip",
