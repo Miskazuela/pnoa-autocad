@@ -4078,7 +4078,36 @@ def render_ui():
             st.session_state["stitched_zip_data"] = None
             st.session_state["cached_mosaic_data"] = None
 
-            progress_bar = st.progress(0.0)
+            # Pre-calcular el plan de descarga para conocer el total exacto de imágenes/teselas a descargar
+            planned_downloads = []
+            is_stitch_mode_global = ("unir" in large_area_mode.lower()) or ("cosido" in large_area_mode.lower())
+            is_tiled_mode_global = ("mosaico" in large_area_mode.lower()) or ("teselas" in large_area_mode.lower())
+
+            for r in selected_rows:
+                r_bounds = r["bounds"]
+                r_pixel_size = float(r["resolucion_m_px"])
+                if is_stitch_mode_global or is_tiled_mode_global:
+                    r_jobs = compute_tiled_georeferencing(
+                        bounds=r_bounds,
+                        buffer_pct=buffer_pct,
+                        pixel_size=r_pixel_size,
+                        max_tile_side=4000
+                    )
+                else:
+                    r_job = compute_georeferencing_parameters(
+                        bounds=r_bounds,
+                        buffer_pct=buffer_pct,
+                        pixel_size=r_pixel_size,
+                        max_pixels_lado=max_pixels_lado,
+                        max_pixels_totales=max_pixels_totales
+                    )
+                    r_jobs = [r_job]
+                planned_downloads.append(r_jobs)
+
+            total_tiles_to_download = max(1, sum(len(j_list) for j_list in planned_downloads))
+            completed_tiles = 0
+
+            progress_bar = st.progress(0.0, text=f"📥 Preparando descarga: 0% (0/{total_tiles_to_download} imágenes)")
             status_text = st.empty()
             log_expander = st.expander("📝 Detalle del procesamiento en tiempo real", expanded=True)
 
@@ -4116,43 +4145,22 @@ def render_ui():
                         log_expander.warning(f"⚠️ No se pudo generar vector DXF complementario: {dxf_err}")
 
                 for idx, row in enumerate(selected_rows):
-                    progress_bar.progress(idx / total_count)
-
                     clean_base = sanitize_filename(row["nombre_archivo"])
                     pixel_size = float(row["resolucion_m_px"])
                     bounds = row["bounds"]
+
+                    tile_jobs = planned_downloads[idx]
+                    is_stitch_mode = is_stitch_mode_global
+                    is_tiled_mode = is_tiled_mode_global
 
                     row_mosaic_cache = {
                         "clean_base": clean_base,
                         "bounds": bounds,
                         "pixel_size": pixel_size,
-                        "tile_jobs": [],
+                        "tile_jobs": tile_jobs,
                         "tiles_data": [],
-                        "is_multi_tile": False
+                        "is_multi_tile": len(tile_jobs) > 1
                     }
-
-                    is_stitch_mode = ("unir" in large_area_mode.lower()) or ("cosido" in large_area_mode.lower())
-                    is_tiled_mode = ("mosaico" in large_area_mode.lower()) or ("teselas" in large_area_mode.lower())
-
-                    if is_stitch_mode or is_tiled_mode:
-                        tile_jobs = compute_tiled_georeferencing(
-                            bounds=bounds,
-                            buffer_pct=buffer_pct,
-                            pixel_size=pixel_size,
-                            max_tile_side=4000
-                        )
-                    else:
-                        single_job = compute_georeferencing_parameters(
-                            bounds=bounds,
-                            buffer_pct=buffer_pct,
-                            pixel_size=pixel_size,
-                            max_pixels_lado=max_pixels_lado,
-                            max_pixels_totales=max_pixels_totales
-                        )
-                        tile_jobs = [single_job]
-
-                    row_mosaic_cache["tile_jobs"] = tile_jobs
-                    row_mosaic_cache["is_multi_tile"] = len(tile_jobs) > 1
 
                     # MODO UNIR EN UNA SOLA IMAGEN (Si son varias teselas y el usuario solicitó coser)
                     if is_stitch_mode and len(tile_jobs) > 1:
@@ -4177,16 +4185,24 @@ def render_ui():
                                     final_name = f"{clean_base}{suffix}_{counter}"
                                     counter += 1
                                 used_names.add(final_name)
-                                status_text.markdown(f"⏳ **Descargando [{final_name}.tif] ({job['ancho_px']} × {job['alto_px']} px a {pixel_size:.2f} m/px)...**")
-                                if service_info.get("type") == "xyz":
-                                    sub_bytes = fetch_xyz_ortho(session=session, tile_url_template=service_info["url"], crs_str=crs_str, bbox_buf=job["bbox_buf"], ancho_px=job["ancho_px"], alto_px=job["alto_px"])
-                                else:
-                                    sub_bytes = fetch_wms_ortho(session=session, wms_url=wms_url, wms_layer=wms_layer, crs_str=crs_str, bbox_buf=job["bbox_buf"], ancho_px=job["ancho_px"], alto_px=job["alto_px"])
-                                zf.writestr(f"{final_name}.tif", sub_bytes)
-                                zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
-                                s_kb = len(sub_bytes) / 1024.0
-                                summary_log.append({"Archivo": final_name, "Servicio": service_info["badge"], "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}", "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}", "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px", "Estado": "Descargado", "Detalle": f"{s_kb:.1f} KB"})
-                                success_count += 1
+                                pct_curr = min(100, int(round((completed_tiles / total_tiles_to_download) * 100)))
+                                status_text.markdown(f"⏳ **Descargando [{pct_curr}%] ({completed_tiles + 1}/{total_tiles_to_download}):** `{final_name}.tif` ({job['ancho_px']} × {job['alto_px']} px a {pixel_size:.2f} m/px)...")
+                                try:
+                                    if service_info.get("type") == "xyz":
+                                        sub_bytes = fetch_xyz_ortho(session=session, tile_url_template=service_info["url"], crs_str=crs_str, bbox_buf=job["bbox_buf"], ancho_px=job["ancho_px"], alto_px=job["alto_px"])
+                                    else:
+                                        sub_bytes = fetch_wms_ortho(session=session, wms_url=wms_url, wms_layer=wms_layer, crs_str=crs_str, bbox_buf=job["bbox_buf"], ancho_px=job["ancho_px"], alto_px=job["alto_px"])
+                                    zf.writestr(f"{final_name}.tif", sub_bytes)
+                                    zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
+                                    s_kb = len(sub_bytes) / 1024.0
+                                    summary_log.append({"Archivo": final_name, "Servicio": service_info["badge"], "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}", "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}", "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px", "Estado": "Descargado", "Detalle": f"{s_kb:.1f} KB"})
+                                    success_count += 1
+                                except Exception as err:
+                                    log_expander.error(f"❌ [{final_name}] Error: {err}")
+                                completed_tiles += 1
+                                pct_done = min(100, int(round((completed_tiles / total_tiles_to_download) * 100)))
+                                frac_done = min(1.0, completed_tiles / total_tiles_to_download)
+                                progress_bar.progress(frac_done, text=f"📥 Progreso de descarga: {pct_done}% completado ({completed_tiles}/{total_tiles_to_download} imágenes)")
                             continue
 
                         status_text.markdown(
@@ -4198,9 +4214,10 @@ def render_ui():
                         sub_errors = []
 
                         for t_idx, job in enumerate(tile_jobs):
+                            pct_curr = min(100, int(round((completed_tiles / total_tiles_to_download) * 100)))
                             status_text.markdown(
-                                f"⏳ **Descargando tesela [{t_idx + 1}/{len(tile_jobs)}] de [{idx + 1}/{total_count}]:** "
-                                f"`{clean_base}` ({job['ancho_px']} × {job['alto_px']} px)..."
+                                f"⏳ **Descargando [{pct_curr}%] - Tesela [{t_idx + 1}/{len(tile_jobs)}] ({completed_tiles + 1}/{total_tiles_to_download}) de `{clean_base}` ({service_info['badge']}):** "
+                                f"({job['ancho_px']} × {job['alto_px']} px)..."
                             )
                             try:
                                 if service_info.get("type") == "xyz":
@@ -4226,6 +4243,10 @@ def render_ui():
                                 master_canvas.paste(sub_img, (job["offset_x_px"], job["offset_y_px"]))
                             except Exception as sub_err:
                                 sub_errors.append(f"Tesela {t_idx + 1}: {sub_err}")
+                            completed_tiles += 1
+                            pct_done = min(100, int(round((completed_tiles / total_tiles_to_download) * 100)))
+                            frac_done = min(1.0, completed_tiles / total_tiles_to_download)
+                            progress_bar.progress(frac_done, text=f"📥 Progreso de descarga: {pct_done}% completado ({completed_tiles}/{total_tiles_to_download} imágenes)")
 
                         if sub_errors:
                             err_msg = "; ".join(sub_errors)
@@ -4296,8 +4317,9 @@ def render_ui():
                                 counter += 1
                             used_names.add(final_name)
 
+                            pct_curr = min(100, int(round((completed_tiles / total_tiles_to_download) * 100)))
                             status_text.markdown(
-                                f"⏳ **Descargando [{idx + 1}/{total_count}] ({service_info['badge']}):** `{final_name}.tif` "
+                                f"⏳ **Descargando [{pct_curr}%] ({completed_tiles + 1}/{total_tiles_to_download}) ({service_info['badge']}):** `{final_name}.tif` "
                                 f"({job['ancho_px']} × {job['alto_px']} px, res: {abs(job['pixel_x']):.2f} m/px)..."
                             )
 
@@ -4362,6 +4384,11 @@ def render_ui():
                                     "Detalle": err_msg
                                 })
 
+                            completed_tiles += 1
+                            pct_done = min(100, int(round((completed_tiles / total_tiles_to_download) * 100)))
+                            frac_done = min(1.0, completed_tiles / total_tiles_to_download)
+                            progress_bar.progress(frac_done, text=f"📥 Progreso de descarga: {pct_done}% completado ({completed_tiles}/{total_tiles_to_download} imágenes)")
+
                         # Si se marcó incluir también la versión unida de una vez en el ZIP
                         if auto_include_stitched and row_mosaic_cache["is_multi_tile"] and len(row_mosaic_cache["tiles_data"]) == len(tile_jobs):
                             try:
@@ -4408,7 +4435,7 @@ def render_ui():
 
                     cached_mosaic_polygons.append(row_mosaic_cache)
 
-            progress_bar.progress(1.0)
+            progress_bar.progress(1.0, text="✅ Descarga 100% completada")
             status_text.empty()
 
             if success_count > 0:
