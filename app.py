@@ -245,6 +245,7 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
     """
     Extrae todas las polilíneas cerradas (LWPOLYLINE y POLYLINE con closed=True)
     del espacio modelo del DXF y calcula su Bounding Box, área y vértices.
+    Soporta también ensamblado y poligonización de mallas de líneas sueltas (LINE) y polilíneas abiertas.
     """
     doc = load_dxf_document(file_bytes)
     msp = doc.modelspace()
@@ -252,6 +253,9 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
     extracted_polygons: List[Dict[str, Any]] = []
     base_file_prefix = os.path.splitext(sanitize_filename(filename))[0]
     polygon_counter = 1
+
+    unclosed_line_strings: List[LineString] = []
+    lines_for_polygonize: List[LineString] = []
 
     for entity in msp.query("LWPOLYLINE POLYLINE"):
         try:
@@ -265,12 +269,15 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
                 pts = [(float(p.x), float(p.y)) for p in entity.points()]
 
             if len(pts) < 3:
+                if len(pts) == 2:
+                    unclosed_line_strings.append(LineString(pts))
                 continue
 
             is_cad_closed = bool(entity.is_closed)
             is_geom_closed = (abs(pts[0][0] - pts[-1][0]) < 1e-5 and abs(pts[0][1] - pts[-1][1]) < 1e-5)
 
             if not (is_cad_closed or is_geom_closed):
+                unclosed_line_strings.append(LineString(pts))
                 continue
 
             poly = Polygon(pts)
@@ -306,6 +313,70 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
 
         except Exception:
             continue
+
+    # Lectura de entidades LINE sueltas del espacio modelo
+    for line_ent in msp.query("LINE"):
+        try:
+            p_s = line_ent.dxf.start
+            p_e = line_ent.dxf.end
+            sx, sy = float(p_s.x), float(p_s.y)
+            ex, ey = float(p_e.x), float(p_e.y)
+            if (sx - ex) ** 2 + (sy - ey) ** 2 > 1e-8:
+                lines_for_polygonize.append(LineString([(sx, sy), (ex, ey)]))
+        except Exception:
+            continue
+
+    # Poligonización de líneas sueltas y polilíneas abiertas conectadas
+    all_raw_lines = lines_for_polygonize + unclosed_line_strings
+    if all_raw_lines:
+        try:
+            malla_polys = list(polygonize(all_raw_lines))
+            for m_poly in malla_polys:
+                if not m_poly.is_valid or m_poly.area <= 0.01:
+                    continue
+                minx, miny, maxx, maxy = m_poly.bounds
+                width = maxx - minx
+                height = maxy - miny
+                if width <= 0.001 or height <= 0.001:
+                    continue
+
+                # Evitar duplicar polígonos ya añadidos
+                is_duplicate = False
+                for ep in extracted_polygons:
+                    if abs(ep["area_m2"] - m_poly.area) < 0.1:
+                        try:
+                            ep_poly = Polygon(ep["pts"])
+                            if m_poly.equals_exact(ep_poly, tolerance=0.1):
+                                is_duplicate = True
+                                break
+                        except Exception:
+                            pass
+                if is_duplicate:
+                    continue
+
+                poly_pts = [(float(c[0]), float(c[1])) for c in m_poly.exterior.coords]
+                clean_layer = "LINE_POLIGONO"
+                clean_tag = sanitize_filename(service_tag)
+                output_name = f"{base_file_prefix}_{clean_tag}_{clean_layer}_p{polygon_counter}"
+                rec_res, rec_label, _ = get_recommended_resolution(m_poly.area)
+
+                extracted_polygons.append({
+                    "incluir": True,
+                    "id": polygon_counter,
+                    "capa": "LINE (Malla de líneas)",
+                    "nombre_archivo": output_name,
+                    "resolucion_m_px": rec_res,
+                    "calidad_sugerida": rec_label,
+                    "ancho_m": round(width, 2),
+                    "alto_m": round(height, 2),
+                    "area_m2": round(m_poly.area, 2),
+                    "num_vertices": len(poly_pts),
+                    "bounds": (minx, miny, maxx, maxy),
+                    "pts": poly_pts
+                })
+                polygon_counter += 1
+        except Exception:
+            pass
 
     return extracted_polygons
 
@@ -2973,14 +3044,9 @@ def render_ui():
         st.session_state["sidebar_epsg_num_search"] = str(val_code)
         if "sidebar_epsg_select_widget" in st.session_state:
             del st.session_state["sidebar_epsg_select_widget"]
-        if isinstance(val_code, int) and val_code not in [25829, 25830, 25831, 32628]:
-            curr_serv_idx = st.session_state.get("selected_service_idx", 0)
-            all_serv_keys = list(SERVICES_CATALOG.keys())
-            curr_serv_key = all_serv_keys[curr_serv_idx] if curr_serv_idx < len(all_serv_keys) else "pnoa"
-            if curr_serv_key not in ["google_sat", "google_hybrid", "esri_sat", "custom"]:
-                sat_idx = all_serv_keys.index("google_sat") if "google_sat" in all_serv_keys else 8
-                st.session_state["selected_service_idx"] = sat_idx
-                st.session_state["sidebar_service_select"] = SERVICES_CATALOG["google_sat"]["name"]
+        spain_codes = {25828, 25829, 25830, 25831, 25832, 23028, 23029, 23030, 23031, 4258, 4230, 32628}
+        if isinstance(val_code, int) and val_code in spain_codes:
+            st.session_state["dismiss_pnoa_notice"] = False
 
     if "pending_custom_wms_layer" in st.session_state:
         st.session_state["custom_wms_layer_input"] = str(st.session_state.pop("pending_custom_wms_layer"))
@@ -3000,14 +3066,9 @@ def render_ui():
             try:
                 _ = CRS.from_epsg(num_code)
                 st.session_state["active_epsg_code"] = num_code
-                if num_code not in [25829, 25830, 25831, 32628]:
-                    curr_serv_idx = st.session_state.get("selected_service_idx", 0)
-                    all_serv_keys = list(SERVICES_CATALOG.keys())
-                    curr_serv_key = all_serv_keys[curr_serv_idx] if curr_serv_idx < len(all_serv_keys) else "pnoa"
-                    if curr_serv_key not in ["google_sat", "google_hybrid", "esri_sat", "custom"]:
-                        sat_idx = all_serv_keys.index("google_sat") if "google_sat" in all_serv_keys else 8
-                        st.session_state["selected_service_idx"] = sat_idx
-                        st.session_state["sidebar_service_select"] = SERVICES_CATALOG["google_sat"]["name"]
+                spain_codes = {25828, 25829, 25830, 25831, 25832, 23028, 23029, 23030, 23031, 4258, 4230, 32628}
+                if num_code in spain_codes:
+                    st.session_state["dismiss_pnoa_notice"] = False
                 if "sidebar_epsg_select_widget" in st.session_state:
                     del st.session_state["sidebar_epsg_select_widget"]
                 st.session_state["sidebar_epsg_search_error"] = None
@@ -3026,14 +3087,9 @@ def render_ui():
                 st.session_state["active_epsg_code"] = parsed_code
                 st.session_state["sidebar_epsg_num_search"] = str(parsed_code)
                 st.session_state["sidebar_epsg_search_error"] = None
-                if isinstance(parsed_code, int) and parsed_code not in [25829, 25830, 25831, 32628]:
-                    curr_serv_idx = st.session_state.get("selected_service_idx", 0)
-                    all_serv_keys = list(SERVICES_CATALOG.keys())
-                    curr_serv_key = all_serv_keys[curr_serv_idx] if curr_serv_idx < len(all_serv_keys) else "pnoa"
-                    if curr_serv_key not in ["google_sat", "google_hybrid", "esri_sat", "custom"]:
-                        sat_idx = all_serv_keys.index("google_sat") if "google_sat" in all_serv_keys else 8
-                        st.session_state["selected_service_idx"] = sat_idx
-                        st.session_state["sidebar_service_select"] = SERVICES_CATALOG["google_sat"]["name"]
+                spain_codes = {25828, 25829, 25830, 25831, 25832, 23028, 23029, 23030, 23031, 4258, 4230, 32628}
+                if isinstance(parsed_code, int) and parsed_code in spain_codes:
+                    st.session_state["dismiss_pnoa_notice"] = False
 
     def _on_epsg_view_mode_change():
         if "sidebar_epsg_select_widget" in st.session_state:
@@ -3136,6 +3192,14 @@ def render_ui():
             <div style="color: #64748b; font-size: 10px; margin-top: 2px;">📐 Tipo: {proj_type}</div>
         </div>
         """, unsafe_allow_html=True)
+
+        if pyproj_crs.is_geographic:
+            st.sidebar.warning(
+                "⚠️ **Sistema Angular (Grados Lat/Lon):** "
+                f"`{crs_str}` mide en grados angulares, no en metros. "
+                "AutoCAD y Civil 3D requieren proyecciones métricas proyectadas (ej. UTM ETRS89 en España, MGA en Australia, UTM WGS 84) "
+                "para que las cotas y mediciones en CAD correspondan 1:1 en metros y evitar imágenes diminutas de 1×1 píxel."
+            )
     except Exception as crs_err:
         st.sidebar.error(f"⚠️ {crs_str} no reconocido: {crs_err}")
 
@@ -3586,6 +3650,58 @@ def render_ui():
         dxf_display_name = "trazado_mapa.dxf" if drawn_polys else "proyecto.dxf"
 
     # ----------------------------------------------------------------------------------
+    # AVISOS INTELIGENTES (COBERTURA PNOA / PROYECCIÓN EN GRADOS)
+    # ----------------------------------------------------------------------------------
+    is_spain_service = selected_service_key not in ["google_sat", "google_hybrid", "esri_sat", "custom"]
+    spain_epsg_set = {25828, 25829, 25830, 25831, 25832, 23028, 23029, 23030, 23031, 4258, 4230, 32628}
+    is_outside_spain = False
+    try:
+        if str(epsg_code).isdigit() and int(epsg_code) not in spain_epsg_set:
+            is_outside_spain = True
+        elif detected_zone and detected_zone.get("key") != "spain":
+            is_outside_spain = True
+    except Exception:
+        pass
+
+    if is_spain_service and is_outside_spain and not st.session_state.get("dismiss_pnoa_notice", False):
+        col_pnoa_txt, col_pnoa_btn = st.columns([3.0, 1.1])
+        with col_pnoa_txt:
+            zone_label = f"{detected_zone['flag']} {detected_zone['name']}" if detected_zone else crs_str
+            st.info(
+                f"ℹ️ **Servicio activo: {service_info['name']} (Cobertura oficial: España)**\n\n"
+                f"Las coordenadas del proyecto corresponden a un ámbito internacional ({zone_label}). "
+                "Los servicios oficiales del IGN y PNOA ofrecen ortofotos exclusivas para el territorio español. "
+                "Para obtener imágenes satelitales en esta ubicación fuera de España, puedes cambiar a **Google Satélite** o **Esri World Imagery**."
+            )
+        with col_pnoa_btn:
+            st.write("")
+            if st.button("🌐 Cambiar a Google Satélite", key="btn_pnoa_switch_to_sat", width="stretch"):
+                all_s_keys = list(SERVICES_CATALOG.keys())
+                if "google_sat" in all_s_keys:
+                    st.session_state["selected_service_idx"] = all_s_keys.index("google_sat")
+                    st.session_state["sidebar_service_select"] = SERVICES_CATALOG["google_sat"]["name"]
+                    st.rerun()
+            if st.button("✕ Descartar aviso", key="btn_pnoa_dismiss_notice", width="stretch"):
+                st.session_state["dismiss_pnoa_notice"] = True
+                st.rerun()
+
+    is_crs_geo = False
+    try:
+        if "pyproj_crs" in locals() and pyproj_crs and pyproj_crs.is_geographic:
+            is_crs_geo = True
+    except Exception:
+        pass
+
+    if is_crs_geo:
+        st.warning(
+            f"⚠️ **Aviso de Proyección CAD ({crs_str} - Coordenadas en grados):** "
+            f"El sistema activo `{crs_str}` es un sistema de coordenadas geográficas angular (expresado en grados Lat/Lon, no en metros). "
+            "En AutoCAD y topografía los dibujos se trabajan en metros; calcular una resolución métrica (ej. 0.50 m/px) sobre grados angulares puede "
+            "producir imágenes de 1×1 píxel o archivos TFW descalibrados. "
+            "**Recomendación:** Selecciona en la barra lateral el huso o proyección métrica correspondiente a tu proyecto (ej. UTM ETRS89 en España, MGA en Australia, UTM WGS 84)."
+        )
+
+    # ----------------------------------------------------------------------------------
     # VISOR CARTOGRÁFICO INTERACTIVO Y HERRAMIENTA DE TRAZADO
     # ----------------------------------------------------------------------------------
     st.markdown("---")
@@ -3934,7 +4050,7 @@ def render_ui():
             auto_include_stitched = st.checkbox(
                 "📦 Incluir de una vez ambas opciones en el ZIP (teselas separadas + imagen unida)",
                 value=False,
-                help="Añade automáticamente al archivo ZIP tanto las teselas divididas como una copia de la imagen completamente unida a resolución exacta (0.50 m/px)."
+                help="Añade automáticamente al archivo ZIP tanto las teselas divididas como una copia de la imagen completamente unida a la resolución exacta configurada."
             )
 
         # ------------------------------------------------------------------------------
@@ -4403,11 +4519,16 @@ def render_ui():
         # ------------------------------------------------------------------------------
         mosaic_cache = st.session_state.get("cached_mosaic_data")
         if mosaic_cache and mosaic_cache.get("has_multi_tiles"):
+            stitch_res_val = 0.50
+            if mosaic_cache.get("polygons"):
+                stitch_res_val = mosaic_cache["polygons"][0].get("pixel_size", 0.50)
+            stitch_res_str = f"{stitch_res_val:.2f} m/px"
+
             st.markdown("---")
             st.markdown("### 🧩 Unir Teselas en una Sola Imagen Continua")
             st.markdown(
-                "💡 **¿Prefieres tenerlas unidas en lugar de separadas?** "
-                "Las teselas ya se han generado y están listas en memoria a resolución exacta de **0.50 m/px**. "
+                f"💡 **¿Prefieres tenerlas unidas en lugar de separadas?** "
+                f"Las teselas ya se han generado y están listas en memoria a resolución exacta de **{stitch_res_str}**. "
                 "Puedes mantenerlas separadas (descargando el ZIP de arriba) o pulsar el siguiente botón para "
                 "**ensamblarlas al instante en una sola imagen continua** (usando los datos en memoria, sin esperar descargas de internet):"
             )
@@ -4418,13 +4539,13 @@ def render_ui():
                     "🪄 Ensamblar teselas ahora en 1 sola imagen (.tif + .tfw)",
                     type="secondary",
                     width="stretch",
-                    help="Cose todas las teselas contiguas en un único ráster continuo preservando el tamaño de celda exacto de 0.50 m/px."
+                    help=f"Cose todas las teselas contiguas en un único ráster continuo preservando el tamaño de celda exacto de {stitch_res_str}."
                 )
             with col_note:
                 st.caption("⚡ Ensamblado ultrarrápido en memoria RAM. No requiere volver a descargar nada del servidor IGN.")
 
             if btn_stitch_now:
-                with st.spinner("Ensamblando teselas en memoria a resolución exacta (0.50 m/px)..."):
+                with st.spinner(f"Ensamblando teselas en memoria a resolución exacta ({stitch_res_str})..."):
                     stitch_error_msg = None
                     try:
                         stitched_zip_buf = io.BytesIO()
@@ -4494,7 +4615,11 @@ def render_ui():
         if st.session_state.get("stitched_zip_data") is not None:
             st.markdown("---")
             stitched_bytes = len(st.session_state["stitched_zip_data"])
-            st.success(f"🎉 **¡Imagen unida generada con éxito a resolución nativa (0.50 m/px)!** Paquete listo ({format_file_size(stitched_bytes)}):")
+            stitch_res_val = 0.50
+            if mosaic_cache and mosaic_cache.get("polygons"):
+                stitch_res_val = mosaic_cache["polygons"][0].get("pixel_size", 0.50)
+            stitch_res_str = f"{stitch_res_val:.2f} m/px"
+            st.success(f"🎉 **¡Imagen unida generada con éxito a resolución nativa ({stitch_res_str})!** Paquete listo ({format_file_size(stitched_bytes)}):")
             st.download_button(
                 label=f"📥 Descargar Paquete con Imagen UNIDA (.tif + .tfw - {format_file_size(stitched_bytes)})",
                 data=st.session_state["stitched_zip_data"],
