@@ -2604,17 +2604,13 @@ def generate_preview_map(
     custom_wms_layer: str = "",
     custom_wms_tag: str = "wms_custom",
     enable_draw: bool = True,
-    auto_locate: bool = False,
-    user_center: Optional[Tuple[float, float]] = None,
-    user_zoom: Optional[int] = None,
-    force_fit_bounds: bool = False
+    auto_locate: bool = False
 ) -> folium.Map:
     """
     Crea un mapa interactivo con ortofotografía satelital y capas oficiales del IGN.
     Permite visualizar polígonos existentes (DXF/KML), geolocalizar la posición actual del
     navegador (GPS) y trazar nuevas parcelas directamente en el visor mediante la barra
     de herramientas de dibujo (Draw: polígonos y rectángulos).
-    Preserva las coordenadas de visualización inspeccionadas por el usuario entre cambios de capas.
     """
     has_polys = bool(polygons)
     all_lats: List[float] = []
@@ -2678,18 +2674,12 @@ def generate_preview_map(
         except Exception:
             pass
 
-    if user_center and not force_fit_bounds:
-        center_lat, center_lon = user_center
-        zoom_start = user_zoom if user_zoom is not None else 15
-    elif all_lats and all_lons:
+    if all_lats and all_lons:
         center_lat = sum(all_lats) / len(all_lats)
         center_lon = sum(all_lons) / len(all_lons)
-        zoom_start = user_zoom if user_zoom is not None else 15
+        zoom_start = 15
     else:
-        def_lat, def_lon, def_zoom = get_crs_default_center(crs_str)
-        center_lat = user_center[0] if user_center else def_lat
-        center_lon = user_center[1] if user_center else def_lon
-        zoom_start = user_zoom if user_zoom is not None else def_zoom
+        center_lat, center_lon, zoom_start = get_crs_default_center(crs_str)
 
     m = folium.Map(
         location=[center_lat, center_lon],
@@ -2827,7 +2817,7 @@ def generate_preview_map(
             tooltip=f"Centroide Polígono #{p_info['id']}"
         ).add_to(m)
 
-    if all_lats and all_lons and force_fit_bounds:
+    if all_lats and all_lons:
         min_lat, max_lat = min(all_lats), max(all_lats)
         min_lon, max_lon = min(all_lons), max(all_lons)
         m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
@@ -3021,7 +3011,6 @@ def render_ui():
                 if "sidebar_epsg_select_widget" in st.session_state:
                     del st.session_state["sidebar_epsg_select_widget"]
                 st.session_state["sidebar_epsg_search_error"] = None
-                st.session_state["force_fit_bounds"] = True
             except Exception:
                 st.session_state["sidebar_epsg_search_error"] = f"⚠️ El código EPSG:{num_code} no existe en la base de datos oficial."
         elif raw_val:
@@ -3045,7 +3034,6 @@ def render_ui():
                         sat_idx = all_serv_keys.index("google_sat") if "google_sat" in all_serv_keys else 8
                         st.session_state["selected_service_idx"] = sat_idx
                         st.session_state["sidebar_service_select"] = SERVICES_CATALOG["google_sat"]["name"]
-                st.session_state["force_fit_bounds"] = True
 
     def _on_epsg_view_mode_change():
         if "sidebar_epsg_select_widget" in st.session_state:
@@ -3563,10 +3551,6 @@ def render_ui():
                             "flag": auto_detected_zone["flag"]
                         }
 
-                    st.session_state["force_fit_bounds"] = True
-                    st.session_state.pop("last_map_center", None)
-                    st.session_state.pop("last_map_zoom", None)
-
                     if needs_rerun:
                         st.rerun()
 
@@ -3584,8 +3568,6 @@ def render_ui():
                 st.code(traceback.format_exc())
     else:
         st.session_state.pop("last_auto_detected_file", None)
-        st.session_state.pop("last_map_center", None)
-        st.session_state.pop("last_map_zoom", None)
 
     # Integrar geometrías dibujadas interactivamente en el mapa
     persisted_drawings = st.session_state.get("persisted_drawings", [])
@@ -3628,20 +3610,10 @@ def render_ui():
                     st.session_state["persisted_drawings"] = []
                     st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
                     st.session_state["processed_zip_data"] = None
-                    st.session_state["force_fit_bounds"] = True
-                    st.rerun()
-            elif extracted_polygons:
-                if st.button("🎯 Encuadrar", width="stretch", help="Reencuadra el visor sobre tus geometrías"):
-                    st.session_state["force_fit_bounds"] = True
-                    st.session_state.pop("last_map_center", None)
-                    st.session_state.pop("last_map_zoom", None)
                     st.rerun()
 
     draw_ver = st.session_state.get("draw_version", 0)
     auto_locate = st.session_state.pop("locate_trigger", False)
-    force_fit = st.session_state.pop("force_fit_bounds", False)
-    saved_center = st.session_state.get("last_map_center")
-    saved_zoom = st.session_state.get("last_map_zoom")
 
     preview_map = generate_preview_map(
         polygons=extracted_polygons if extracted_polygons else None,
@@ -3652,10 +3624,7 @@ def render_ui():
         custom_wms_layer=wms_layer if selected_service_key == "custom" else "",
         custom_wms_tag=wms_tag if selected_service_key == "custom" else "custom",
         enable_draw=True,
-        auto_locate=auto_locate,
-        user_center=saved_center,
-        user_zoom=saved_zoom,
-        force_fit_bounds=force_fit
+        auto_locate=auto_locate
     )
 
     if preview_map is not None:
@@ -3663,17 +3632,9 @@ def render_ui():
             preview_map,
             use_container_width=True,
             height=480,
-            returned_objects=["all_drawings", "last_active_drawing", "center", "zoom"],
+            returned_objects=["all_drawings", "last_active_drawing"],
             key=f"cad_map_v{draw_ver}"
         )
-
-        if map_output:
-            if map_output.get("center"):
-                c_info = map_output["center"]
-                if isinstance(c_info, dict) and "lat" in c_info and "lng" in c_info:
-                    st.session_state["last_map_center"] = (float(c_info["lat"]), float(c_info["lng"]))
-            if map_output.get("zoom"):
-                st.session_state["last_map_zoom"] = int(map_output["zoom"])
 
         if map_output and map_output.get("all_drawings"):
             leaflet_drawings = map_output.get("all_drawings")
