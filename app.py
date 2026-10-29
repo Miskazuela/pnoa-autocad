@@ -40,7 +40,24 @@ import traceback
 import concurrent.futures
 from typing import List, Dict, Any, Tuple, Optional
 
+import sys
+from pathlib import Path
+
+# Asegurar que el directorio de la aplicación siempre esté en sys.path
+_APP_DIR = str(Path(__file__).resolve().parent)
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
+
 import streamlit as st
+
+# Streamlit Page Config debe ser la primera llamada de Streamlit
+st.set_page_config(
+    page_title="GeoRaster to CAD | Extractor Georreferenciado Universal",
+    page_icon="🌍",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
@@ -51,7 +68,6 @@ import shapefile
 import ezdxf
 from shapely.geometry import Polygon, LineString, MultiLineString, shape
 from shapely.ops import polygonize
-from pathlib import Path
 from pyproj import CRS, Transformer
 from pyproj.database import query_crs_info
 import folium
@@ -60,14 +76,10 @@ from streamlit_folium import st_folium
 from PIL import Image, ImageDraw, ImageChops
 Image.MAX_IMAGE_PIXELS = None  # Permitir ensamblado y procesamiento de imágenes y mosaicos de gran tamaño sin límite artificial
 import xml.etree.ElementTree as ET
-
-# Streamlit Page Config debe ser la primera llamada de Streamlit
-st.set_page_config(
-    page_title="GeoRaster to CAD | Extractor Georreferenciado Universal",
-    page_icon="🌍",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+import importlib
+import wms_bot
+importlib.reload(wms_bot)
+from wms_bot import render_floating_assistant_button, show_wms_assistant_dialog
 
 
 # --------------------------------------------------------------------------------------
@@ -3048,6 +3060,10 @@ def render_ui():
         if isinstance(val_code, int) and val_code in spain_codes:
             st.session_state["dismiss_pnoa_notice"] = False
 
+    if "pending_sidebar_service" in st.session_state:
+        st.session_state["sidebar_service_select"] = str(st.session_state.pop("pending_sidebar_service"))
+    if "pending_custom_wms_url" in st.session_state:
+        st.session_state["custom_wms_url_val"] = str(st.session_state.pop("pending_custom_wms_url"))
     if "pending_custom_wms_layer" in st.session_state:
         st.session_state["custom_wms_layer_input"] = str(st.session_state.pop("pending_custom_wms_layer"))
 
@@ -3287,6 +3303,12 @@ def render_ui():
 
     # 4. Servicio Cartográfico y Satelital (WMS IGN / Google Satélite / Esri)
     st.sidebar.subheader("4. Servicio Cartográfico / Satelital")
+    if st.sidebar.button("🤖 Abrir Asistente WMS", key="btn_sidebar_open_wms", use_container_width=True, help="Abrir Asistente WMS Mundial"):
+        show_wms_assistant_dialog(
+            active_epsg=st.session_state.get("active_epsg_code", 25830),
+            current_service_name=st.session_state.get("sidebar_service_select", "Ortofoto PNOA"),
+            uploaded_filename=st.session_state.get("last_uploaded_filename", None)
+        )
     service_keys = list(SERVICES_CATALOG.keys())
     service_labels = [SERVICES_CATALOG[k]["name"] for k in service_keys]
 
@@ -3506,6 +3528,7 @@ def render_ui():
         ext = os.path.splitext(filename)[1].lower()
         file_bytes = uploaded_file.getvalue()
         dxf_display_name = filename
+        st.session_state["last_uploaded_filename"] = filename
         file_signature = f"{filename}_{len(file_bytes)}"
 
         auto_detected_code = None
@@ -3648,6 +3671,15 @@ def render_ui():
     extracted_polygons = file_polygons + drawn_polys
     if not dxf_display_name:
         dxf_display_name = "trazado_mapa.dxf" if drawn_polys else "proyecto.dxf"
+
+    # ----------------------------------------------------------------------------------
+    # BOTÓN FLOTANTE EN ESQUINA INFERIOR DERECHA (ASISTENTE WMS MUNDIAL)
+    # ----------------------------------------------------------------------------------
+    render_floating_assistant_button(
+        active_epsg=st.session_state.get("active_epsg_code", 25830),
+        current_service_name=selected_service_label,
+        uploaded_filename=dxf_display_name
+    )
 
     # ----------------------------------------------------------------------------------
     # AVISOS INTELIGENTES (COBERTURA PNOA / PROYECCIÓN EN GRADOS)
