@@ -90,11 +90,14 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "name": "GEBCO Grid (Batimetría y Relieve de Océanos y Costas Mundial)",
         "category": "🌐 Servicios Mundiales",
         "region": "Global / Océanos y Costas",
-        "url": "https://www.gebco.net/data_and_products/gebco_web_services/web_map_service/mapserv",
+        "url": "https://wms.gebco.net/mapserv",
         "default_layer": "GEBCO_LATEST",
         "description": "Modelo batimétrico continuo global del terreno submarino y relieve costero (GEBCO / UNESCO).",
         "tags": ["batimetria", "mar", "costa", "oceano", "profundidad", "marino", "puerto", "submarino", "gebco"],
-        "layers": [("GEBCO_LATEST", "Relieve y Batimetría GEBCO")]
+        "layers": [
+            ("GEBCO_LATEST", "Relieve y Batimetría GEBCO"),
+            ("GEBCO_Grid", "GEBCO Grid Global")
+        ]
     },
 
     # ==========================================
@@ -133,11 +136,29 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "name": "Colombia - Cartografía Básica Oficial (IGAC)",
         "category": "🌎 América Latina",
         "region": "Colombia",
-        "url": "https://mapas.igac.gov.co/server/services/carto/CartografiaBasica/MapServer/WMSServer",
+        "url": "https://mapas2.igac.gov.co/server/services/carto/carto100000colombia2019/MapServer/WMSServer",
+        "default_layer": "34",
+        "description": "Cartografía topográfica oficial del Instituto Geográfico Agustín Codazzi (IGAC) de Colombia: vías, orografía, drenajes y límites.",
+        "tags": ["colombia", "igac", "bogota", "medellin", "cali", "cartografia", "topografia", "magna", "sirgas", "nacional", "vias", "orografia"],
+        "layers": [
+            ("34", "Vías e Infraestructura"),
+            ("21", "Límites Administrativos"),
+            ("39", "Orografía y Relieve"),
+            ("24", "Hidrografía (Drenaje Sencillo)"),
+            ("0", "Bosques y Coberturas"),
+            ("20", "Construcciones")
+        ]
+    },
+    {
+        "id": "colombia_igac_municipios",
+        "name": "Colombia - Municipios y Límites Político-Administrativos (IGAC)",
+        "category": "🌎 América Latina",
+        "region": "Colombia",
+        "url": "https://mapas2.igac.gov.co/server/services/carto/municipios/MapServer/WMSServer",
         "default_layer": "0",
-        "description": "Cartografía topográfica oficial del Instituto Geográfico Agustín Codazzi (IGAC) de Colombia.",
-        "tags": ["colombia", "igac", "bogota", "medellin", "cali", "cartografia", "topografia", "magna", "sirgas", "nacional"],
-        "layers": [("0", "Cartografía Básica IGAC")]
+        "description": "Límites departamentales y municipales oficiales de Colombia certificados por el IGAC.",
+        "tags": ["colombia", "igac", "municipios", "limites", "fronteras", "departamentos", "politico", "division"],
+        "layers": [("0", "Municipios y Departamentos de Colombia")]
     },
     {
         "id": "medellin_geomedellin",
@@ -152,14 +173,18 @@ WMS_DATABASE: List[Dict[str, Any]] = [
     },
     {
         "id": "cali_idecali",
-        "name": "Cali - Infraestructura de Datos Espaciales (IDECali)",
+        "name": "Cali - Infraestructura de Datos Espaciales (IDESC / Alcaldía de Cali)",
         "category": "🌎 América Latina",
         "region": "Cali (Colombia)",
-        "url": "https://idesc.cali.gov.co:8443/geoserver/wms",
-        "default_layer": "mc_barrios",
-        "description": "Cartografía oficial del Distrito de Santiago de Cali (IDESC / Alcaldía de Cali): barrios, vías y comunas.",
+        "url": "https://ws-idesc.cali.gov.co/geoserver/wms",
+        "default_layer": "Mapa base",
+        "description": "Cartografía oficial del Distrito de Santiago de Cali (IDESC / Alcaldía de Cali): base urbana, comunas y equipamientos.",
         "tags": ["cali", "valle", "colombia", "cartografia", "barrios", "idecali", "idesc"],
-        "layers": [("mc_barrios", "Barrios y Comunas Cali")]
+        "layers": [
+            ("Mapa base", "Mapa Base Oficial Cali"),
+            ("cultura:acpc_tdf_festivales", "Equipamientos y Cultura"),
+            ("salud:ads_afiliados_eps", "Infraestructura")
+        ]
     },
     {
         "id": "colombia_sgc_geologia",
@@ -177,44 +202,47 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "name": "México - Cartografía Topográfica Nacional (INEGI)",
         "category": "🌎 América Latina",
         "region": "México",
-        "url": "https://mapas.inegi.org.mx/wms/wms_topografia",
-        "default_layer": "topografia",
+        "url": "https://gaia.inegi.org.mx/NLB/tunnel/wms/wms61",
+        "default_layer": "Datos del relieve",
         "description": "Información topográfica oficial con curvas de nivel, localidades y orografía del INEGI de México.",
-        "tags": ["mexico", "inegi", "cdmx", "guadalajara", "monterrey", "curvas", "nivel", "topografia", "elevacion"],
-        "layers": [("topografia", "Topografía Nacional INEGI")]
+        "tags": ["mexico", "inegi", "cdmx", "guadalajara", "monterrey", "curvas", "nivel", "topografia", "elevacion", "relieve"],
+        "layers": [
+            ("Datos del relieve", "Datos del Relieve e Hipsometría INEGI"),
+            ("Servicio_WMS_MDM61", "Mosaico Cartográfico Digital de México")
+        ]
     },
     {
         "id": "chile_ide_snit",
-        "name": "Chile - Infraestructura de Datos Espaciales (IDE Chile / SNIT)",
+        "name": "Chile - Infraestructura de Datos Espaciales (IDE Chile / MMA)",
         "category": "🌎 América Latina",
         "region": "Chile",
-        "url": "https://www.ide.cl/geoserver/wms",
-        "default_layer": "cobertura_suelo",
-        "description": "Cartografía temática de Chile: usos del suelo, red vial e hidrografía oficial del Ministerio de Bienes Nacionales.",
-        "tags": ["chile", "santiago", "valparaiso", "concepcion", "ide", "snit", "igm"],
-        "layers": [("cobertura_suelo", "Cobertura y Uso del Suelo Chile")]
+        "url": "https://ide.mma.gob.cl/geoserver/wms",
+        "default_layer": "spearfish",
+        "description": "Cartografía territorial, ambiental y coberturas temáticas de Chile (Ministerio del Medio Ambiente / IDE Chile).",
+        "tags": ["chile", "santiago", "valparaiso", "concepcion", "ide", "snit", "mma"],
+        "layers": [("spearfish", "Cartografía Temática Chile MMA")]
     },
     {
-        "id": "argentina_ign",
-        "name": "Argentina - Capas SIG Oficiales (IGN Argentina)",
+        "id": "argentina_idecor",
+        "name": "Argentina - Cartografía y Catastro IDECOR (Infraestructura de Datos Espaciales)",
         "category": "🌎 América Latina",
         "region": "Argentina",
-        "url": "https://wms.ign.gob.ar/geoserver/wms",
-        "default_layer": "ign:lineas_de_limite_070101",
-        "description": "Límites jurisdiccionales, red de carreteras e hidrografía del Instituto Geográfico Nacional de Argentina.",
-        "tags": ["argentina", "buenos aires", "cordoba", "rosario", "ign", "limites", "viales"],
-        "layers": [("ign:lineas_de_limite_070101", "Límites Oficiales Argentina")]
+        "url": "https://idecor-ws.mapascordoba.gob.ar/geoserver/idecor/wms",
+        "default_layer": "bpa2019",
+        "description": "Cartografía catastral, parcelas rurales y urbanas, vialidad y usos del suelo de Argentina (IDECOR / IDE).",
+        "tags": ["argentina", "buenos aires", "cordoba", "rosario", "idecor", "catastro", "parcelas", "suelo"],
+        "layers": [("bpa2019", "Coberturas y Parcelas IDECOR")]
     },
     {
         "id": "peru_geocatmin",
-        "name": "Perú - Geocatmin (Catastro Minero y Geología - INGEMMET)",
+        "name": "Perú - GEOCATMIN (Catastro Minero y Geología - INGEMMET)",
         "category": "🌎 América Latina",
         "region": "Perú",
-        "url": "https://geocatmin.ingemmet.gob.pe/arcgis/services/GEOCATMIN/MapaGeologico50k/MapServer/WMSServer",
+        "url": "https://geocatmin.ingemmet.gob.pe/arcgis/services/SERV_CATASTRO_MINERO_WGS84/MapServer/WMSServer",
         "default_layer": "0",
-        "description": "Carta Geológica Nacional 1:50.000 y concesiones catastrales mineras de Perú (INGEMMET).",
+        "description": "Catastro Minero Nacional oficial y concesiones mineras de Perú (INGEMMET / GEOCATMIN).",
         "tags": ["peru", "lima", "arequipa", "ingemmet", "geologia", "mineria", "catastro"],
-        "layers": [("0", "Carta Geológica 50K Perú")]
+        "layers": [("0", "Catastro Minero Nacional Perú")]
     },
 
     # ==========================================
@@ -273,11 +301,14 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "name": "Europa - Copernicus Corine Land Cover (Unión Europea)",
         "category": "🇪🇺 Europa",
         "region": "Europa (Unión Europea)",
-        "url": "https://image.discomap.eea.europa.eu/arcgis/services/Land/CLC2018_WM/MapServer/WMSServer",
-        "default_layer": "0",
+        "url": "https://copernicus.discomap.eea.europa.eu/arcgis/services/Corine/CLC2018_WM/MapServer/WMSServer",
+        "default_layer": "1",
         "description": "Inventario oficial europeo de ocupación del suelo (CORINE Land Cover) de la Agencia Europea de Medio Ambiente (EEA).",
         "tags": ["europa", "copernicus", "clc", "corine", "suelo", "vegetacion", "urbano", "union europea"],
-        "layers": [("0", "CORINE Land Cover")]
+        "layers": [
+            ("1", "CORINE Land Cover 2018"),
+            ("2", "Land Cover Changes")
+        ]
     },
     {
         "id": "francia_ign",
@@ -306,14 +337,17 @@ WMS_DATABASE: List[Dict[str, Any]] = [
     },
     {
         "id": "portugal_dgt",
-        "name": "Portugal - Ortofotos e Carta de Uso do Solo (DGT)",
+        "name": "Portugal - OrtoSat Satélite de Alta Resolução (DGT)",
         "category": "🇪🇺 Europa",
         "region": "Portugal",
-        "url": "https://snig.dgterritorio.gov.pt/server/services/CartaDeUsoEOcupacaoDoSolo/COS2018/MapServer/WMSServer",
-        "default_layer": "0",
-        "description": "Cartografía y ortofotografía oficial de la Direção-Geral do Território (DGT) de Portugal.",
-        "tags": ["portugal", "lisboa", "porto", "dgt", "ortofoto", "snig"],
-        "layers": [("0", "Carta de Uso e Ocupação do Solo Portugal")]
+        "url": "https://ortos.dgterritorio.gov.pt/wms/ortosat2023",
+        "default_layer": "OrtoSat2023",
+        "description": "Ortofotomosaicos satelitais oficiais de alta resolução da Direção-Geral do Território (DGT) de Portugal.",
+        "tags": ["portugal", "lisboa", "porto", "dgt", "ortofoto", "snig", "ortosat"],
+        "layers": [
+            ("OrtoSat2023", "OrtoSat 2023 Alta Definição"),
+            ("ortoSat2023-CorVerdadeira", "OrtoSat Cor Verdadeira")
+        ]
     },
     {
         "id": "australia_dea",
@@ -335,12 +369,13 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "name": "España - Sede Electrónica del Catastro (DGC)",
         "category": "🏛️ Catastro y Parcelario",
         "region": "España (Nacional)",
-        "url": "https://ovc.catastro.meh.es/Cartografia/WMS/BuscarFirma.aspx",
+        "url": "https://ovc.catastro.meh.es/Cartografia/WMS/ServidorWMS.aspx",
         "default_layer": "Catastro",
         "description": "Cartografía catastral oficial completa: parcelas rústicas y urbanas, subparcelas, números de policía, manzanas y linderos.",
         "tags": ["catastro", "parcela", "parcelas", "finca", "linderos", "subparcela", "urbana", "rustica", "inmueble", "dgc"],
         "layers": [
             ("Catastro", "Capa completa integrada (Parcelas, Manzanas y Números)"),
+            ("CONSTRU", "Construcciones Catastrales"),
             ("PARCELA", "Límites geométricos de parcelas"),
             ("SUBPARCELA", "Subparcelas y recintos de cultivo"),
             ("MASA", "Manzanas y masas catastrales"),
@@ -352,13 +387,14 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "name": "España - Catastro INSPIRE Oficial (Directiva Europea)",
         "category": "🏛️ Catastro y Parcelario",
         "region": "España (Nacional)",
-        "url": "https://ovc.catastro.meh.es/INSPIRE/wms.aspx",
+        "url": "https://ovc.catastro.meh.es/cartografia/INSPIRE/spadgcwms.aspx",
         "default_layer": "CP.CadastralParcel",
         "description": "Servicio WMS INSPIRE de la Dirección General del Catastro, estandarizado con codificación europea.",
         "tags": ["catastro", "inspire", "parcelas", "parcel", "cadastral", "europa"],
         "layers": [
             ("CP.CadastralParcel", "Parcelas Catastrales INSPIRE"),
-            ("CP.CadastralZoning", "Zonas Catastrales (Polígonos / Manzanas)")
+            ("CP.CadastralZoning", "Zonas Catastrales (Polígonos / Manzanas)"),
+            ("AD.Address", "Direcciones Postales Oficiales")
         ]
     },
     {
@@ -377,22 +413,29 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "name": "Bizkaia - Catastro Foral (País Vasco)",
         "category": "🏛️ Catastro y Parcelario",
         "region": "País Vasco (España)",
-        "url": "https://www.bizkaia.eus/inspire/geoservices/CP/wms",
+        "url": "https://geo.bizkaia.eus/arcgisserverinspire/rest/services/Catastro/Annex1/MapServer/exts/InspireView/service",
         "default_layer": "CP.CadastralParcel",
-        "description": "Cartografía parcelaria del Catastro de la Diputación Foral de Bizkaia.",
+        "description": "Cartografía parcelaria del Catastro de la Diputación Foral de Bizkaia (INSPIRE).",
         "tags": ["catastro", "bizkaia", "vizcaya", "bilbao", "euskadi", "foral"],
-        "layers": [("CP.CadastralParcel", "Parcelas Forales de Bizkaia")]
+        "layers": [
+            ("CP.CadastralParcel", "Parcelas Forales de Bizkaia"),
+            ("CP.CadastralZoning", "Zonificación Catastral"),
+            ("AD.Address", "Direcciones y Portales Bizkaia")
+        ]
     },
     {
         "id": "catastro_araba",
         "name": "Álava - Catastro Foral (País Vasco)",
         "category": "🏛️ Catastro y Parcelario",
         "region": "País Vasco (España)",
-        "url": "https://geo.araba.eus/WMS_Catastro",
-        "default_layer": "Catastro_Alava",
+        "url": "https://geo.araba.eus/WMS_Katastroa",
+        "default_layer": "Hirilurzatien_funtsa_Fondo_ParcelasUrbanas",
         "description": "Parcelario y delimitaciones catastrales de la Diputación Foral de Álava.",
         "tags": ["catastro", "alava", "araba", "vitoria", "euskadi", "foral"],
-        "layers": [("Catastro_Alava", "Catastro Álava")]
+        "layers": [
+            ("Hirilurzatien_funtsa_Fondo_ParcelasUrbanas", "Parcelas Urbanas"),
+            ("Udalerriak_Municipios", "Límites Municipales Álava")
+        ]
     },
     {
         "id": "mapa_raster_ign",
@@ -567,70 +610,92 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         ]
     },
     {
-        "id": "euskadi_geoeuskadi",
-        "name": "País Vasco / Euskadi - Ortofotografía Oficial (GeoEuskadi)",
+        "id": "euskadi_gipuzkoa_orto",
+        "name": "País Vasco / Gipuzkoa - Ortofotografía Oficial de Alta Resolución (b5m)",
         "category": "🏛️ Comunidades Autónomas (España)",
         "region": "País Vasco (España)",
-        "url": "https://www.geo.euskadi.eus/WMS_ORTOARGAZKIAK",
-        "default_layer": "ORTO_EGUNERATUA",
-        "description": "Ortofotografías oficiales del Gobierno Vasco y Diputaciones Forales.",
-        "tags": ["euskadi", "pais vasco", "geoeuskadi", "alava", "bizkaia", "gipuzkoa", "ortofoto", "bilbao"],
-        "layers": [("ORTO_EGUNERATUA", "Ortofoto Actualizada de Euskadi")]
+        "url": "https://b5m.gipuzkoa.eus/ogc/wms/gipuzkoa_ort_wms",
+        "default_layer": "orto",
+        "description": "Ortofotografías oficiales de máxima resolución y vuelos recientes del territorio vasco (b5m).",
+        "tags": ["euskadi", "pais vasco", "gipuzkoa", "san sebastian", "donostia", "ortofoto", "b5m"],
+        "layers": [
+            ("orto", "Ortofoto Actualizada Gipuzkoa"),
+            ("orto2025", "Ortofoto Vuelo 2025"),
+            ("orto2024", "Ortofoto Vuelo 2024")
+        ]
     },
     {
-        "id": "madrid_cam",
-        "name": "Madrid - Ortofoto Oficial (Comunidad de Madrid)",
+        "id": "euskadi_medio_ambiente",
+        "name": "País Vasco / Euskadi - Medio Ambiente y Territorio (GeoEuskadi)",
+        "category": "🏛️ Comunidades Autónomas (España)",
+        "region": "País Vasco (España)",
+        "url": "https://www.geo.euskadi.eus/WMS_INGURUMENA",
+        "default_layer": "has_espacios_naturales_protegidos",
+        "description": "Espacios naturales, energía y capas ambientales oficiales del Gobierno Vasco (GeoEuskadi).",
+        "tags": ["euskadi", "pais vasco", "geoeuskadi", "medio ambiente", "protegido", "energia", "ingurumena"],
+        "layers": [("has_espacios_naturales_protegidos", "Espacios Naturales Protegidos Euskadi")]
+    },
+    {
+        "id": "madrid_ayto",
+        "name": "Madrid - Ortofoto Oficial de Máxima Resolución (Ayuntamiento de Madrid)",
         "category": "🏛️ Comunidades Autónomas (España)",
         "region": "Madrid (España)",
-        "url": "https://gestiona7.comunidad.madrid/wms_cw/services/Muestras/Ortofoto/MapServer/WMSServer",
-        "default_layer": "0",
-        "description": "Ortofotografías de máxima resolución de la Comunidad de Madrid.",
-        "tags": ["madrid", "cam", "capital", "comunidad de madrid", "ortofoto"],
-        "layers": [("0", "Ortofoto Oficial Comunidad de Madrid")]
+        "url": "https://servpub.madrid.es/georaster/ORTOFOTOS/ORTOFOTO_MADRID/ows",
+        "default_layer": "ORTOFOTO_MADRID",
+        "description": "Ortofotografía verdadera aérea oficial de máxima precisión del término municipal de Madrid.",
+        "tags": ["madrid", "capital", "ayuntamiento", "ortofoto", "vuelo", "satelite"],
+        "layers": [("ORTOFOTO_MADRID", "Ortofoto Oficial Madrid")]
     },
     {
         "id": "galicia_ideg",
-        "name": "Galicia - Ortoimaxes e Cartografía (IDEG - Xunta de Galicia)",
+        "name": "Galicia - Ortoimaxes PNOA Máxima Resolución (IDEG / Xunta de Galicia)",
         "category": "🏛️ Comunidades Autónomas (España)",
         "region": "Galicia (España)",
-        "url": "https://ideg.xunta.gal/servizos/services/Ortoimaxes/OrtofotoPNOA_Actual/MapServer/WMSServer",
+        "url": "https://ideg.xunta.es/servizos/services/Raster/PNOA_2020/ImageServer/WMSServer",
         "default_layer": "0",
-        "description": "Ortoimágenes aéreas actualizadas de la Xunta de Galicia.",
-        "tags": ["galicia", "coruña", "lugo", "ourense", "pontevedra", "xunta", "ideg", "vigo", "santiago"],
-        "layers": [("0", "Ortofoto Galicia")]
+        "description": "Ortoimágenes aéreas actualizadas de 15 cm/píxel de la Xunta de Galicia e Instituto de Estudos do Territorio.",
+        "tags": ["galicia", "coruña", "lugo", "ourense", "pontevedra", "xunta", "ideg", "vigo", "santiago", "ortofoto"],
+        "layers": [("0", "Ortoimaxe PNOA Galicia")]
     },
     {
         "id": "valencia_icv",
-        "name": "Comunidad Valenciana - Ortofotos e Imágenes (ICV)",
+        "name": "Comunidad Valenciana - Base Cartográfica Oficial CV05 (ICV / Terramapas)",
         "category": "🏛️ Comunidades Autónomas (España)",
         "region": "Comunidad Valenciana (España)",
-        "url": "https://terramapas.icv.gva.es/wms_orto_historico",
-        "default_layer": "orto_actual",
-        "description": "Institut Cartogràfic Valencià: Ortofotos recientes e históricas de Castellón, Valencia y Alicante.",
-        "tags": ["valencia", "valenciana", "alicante", "castellon", "icv", "gva", "terramapas"],
-        "layers": [("orto_actual", "Ortofoto Actual Comunidad Valenciana")]
+        "url": "https://terramapas.icv.gva.es/0101_BCV05",
+        "default_layer": "OWS_0101_BCV05",
+        "description": "Institut Cartogràfic Valencià: Cartografía base topográfica continua 1:5.000 con entornos urbanos y viales.",
+        "tags": ["valencia", "valenciana", "alicante", "castellon", "icv", "gva", "terramapas", "topografia", "cv05"],
+        "layers": [
+            ("OWS_0101_BCV05", "Base Cartográfica CV05 Completa"),
+            ("EntornosUrbanosBCV05", "Entornos Urbanos y Viales"),
+            ("CultivosBCV05", "Cultivos y Zonas Rústicas")
+        ]
     },
     {
         "id": "canarias_grafcan",
-        "name": "Canarias - Ortoexpress de Máxima Resolución (GRAFCAN)",
+        "name": "Canarias - Ortofoto Oficial de Alta Resolución (GRAFCAN)",
         "category": "🏛️ Comunidades Autónomas (España)",
         "region": "Canarias (España)",
-        "url": "https://idecan1.grafcan.es/ServicioWMS/Ortoexpress",
-        "default_layer": "OrtoExpress",
-        "description": "Infraestructura de Datos Espaciales de Canarias (GRAFCAN / IDECanarias): Ortofotos de islas.",
-        "tags": ["canarias", "grafcan", "tenerife", "gran canaria", "palma", "lanzarote", "fuerteventura"],
-        "layers": [("OrtoExpress", "Ortofoto Rápida Continua Canarias")]
+        "url": "https://idecan1.grafcan.es/ServicioWMS/Historico/Ortofotos/Ortofoto2025",
+        "default_layer": "ortofoto",
+        "description": "Infraestructura de Datos Espaciales de Canarias (GRAFCAN / IDECanarias): Vuelo ortofotográfico oficial de las islas.",
+        "tags": ["canarias", "grafcan", "tenerife", "gran canaria", "palma", "lanzarote", "fuerteventura", "ortofoto"],
+        "layers": [
+            ("ortofoto", "Ortofoto Máxima Actualidad Canarias"),
+            ("WMS_Ortofoto2025", "Mosaico Ortofoto Canarias")
+        ]
     },
     {
         "id": "baleares_ideib",
-        "name": "Islas Baleares - Ortofoto Oficial (IDEIB)",
+        "name": "Islas Baleares - Mapa Base y Cartografía Oficial (IDEIB)",
         "category": "🏛️ Comunidades Autónomas (España)",
         "region": "Islas Baleares (España)",
-        "url": "https://ideib.caib.es/geoserveis/services/public/GOIB_Ortofoto_IB/MapServer/WMSServer",
+        "url": "https://ideib.caib.es/geoserveis/services/public/GOIB_MapaBase_IB/MapServer/WMSServer",
         "default_layer": "0",
-        "description": "Govern de les Illes Balears (IDEIB): Ortofotografías de Mallorca, Menorca, Ibiza y Formentera.",
-        "tags": ["baleares", "mallorca", "menorca", "ibiza", "formentera", "ideib", "palma"],
-        "layers": [("0", "Ortofoto Illes Balears")]
+        "description": "Govern de les Illes Balears (IDEIB): Cartografía base e imagen de Mallorca, Menorca, Ibiza y Formentera.",
+        "tags": ["baleares", "mallorca", "menorca", "ibiza", "formentera", "ideib", "palma", "mapa"],
+        "layers": [("0", "Mapa Base Illes Balears")]
     }
 ]
 
@@ -679,21 +744,21 @@ GEO_LOCATIONS = {
     "medellin": ["medellin", "antioquia", "geomedellin"],
     "cali": ["cali", "valle", "idecali", "idesc"],
     "mexico": ["mexico", "cdmx", "guadalajara", "monterrey", "inegi"],
-    "chile": ["chile", "santiago", "valparaiso", "concepcion", "snit"],
-    "argentina": ["argentina", "buenos aires", "cordoba", "rosario"],
-    "peru": ["peru", "lima", "arequipa", "ingemmet"],
+    "chile": ["chile", "santiago", "valparaiso", "concepcion", "snit", "mma"],
+    "argentina": ["argentina", "buenos aires", "cordoba", "rosario", "idecor"],
+    "peru": ["peru", "lima", "arequipa", "ingemmet", "geocatmin"],
     "estados unidos": ["eeuu", "usa", "estados unidos", "usgs"],
     "canada": ["canada", "nrcan", "canvec"],
     "espana": [
         "espana", "spain", "madrid", "cataluna", "barcelona", "andalucia", "sevilla",
-        "valencia", "galicia", "euskadi", "pais vasco", "navarra", "canarias", "baleares"
+        "valencia", "galicia", "euskadi", "pais vasco", "navarra", "canarias", "baleares", "gipuzkoa", "bizkaia", "alava"
     ],
     "madrid": ["madrid"],
     "andalucia": ["andalucia", "sevilla", "granada", "malaga", "cordoba"],
     "cataluna": ["cataluna", "barcelona", "girona", "tarragona", "lleida", "icgc"],
     "valencia": ["valencia", "alicante", "castellon", "icv"],
     "galicia": ["galicia", "coruna", "pontevedra", "ourense", "lugo", "ideg"],
-    "euskadi": ["euskadi", "pais vasco", "bizkaia", "araba", "gipuzkoa", "geoeuskadi"],
+    "euskadi": ["euskadi", "pais vasco", "bizkaia", "araba", "gipuzkoa", "geoeuskadi", "b5m"],
     "navarra": ["navarra", "idena"],
     "canarias": ["canarias", "tenerife", "palmas", "grafcan"],
     "baleares": ["baleares", "mallorca", "menorca", "ibiza", "ideib"],
@@ -847,7 +912,10 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
         resp = requests.get(
             clean_url,
             params={"SERVICE": "WMS", "REQUEST": "GetCapabilities"},
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GeoRasterCAD/2.0"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept": "text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8"
+            },
             timeout=9,
             verify=False
         )
@@ -1029,13 +1097,18 @@ Tu objetivo es ayudar al usuario a encontrar las URLs y capas exactas de servici
 Dispones de este catálogo verificado de referencia:
 {catalog_text}
 
-INSTRUCCIONES CLAVE:
+INSTRUCCIONES CLAVE Y REGLAS DE CONFIABILIDAD DE URLS:
 1. Responde de forma concisa, técnica y cordial en español.
 2. Tu alcance es MUNDIAL. Si el usuario pregunta por España, Colombia, México, Chile, Perú, EE.UU., Francia, Alemania o cualquier otro país, oriéntalo con el servicio oficial o regional correspondiente.
 3. SIEMPRE que recomiendes un servicio WMS concreto que el usuario pueda usar, incluye al final un bloque especial con este formato exacto para que la interfaz cree un botón de carga rápida con 1 clic:
    [APPLY_WMS: {{"name": "Nombre descriptivo", "url": "https://url-del-servicio...", "layer": "nombre_capa"}}]
-4. Si el usuario pregunta dudas sobre AutoCAD (ej: qué es un archivo .tfw, cómo insertar con _MAPIINSERT, resolución m/px, EPSG para su zona), explícaselo con claridad técnica.
-5. Puedes orientar sobre cualquier servidor WMS oficial del mundo aunque no esté en el catálogo si conoces su URL oficial.
+4. REGLA ESTRICTA DE URLS OFICIALES:
+   - Para Colombia IGAC: Utiliza SIEMPRE 'https://mapas2.igac.gov.co/server/services/carto/carto100000colombia2019/MapServer/WMSServer' (capa 34 para vías, 0 para base) o 'https://mapas2.igac.gov.co/server/services/carto/municipios/MapServer/WMSServer'. NUNCA uses 'mapas.igac.gov.co' porque ese servidor antiguo ya no existe.
+   - Para Bogotá: Ortofoto oficial IDECA 'https://serviciosgis.catastrobogota.gov.co/arcgis/services/imagenes/Ortho2017/MapServer/WMSServer' (capa 0).
+   - Para Cali: IDESC 'https://ws-idesc.cali.gov.co/geoserver/wms'.
+   - Para España Catastro: 'https://ovc.catastro.meh.es/Cartografia/WMS/ServidorWMS.aspx' (capa Catastro) o INSPIRE 'https://ovc.catastro.meh.es/cartografia/INSPIRE/spadgcwms.aspx'.
+   - Si no estás 100% seguro de una URL fuera del catálogo, utiliza las del catálogo oficial verificado.
+5. Si el usuario pregunta dudas sobre AutoCAD (ej: qué es un archivo .tfw, cómo insertar con _MAPIINSERT, resolución m/px, EPSG para su zona), explícaselo con claridad técnica.
 """
 
     contents = []
