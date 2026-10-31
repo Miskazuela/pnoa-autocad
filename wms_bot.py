@@ -906,6 +906,85 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 # --------------------------------------------------------------------------------------
 # 4. CLIENTE DE IA CON GOOGLE GEMINI (MODO CONVERSACIONAL EXPERTO MUNDIAL)
 # --------------------------------------------------------------------------------------
+def discover_available_gemini_models(api_key: str) -> Tuple[List[str], Optional[str]]:
+    """
+    Descubre dinámicamente los modelos Gemini disponibles para la clave API del usuario
+    mediante el endpoint oficial ListModels (https://generativelanguage.googleapis.com/v1beta/models).
+    Retorna (lista_de_modelos, error_si_hubo).
+    """
+    if not api_key or not api_key.strip():
+        return [], "Clave vacía"
+
+    clean_key = api_key.strip()
+
+    # Comprobar si ya los tenemos en caché de sesión para esta misma clave
+    cached_key = st.session_state.get("_cached_gemini_api_key")
+    cached_models = st.session_state.get("_cached_gemini_models")
+    if cached_key == clean_key and cached_models:
+        return cached_models, None
+
+    # 1. Consultar ModelService.ListModels para ver exactamente qué modelos soporta esta clave
+    for api_version in ["v1beta", "v1"]:
+        try:
+            url = f"https://generativelanguage.googleapis.com/{api_version}/models?key={clean_key}"
+            resp = requests.get(url, timeout=6)
+            if resp.status_code == 200:
+                data = resp.json()
+                models_found = []
+                for m in data.get("models", []):
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" in methods:
+                        name = m.get("name", "")
+                        if name:
+                            clean_name = name.replace("models/", "")
+                            models_found.append(clean_name)
+
+                if models_found:
+                    def _rank(m_name: str) -> int:
+                        n = m_name.lower()
+                        if "2.5-flash" in n and "lite" not in n:
+                            return 1
+                        if "2.0-flash" in n and "exp" not in n and "lite" not in n:
+                            return 2
+                        if "flash" in n and "lite" in n:
+                            return 3
+                        if "flash" in n:
+                            return 4
+                        if "2.5-pro" in n or "2.0-pro" in n:
+                            return 5
+                        if "pro" in n:
+                            return 6
+                        return 10
+
+                    models_found.sort(key=_rank)
+                    st.session_state["_cached_gemini_api_key"] = clean_key
+                    st.session_state["_cached_gemini_models"] = models_found
+                    return models_found, None
+            elif resp.status_code == 400:
+                err_data = resp.json().get("error", {})
+                msg = err_data.get("message", "")
+                if "API key not valid" in msg or "INVALID_ARGUMENT" in err_data.get("status", ""):
+                    return [], "❌ La clave de API introducida no es válida. Cópiala directamente desde Google AI Studio (aistudio.google.com)."
+            elif resp.status_code == 403:
+                return [], "❌ La clave de API no tiene permisos para Generative Language o tiene restricciones de IP/dominio en Google Cloud Console."
+        except Exception:
+            pass
+
+    # 2. Lista de reserva en caso de fallo de conexión a ListModels
+    fallback = [
+        "gemini-2.0-flash",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash-exp",
+        "gemini-2.5-flash-lite",
+        "gemini-1.5-flash-002",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-pro"
+    ]
+    return fallback, None
+
+
 def query_gemini_wms(
     prompt: str,
     api_key: str,
@@ -915,8 +994,10 @@ def query_gemini_wms(
     """
     Envía la consulta del usuario a la API de Gemini (Google AI Studio) utilizando la clave
     del usuario, contextualizado con el catálogo mundial y el estado actual del plano CAD.
+    Descubre dinámicamente los modelos activos de Google y prueba alternativas si uno no responde.
     """
-    if not api_key or not api_key.strip():
+    clean_key = api_key.strip() if api_key else ""
+    if not clean_key:
         return {
             "success": False,
             "text": "⚠️ Por favor, introduce tu Gemini API Key en el campo superior para activar el modo IA."
@@ -963,57 +1044,88 @@ INSTRUCCIONES CLAVE:
         contents.append({"role": role, "parts": [{"text": msg["content"]}]})
     contents.append({"role": "user", "parts": [{"text": prompt}]})
 
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    # Descubrir modelos disponibles para esta clave en Google AI Studio
+    models_to_try, key_error = discover_available_gemini_models(clean_key)
+    if key_error and not models_to_try:
+        return {"success": False, "text": key_error}
+
     last_error = ""
 
     for model_name in models_to_try:
-        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
-        payload = {
-            "contents": contents,
-            "systemInstruction": {"parts": [{"text": system_instruction}]},
-            "generationConfig": {
-                "temperature": 0.4,
-                "maxOutputTokens": 1000
+        for api_ver in ["v1beta", "v1"]:
+            endpoint = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent?key={clean_key}"
+            payload = {
+                "contents": contents,
+                "systemInstruction": {"parts": [{"text": system_instruction}]},
+                "generationConfig": {
+                    "temperature": 0.4,
+                    "maxOutputTokens": 1000
+                }
             }
-        }
 
-        try:
-            resp = requests.post(
-                endpoint,
-                headers={"Content-Type": "application/json"},
-                json=payload,
-                timeout=14
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                candidate = data.get("candidates", [{}])[0]
-                text_out = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
-                if text_out:
-                    return {"success": True, "text": text_out, "model": model_name}
-            elif resp.status_code == 400:
-                err_json = resp.json().get("error", {})
-                last_error = err_json.get("message", "Petición no válida.")
+            try:
+                resp = requests.post(
+                    endpoint,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=14
+                )
+
+                # Si falló por systemInstruction (algunos modelos no lo admiten en raíz), reintentar integrándolo en contents
+                if resp.status_code == 400 and "systemInstruction" in resp.text:
+                    fallback_contents = [
+                        {"role": "user", "parts": [{"text": f"INSTRUCCIÓN DEL SISTEMA:\n{system_instruction}\n\nCONSULTA:\n{prompt}"}]}
+                    ]
+                    resp = requests.post(
+                        endpoint,
+                        headers={"Content-Type": "application/json"},
+                        json={"contents": fallback_contents, "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}},
+                        timeout=14
+                    )
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    candidate = data.get("candidates", [{}])[0]
+                    text_out = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
+                    if text_out:
+                        st.session_state["wms_active_gemini_model"] = model_name
+                        return {"success": True, "text": text_out, "model": model_name}
+                elif resp.status_code == 400:
+                    err_json = resp.json().get("error", {})
+                    last_error = err_json.get("message", "Petición no válida.")
+                    if "API key not valid" in last_error:
+                        return {
+                            "success": False,
+                            "text": "❌ La clave de API de Gemini introducida no es válida. Genera una clave gratuita en https://aistudio.google.com/app/apikey"
+                        }
+                    break
+                elif resp.status_code == 403:
+                    return {
+                        "success": False,
+                        "text": "❌ Clave de API de Gemini sin permisos. Verifica que la API 'Generative Language' esté habilitada en Google AI Studio o que no tenga restricciones de IP."
+                    }
+                elif resp.status_code == 429:
+                    last_error = "Límite de cuota alcanzado temporalmente."
+                    break
+                elif resp.status_code == 404:
+                    last_error = f"Modelo {model_name} no disponible en {api_ver}."
+                    continue
+                else:
+                    last_error = f"Código HTTP {resp.status_code}: {resp.text}"
+            except requests.exceptions.Timeout:
+                last_error = "Tiempo de espera agotado al consultar a Gemini."
                 break
-            elif resp.status_code == 403:
-                return {
-                    "success": False,
-                    "text": "❌ Clave de API de Gemini no válida o sin permisos. Verifica que la API 'Generative Language' esté habilitada en Google AI Studio."
-                }
-            elif resp.status_code == 429:
-                return {
-                    "success": False,
-                    "text": "⏳ Has alcanzado el límite de cuota por minuto de Gemini. Espera unos segundos o usa el Modo Local integrado."
-                }
-            else:
-                last_error = f"Código HTTP {resp.status_code}: {resp.text}"
-        except requests.exceptions.Timeout:
-            last_error = "Tiempo de espera agotado al consultar a Gemini."
-        except Exception as ex:
-            last_error = str(ex)
+            except Exception as ex:
+                last_error = str(ex)
+                break
 
     return {
         "success": False,
-        "text": f"⚠️ No se pudo obtener respuesta de Gemini ({last_error}). Puedes usar las recomendaciones del Modo Local inmediatamente abajo."
+        "text": (
+            f"⚠️ No se pudo obtener respuesta de Gemini ({last_error}).\n\n"
+            f"💡 **Ayuda:** Comprueba que tu clave esté activa en [Google AI Studio](https://aistudio.google.com/app/apikey). "
+            f"El asistente utilizará automáticamente el **Modo Local Verificado** para darte recomendaciones oficiales inmediatas."
+        )
     }
 
 
@@ -1138,10 +1250,11 @@ def render_wms_assistant_content(
 
     with col_badge:
         if user_key.strip():
-            st.markdown("""
+            active_m = st.session_state.get("wms_active_gemini_model", "Auto-Detección")
+            st.markdown(f"""
             <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
                 <div style="font-weight: 600; color: #34d399; font-size: 12.5px;">✨ Modo IA Gemini Activado</div>
-                <div style="color: #94a3b8; font-size: 11px;">Razonamiento SIG conversacional + Catálogo oficial integrado.</div>
+                <div style="color: #94a3b8; font-size: 11px;">Modelo: <b>{active_m}</b> | Razonamiento SIG + Catálogo.</div>
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -1223,6 +1336,26 @@ def render_wms_assistant_content(
                                 context_info=context_dict
                             )
                             bot_response = res["text"]
+
+                            # Si hubo algún problema con la API de Gemini, anexamos automáticamente
+                            # las recomendaciones del catálogo local para no dejar la consulta sin respuesta.
+                            if not res.get("success", False):
+                                local_matches = search_wms_catalog(query_to_run)
+                                if local_matches:
+                                    top = local_matches[:3]
+                                    lines = [
+                                        bot_response,
+                                        "\n\n---\n🔍 **Recomendaciones automáticas del Catálogo Oficial Local:**\n"
+                                    ]
+                                    for m in top:
+                                        lines.append(f"### {m['name']}")
+                                        lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
+                                        lines.append(f"- **Descripción:** {m['description']}")
+                                        lines.append(f"- **URL Base:** `{m['url']}`")
+                                        lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
+                                        lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
+                                    bot_response = "\n".join(lines)
+
                             _parse_and_render_wms_actions(bot_response)
                     else:
                         matches = search_wms_catalog(query_to_run)
