@@ -3707,12 +3707,25 @@ def render_ui():
     # AVISOS INTELIGENTES (COBERTURA PNOA / PROYECCIÓN EN GRADOS)
     # ----------------------------------------------------------------------------------
     is_spain_service = selected_service_key not in ["google_sat", "google_hybrid", "esri_sat", "custom"]
-    spain_epsg_set = {25828, 25829, 25830, 25831, 25832, 23028, 23029, 23030, 23031, 4258, 4230, 32628}
+    spain_epsg_set = {
+        25828, 25829, 25830, 25831, 25832,
+        23028, 23029, 23030, 23031,
+        4258, 4230, 32628, 4083, 3040, 3041, 3042, 3043, 2062
+    }
+    spain_zone_keys = {
+        "spain", "espana", "euskadi", "pais vasco", "bizkaia", "araba", "alava", "gipuzkoa",
+        "cataluna", "catalunya", "andalucia", "galicia", "valencia", "canarias", "baleares",
+        "navarra", "madrid", "asturias", "cantabria", "aragon", "extremadura", "murcia",
+        "castilla y leon", "castilla-la mancha", "la rioja", "ceuta", "melilla"
+    }
     is_outside_spain = False
     try:
-        if str(epsg_code).isdigit() and int(epsg_code) not in spain_epsg_set:
+        epsg_is_spain = str(epsg_code).isdigit() and int(epsg_code) in spain_epsg_set
+        zone_is_spain = bool(detected_zone and detected_zone.get("key", "").lower() in spain_zone_keys)
+
+        if str(epsg_code).isdigit() and int(epsg_code) not in spain_epsg_set and not zone_is_spain:
             is_outside_spain = True
-        elif detected_zone and detected_zone.get("key") != "spain":
+        elif detected_zone and not zone_is_spain and not epsg_is_spain:
             is_outside_spain = True
     except Exception:
         pass
