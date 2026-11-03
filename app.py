@@ -3711,7 +3711,7 @@ def render_ui():
                 all_s_keys = list(SERVICES_CATALOG.keys())
                 if "google_sat" in all_s_keys:
                     st.session_state["selected_service_idx"] = all_s_keys.index("google_sat")
-                    st.session_state["sidebar_service_select"] = SERVICES_CATALOG["google_sat"]["name"]
+                    st.session_state["pending_sidebar_service"] = SERVICES_CATALOG["google_sat"]["name"]
                     st.rerun()
             if st.button("✕ Descartar aviso", key="btn_pnoa_dismiss_notice", width="stretch"):
                 st.session_state["dismiss_pnoa_notice"] = True
