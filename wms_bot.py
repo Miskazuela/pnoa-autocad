@@ -557,6 +557,17 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "layers": [("ENP", "Espacios Naturales Protegidos")]
     },
     {
+        "id": "montes_utilidad_publica_mup",
+        "name": "España - Montes de Utilidad Pública (MUP - MITECO)",
+        "category": "🌲 Medio Ambiente y Montes",
+        "region": "España (Nacional)",
+        "url": "https://wms.mapama.gob.es/sig/Biodiversidad/MUP/wms.aspx",
+        "default_layer": "MUP",
+        "description": "Catálogo oficial de Montes de Utilidad Pública (MUP), demaniales y comunales protegidos de España (MITECO).",
+        "tags": ["montes", "mup", "forestal", "medio ambiente", "monte", "utilidad publica", "bosque", "espana"],
+        "layers": [("MUP", "Montes de Utilidad Pública de España")]
+    },
+    {
         "id": "pnoa_maxima_actualidad",
         "name": "España - PNOA Máxima Actualidad (IGN - Vuelo Oficial)",
         "category": "🛰️ Ortofotografía y Satélite",
@@ -665,11 +676,24 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "url": "https://terramapas.icv.gva.es/0101_BCV05",
         "default_layer": "OWS_0101_BCV05",
         "description": "Institut Cartogràfic Valencià: Cartografía base topográfica continua 1:5.000 con entornos urbanos y viales.",
-        "tags": ["valencia", "valenciana", "alicante", "castellon", "icv", "gva", "terramapas", "topografia", "cv05"],
+        "tags": ["valencia", "valenciana", "alicante", "castellon", "icv", "gva", "terramapas", "topografia", "cv05", "ortofoto"],
         "layers": [
             ("OWS_0101_BCV05", "Base Cartográfica CV05 Completa"),
             ("EntornosUrbanosBCV05", "Entornos Urbanos y Viales"),
             ("CultivosBCV05", "Cultivos y Zonas Rústicas")
+        ]
+    },
+    {
+        "id": "valencia_ortofoto_icv",
+        "name": "Comunidad Valenciana - Ortofoto Oficial de Alta Resolución (ICV / Terramapas)",
+        "category": "🏛️ Comunidades Autónomas (España)",
+        "region": "Comunidad Valenciana (España)",
+        "url": "https://terramapas.icv.gva.es/0202_2023_PNOA_25cm",
+        "default_layer": "0202_2023_PNOA_25cm",
+        "description": "Institut Cartogràfic Valencià: Ortofoto oficial de máxima resolución PNOA 25 cm/px de la Comunitat Valenciana.",
+        "tags": ["valencia", "valenciana", "alicante", "castellon", "icv", "ortofoto", "satelite", "pnoa", "terramapas"],
+        "layers": [
+            ("0202_2023_PNOA_25cm", "Ortofoto Comunitat Valenciana 25 cm")
         ]
     },
     {
