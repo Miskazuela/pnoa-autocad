@@ -760,6 +760,10 @@ SPANISH_STOPWORDS = {
     "da", "do", "que", "se", "su", "sus", "es", "son", "como", "me", "te", "mi",
     "tu", "yo", "quiero", "necesito", "busco", "dame", "hay", "tiene", "favor",
     "porfa", "hola", "buenas", "donde", "consigo", "dime", "ver", "cual", "cuales",
+    "capa", "capas", "mapa", "mapas", "servicio", "servicios", "wms",
+    "archivo", "archivos", "cargado", "cargados", "subido", "subidos",
+    "plano", "planos", "proyecto", "proyectos", "zona", "zonas",
+    "aqui", "aca", "este", "esta", "estos", "estas",
     "of", "the", "in", "on", "at", "to", "for", "and", "or", "an", "is"
 }
 
@@ -880,6 +884,85 @@ def _extract_geo_and_thematic(query: str) -> Tuple[Set[str], List[str]]:
     return detected_geo_keys, thematic_tokens
 
 
+CONTEXT_PROJECT_TRIGGERS = {
+    "archivo", "archivos", "cargado", "cargados", "subido", "subidos", "plano", "planos",
+    "proyecto", "proyectos", "zona", "zonas", "aqui", "aca", "este", "esta", "finca",
+    "parcela", "trazado", "actual", "cargada", "subida"
+}
+
+
+def infer_project_geo_keys(
+    active_epsg: Optional[Any] = None,
+    detected_zone: Optional[Dict[str, Any]] = None,
+    uploaded_filename: Optional[str] = None
+) -> Set[str]:
+    """
+    Deduce de forma inteligente el ámbito geográfico del proyecto actual en pantalla
+    a partir de la zona detectada por coordenadas, el código EPSG activo o el nombre del archivo.
+    """
+    geos: Set[str] = set()
+
+    # 1. Por zona geográfica detectada explícitamente en la app (app.py)
+    if detected_zone and isinstance(detected_zone, dict):
+        z_k = _normalize_text(detected_zone.get("key", ""))
+        z_name = _normalize_text(detected_zone.get("name", ""))
+        for cand in [z_k, z_name]:
+            if not cand:
+                continue
+            for geo_k, aliases in GEO_LOCATIONS.items():
+                if cand == geo_k or cand in aliases:
+                    geos.add(geo_k)
+                    geos.update(aliases)
+            if cand in ["spain", "espana"]:
+                geos.add("espana")
+                geos.update(GEO_LOCATIONS.get("espana", []))
+            elif cand in ["sweden", "suecia"]:
+                geos.add("suecia")
+                geos.update(GEO_LOCATIONS.get("suecia", []))
+            elif cand in ["united states", "usa", "eeuu", "estados unidos"]:
+                geos.add("estados unidos")
+                geos.update(GEO_LOCATIONS.get("estados unidos", []))
+
+    # 2. Por código EPSG / CRS activo
+    if not geos and active_epsg:
+        try:
+            code_num = int(str(active_epsg).replace("EPSG:", "").strip())
+            if code_num in [25828, 25829, 25830, 25831, 25832, 23028, 23029, 23030, 23031, 4258, 4230]:
+                geos.add("espana")
+                geos.update(GEO_LOCATIONS.get("espana", []))
+            elif code_num in [3116, 9377]:
+                geos.add("colombia")
+                geos.update(GEO_LOCATIONS.get("colombia", []))
+            elif 3006 <= code_num <= 3018:
+                geos.add("suecia")
+                geos.update(GEO_LOCATIONS.get("suecia", []))
+            elif code_num in [5343, 5344, 5345, 5346, 5347, 5348, 5349, 22181, 22182, 22183, 22184, 22185]:
+                geos.add("argentina")
+                geos.update(GEO_LOCATIONS.get("argentina", []))
+            elif (32610 <= code_num <= 32619) or (2225 <= code_num <= 2286):
+                geos.add("estados unidos")
+                geos.update(GEO_LOCATIONS.get("estados unidos", []))
+        except Exception:
+            pass
+
+    # 3. Refinamiento autonómico por nombre del archivo cargado (ej: bilbao_parcela.dxf)
+    if uploaded_filename:
+        f_norm = _normalize_text(uploaded_filename)
+        for term, sub_geo in [
+            ("euskadi", "euskadi"), ("vasco", "euskadi"), ("bizkaia", "euskadi"),
+            ("araba", "euskadi"), ("alava", "euskadi"), ("gipuzkoa", "euskadi"),
+            ("bilbao", "euskadi"), ("donostia", "euskadi"), ("vitoria", "euskadi"),
+            ("madrid", "madrid"), ("cataluna", "cataluna"), ("barcelona", "cataluna"),
+            ("andalucia", "andalucia"), ("galicia", "galicia"), ("valencia", "valencia")
+        ]:
+            if re.search(rf"\b{term}\b", f_norm):
+                geos = {sub_geo}
+                geos.update(GEO_LOCATIONS.get(sub_geo, []))
+                break
+
+    return geos
+
+
 def _detect_query_geo(query: str) -> Set[str]:
     """Detecta si el usuario mencionó un país, ciudad o región geográfica en su consulta."""
     geo_keys, _ = _extract_geo_and_thematic(query)
@@ -889,16 +972,24 @@ def _detect_query_geo(query: str) -> Set[str]:
 def search_wms_catalog(
     query: str,
     category_filter: Optional[str] = None,
-    region_filter: Optional[str] = None
+    region_filter: Optional[str] = None,
+    project_geo_fallback: Optional[Set[str]] = None
 ) -> List[Dict[str, Any]]:
     """
     Buscador determinista, de alta precisión y sin alucinaciones.
     1. Si se menciona una región (ej: 'pais vasco', 'suecia'), descarta cualquier servicio de otra región.
     2. Si se menciona un tema (ej: 'hidrologia', 'suelos'), exige coincidencia a nivel de palabra completa (evita que 'rio' coincida con 'parcelario').
-    3. Si ambos coinciden, devuelve únicamente la capa exacta solicitada.
+    3. Si el usuario refiere a su proyecto ('archivo cargado', 'mi plano', etc.) o no indica país, hereda automáticamente la región geográfica del proyecto.
+    4. Devuelve únicamente los servicios oficiales verificados que coinciden.
     """
     clean_q = _normalize_text(query)
+    q_words = set(clean_q.split())
     query_geo_keys, thematic_tokens = _extract_geo_and_thematic(query)
+
+    # Detección contextual: si el usuario pide capas del "archivo cargado" o no especificó región
+    has_context_intent = bool(q_words.intersection(CONTEXT_PROJECT_TRIGGERS))
+    if (has_context_intent or not query_geo_keys) and project_geo_fallback:
+        query_geo_keys = set(project_geo_fallback)
 
     if category_filter and category_filter == "Todas las categorías":
         category_filter = None
@@ -1496,8 +1587,9 @@ def _build_wms_system_instruction(context_info: Optional[Dict[str, Any]] = None)
             f"\nCONTEXTO DEL PROYECTO ACTUAL DEL USUARIO EN LA PANTALLA:\n"
             f"- Proyección cartográfica configurada: EPSG:{context_info.get('active_epsg', '25830')}\n"
             f"- Archivo cargado en la app: {context_info.get('uploaded_filename', 'Ninguno')}\n"
+            f"- Zona / País detectado del proyecto: {context_info.get('detected_zone', 'Deducir de EPSG o archivo')}\n"
             f"- Servicio cartográfico actualmente seleccionado: {context_info.get('current_service', 'Ortofoto PNOA')}\n"
-            f"Utiliza este contexto para dar respuestas hiper-personalizadas al país o zona del usuario si aplica.\n"
+            f"REGLA DE CONTEXTO: Si el usuario dice 'mi archivo', 'archivo cargado', 'mi plano' o 'mi proyecto', o si solicita una capa temática (ej: hidrología, suelos, catastro) sin especificar país, ASUME que se refiere a la ubicación de su archivo cargado y a su CRS/EPSG actual, recomendándole la capa oficial de esa zona geográfica concreta.\n"
         )
 
     system_instruction = f"""
@@ -1912,7 +2004,8 @@ def apply_wms_to_application(url: str, layer: str, name: str):
 def render_wms_assistant_content(
     active_epsg: Optional[Any] = None,
     current_service_name: Optional[str] = None,
-    uploaded_filename: Optional[str] = None
+    uploaded_filename: Optional[str] = None,
+    detected_zone: Optional[Dict[str, Any]] = None
 ):
     """
     Renderiza el contenido interno del Asistente WMS (utilizable dentro del modal st.dialog o embebido).
@@ -1974,11 +2067,22 @@ def render_wms_assistant_content(
     epsg_disp = str(active_epsg or st.session_state.get("wms_active_epsg", "25830"))
     file_disp = uploaded_filename or st.session_state.get("wms_uploaded_filename", "Ninguno (Dibujando en visor)")
     serv_disp = current_service_name or st.session_state.get("wms_current_service_name", "Ortofoto PNOA (IGN)")
+    zone_info = detected_zone or st.session_state.get("wms_detected_zone") or st.session_state.get("detected_zone_country")
+    zone_disp = f"{zone_info.get('flag', '📍')} {zone_info.get('name', '')}" if (zone_info and isinstance(zone_info, dict)) else None
 
+    # Deducir ámbito geográfico del proyecto para resolver preguntas como 'capa de hidrologia del archivo cargado'
+    project_geo_keys = infer_project_geo_keys(
+        active_epsg=epsg_disp,
+        detected_zone=zone_info,
+        uploaded_filename=file_disp
+    )
+
+    zone_badge = f'<div>🌍 <b>Zona detectada:</b> <span style="color: #f59e0b; font-weight: 600;">{zone_disp}</span></div>' if zone_disp else ''
     st.markdown(f"""
     <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 8px 14px; margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; font-size: 12.5px;">
         <div>📍 <b>Proyección (CRS):</b> <code style="color: #38bdf8; font-weight: 600;">EPSG:{epsg_disp}</code></div>
         <div>📁 <b>Plano cargado:</b> <span style="color: #cbd5e1;">{file_disp}</span></div>
+        {zone_badge}
         <div>🛰️ <b>Servicio actual:</b> <span style="color: #34d399; font-weight: 500;">{serv_disp}</span></div>
     </div>
     """, unsafe_allow_html=True)
@@ -2192,7 +2296,8 @@ def render_wms_assistant_content(
                             context_dict = {
                                 "active_epsg": epsg_disp,
                                 "current_service": serv_disp,
-                                "uploaded_filename": file_disp
+                                "uploaded_filename": file_disp,
+                                "detected_zone": zone_disp or "No especificado"
                             }
                             res = query_universal_ai_wms(
                                 prompt=query_to_run,
@@ -2205,10 +2310,10 @@ def render_wms_assistant_content(
                             )
                             bot_response = res["text"]
 
-                            # Si hubo algún problema con la API de Gemini, anexamos automáticamente
+                            # Si hubo algún problema con la API de IA, anexamos automáticamente
                             # las recomendaciones del catálogo local para no dejar la consulta sin respuesta.
                             if not res.get("success", False):
-                                local_matches = search_wms_catalog(query_to_run)
+                                local_matches = search_wms_catalog(query_to_run, project_geo_fallback=project_geo_keys)
                                 if local_matches:
                                     top = local_matches[:3]
                                     lines = [
@@ -2226,10 +2331,17 @@ def render_wms_assistant_content(
 
                             _parse_and_render_wms_actions(bot_response)
                     else:
-                        matches = search_wms_catalog(query_to_run)
+                        matches = search_wms_catalog(query_to_run, project_geo_fallback=project_geo_keys)
+                        clean_run_q = _normalize_text(query_to_run)
+                        is_context_q = bool(set(clean_run_q.split()).intersection(CONTEXT_PROJECT_TRIGGERS))
+
                         if matches:
                             top = matches[:3]
-                            lines = [f"🔍 **Encontré {len(matches)} servicios oficiales para tu consulta:**\n"]
+                            if is_context_q and zone_disp:
+                                header_lbl = f"🔍 **Encontré {len(matches)} servicios oficiales para la ubicación de tu plano ({zone_disp}):**\n"
+                            else:
+                                header_lbl = f"🔍 **Encontré {len(matches)} servicios oficiales para tu consulta:**\n"
+                            lines = [header_lbl]
                             for m in top:
                                 lines.append(f"### {m['name']}")
                                 lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
@@ -2242,21 +2354,14 @@ def render_wms_assistant_content(
                             bot_response = "\n".join(lines)
                         else:
                             detected_geos = _detect_query_geo(query_to_run)
-                            if detected_geos:
-                                country_title = list(detected_geos)[0].capitalize()
-                                bot_response = (
-                                    f"ℹ️ **No dispongo de un servicio WMS local específico para {country_title} en el catálogo offline.**\n\n"
-                                    f"Para garantizar la máxima precisión técnica y evitar mezclar servicios de otros países, el asistente no te mostrará resultados incoherentes.\n\n"
-                                    f"💡 **¿Cómo obtener capas oficiales para {country_title}?**\n"
-                                    f"1. **🤖 Activa el Asistente con IA:** Pega tu clave de API arriba (**Google Gemini**, **OpenAI**, **Claude** o **Groq**) para que el bot consulte en vivo los servidores oficiales de **{country_title}**.\n"
-                                    f"2. **🌐 Cobertura Global:** Puedes activar **Google Satélite**, **Esri World Imagery** o **OpenStreetMap** en la barra lateral para visualizar {country_title} en tu plano CAD."
-                                )
-                            else:
-                                bot_response = (
-                                    "ℹ️ No encontré un servicio WMS específico en el catálogo local para esos términos.\n\n"
-                                    "💡 **Sugerencia:** Prueba buscando por conceptos como *catastro*, *ortofoto*, *suelos*, *curvas*, *vías*, o por país (*España*, *Colombia*, *México*, *Suecia*, *Argentina*), "
-                                    "o introduce tu clave de API arriba para hacer consultas mundiales libres con IA."
-                                )
+                            target_loc = list(detected_geos)[0].capitalize() if detected_geos else (zone_disp or "esta región")
+                            bot_response = (
+                                f"ℹ️ **No dispongo de un servicio WMS local específico de esta temática para {target_loc} en el catálogo offline.**\n\n"
+                                f"Para garantizar la máxima precisión técnica y evitar mezclar capas de otros lugares, el asistente no te mostrará resultados incoherentes.\n\n"
+                                f"💡 **¿Cómo obtener capas oficiales para {target_loc}?**\n"
+                                f"1. **🤖 Activa el Asistente con IA:** Pega tu clave de API arriba (**Google Gemini**, **OpenAI**, **Claude** o **Groq**) para que el bot consulte en vivo los servidores oficiales de **{target_loc}**.\n"
+                                f"2. **🛰️ Cobertura Global:** Puedes activar **Google Satélite**, **Esri World Imagery** o **OpenStreetMap** en la barra lateral para visualizar {target_loc} en tu plano CAD."
+                            )
                         _parse_and_render_wms_actions(bot_response)
 
                 st.session_state["wms_chat_history"].append({"role": "model", "content": bot_response})
@@ -2381,7 +2486,8 @@ else:
 def show_wms_assistant_dialog(
     active_epsg: Optional[Any] = None,
     current_service_name: Optional[str] = None,
-    uploaded_filename: Optional[str] = None
+    uploaded_filename: Optional[str] = None,
+    detected_zone: Optional[Dict[str, Any]] = None
 ):
     """Marca el diálogo como abierto y solicita ejecución."""
     if active_epsg is not None:
@@ -2390,6 +2496,8 @@ def show_wms_assistant_dialog(
         st.session_state["wms_current_service_name"] = current_service_name
     if uploaded_filename is not None:
         st.session_state["wms_uploaded_filename"] = uploaded_filename
+    if detected_zone is not None:
+        st.session_state["wms_detected_zone"] = detected_zone
     st.session_state["wms_dialog_is_open"] = True
     st.rerun()
 
@@ -2397,7 +2505,8 @@ def show_wms_assistant_dialog(
 def render_floating_assistant_button(
     active_epsg: Optional[Any] = None,
     current_service_name: Optional[str] = None,
-    uploaded_filename: Optional[str] = None
+    uploaded_filename: Optional[str] = None,
+    detected_zone: Optional[Dict[str, Any]] = None
 ):
     """
     Renderiza un Botón Flotante con el personaje animado en la esquina inferior derecha.
@@ -2412,6 +2521,8 @@ def render_floating_assistant_button(
         st.session_state["wms_current_service_name"] = current_service_name
     if uploaded_filename is not None:
         st.session_state["wms_uploaded_filename"] = uploaded_filename
+    if detected_zone is not None:
+        st.session_state["wms_detected_zone"] = detected_zone
 
     b64_avatar = get_bot_avatar_b64()
     img_css = f"background-image: url('data:image/png;base64,{b64_avatar}') !important;" if b64_avatar else ""

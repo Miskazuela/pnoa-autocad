@@ -3307,7 +3307,8 @@ def render_ui():
         show_wms_assistant_dialog(
             active_epsg=st.session_state.get("active_epsg_code", 25830),
             current_service_name=st.session_state.get("sidebar_service_select", "Ortofoto PNOA"),
-            uploaded_filename=st.session_state.get("last_uploaded_filename", None)
+            uploaded_filename=st.session_state.get("last_uploaded_filename", None),
+            detected_zone=st.session_state.get("detected_zone_country", None)
         )
     service_keys = list(SERVICES_CATALOG.keys())
     service_labels = [SERVICES_CATALOG[k]["name"] for k in service_keys]
@@ -3678,7 +3679,8 @@ def render_ui():
     render_floating_assistant_button(
         active_epsg=st.session_state.get("active_epsg_code", 25830),
         current_service_name=selected_service_label,
-        uploaded_filename=dxf_display_name
+        uploaded_filename=dxf_display_name,
+        detected_zone=detected_zone
     )
 
     # ----------------------------------------------------------------------------------
