@@ -972,8 +972,151 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------------------
-# 4. CLIENTE DE IA CON GOOGLE GEMINI (MODO CONVERSACIONAL EXPERTO MUNDIAL)
+# 4. CLIENTE DE IA CON OPENAI Y GOOGLE GEMINI (MODO CONVERSACIONAL EXPERTO MUNDIAL)
 # --------------------------------------------------------------------------------------
+def detect_ai_provider(api_key: str) -> str:
+    """
+    Detecta automáticamente si la clave corresponde a OpenAI o Google Gemini.
+    - OpenAI: Claves que comienzan por 'sk-'.
+    - Gemini: Claves de Google AI Studio (habitualmente 'AIzaSy...').
+    """
+    k = api_key.strip() if api_key else ""
+    if not k:
+        return "none"
+    if k.lower().startswith("sk-"):
+        return "openai"
+    return "gemini"
+
+
+def _build_wms_system_instruction(context_info: Optional[Dict[str, Any]] = None) -> str:
+    """Genera la instrucción del sistema experta en WMS y CAD compartida para OpenAI y Gemini."""
+    catalog_summary = []
+    for item in WMS_DATABASE[:40]:
+        catalog_summary.append(
+            f"- {item['name']} ({item['region']}): URL={item['url']} | Capa={item['default_layer']} | {item['description']}"
+        )
+    catalog_text = "\n".join(catalog_summary)
+
+    ctx_str = ""
+    if context_info:
+        ctx_str = (
+            f"\nCONTEXTO DEL PROYECTO ACTUAL DEL USUARIO EN LA PANTALLA:\n"
+            f"- Proyección cartográfica configurada: EPSG:{context_info.get('active_epsg', '25830')}\n"
+            f"- Archivo cargado en la app: {context_info.get('uploaded_filename', 'Ninguno')}\n"
+            f"- Servicio cartográfico actualmente seleccionado: {context_info.get('current_service', 'Ortofoto PNOA')}\n"
+            f"Utiliza este contexto para dar respuestas hiper-personalizadas al país o zona del usuario si aplica.\n"
+        )
+
+    system_instruction = f"""
+Eres 'WMS Assistant Worldwide', un Ingeniero Especialista Senior en Sistemas de Información Geográfica (SIG), Cartografía Oficial Mundial (España, Europa, Latinoamérica, EE.UU., Canadá, Australia y Global) y proyectos en AutoCAD, AutoCAD Map 3D y Civil 3D.
+Tu objetivo es ayudar al usuario a encontrar las URLs y capas exactas de servicios WMS (Web Map Service) para insertar ortofotos y mapas en su plano CAD.
+
+{ctx_str}
+
+Dispones de este catálogo verificado de referencia:
+{catalog_text}
+
+INSTRUCCIONES CLAVE Y REGLAS DE CONFIABILIDAD DE URLS:
+1. Responde de forma concisa, técnica y cordial en español.
+2. Tu alcance es MUNDIAL. Si el usuario pregunta por España, Colombia, México, Chile, Perú, EE.UU., Francia, Alemania o cualquier otro país, oriéntalo con el servicio oficial o regional correspondiente.
+3. SIEMPRE que recomiendes un servicio WMS concreto que el usuario pueda usar, incluye al final un bloque especial con este formato exacto para que la interfaz cree un botón de carga rápida con 1 clic:
+   [APPLY_WMS: {{"name": "Nombre descriptivo", "url": "https://url-del-servicio...", "layer": "nombre_capa"}}]
+4. REGLA ESTRICTA DE URLS OFICIALES:
+   - Para Colombia IGAC: Utiliza SIEMPRE 'https://mapas2.igac.gov.co/server/services/carto/carto100000colombia2019/MapServer/WMSServer' (capa 34 para vías, 0 para base) o 'https://mapas2.igac.gov.co/server/services/carto/municipios/MapServer/WMSServer'. NUNCA uses 'mapas.igac.gov.co' porque ese servidor antiguo ya no existe.
+   - Para Bogotá: Ortofoto oficial IDECA 'https://serviciosgis.catastrobogota.gov.co/arcgis/services/imagenes/Ortho2017/MapServer/WMSServer' (capa 0).
+   - Para Cali: IDESC 'https://ws-idesc.cali.gov.co/geoserver/wms'.
+   - Para España Catastro: 'https://ovc.catastro.meh.es/Cartografia/WMS/ServidorWMS.aspx' (capa Catastro) o INSPIRE 'https://ovc.catastro.meh.es/cartografia/INSPIRE/spadgcwms.aspx'.
+   - Si no estás 100% seguro de una URL fuera del catálogo, utiliza las del catálogo oficial verificado.
+5. Si el usuario pregunta dudas sobre AutoCAD (ej: qué es un archivo .tfw, cómo insertar con _MAPIINSERT, resolución m/px, EPSG para su zona), explícaselo con claridad técnica.
+"""
+    return system_instruction
+
+
+def query_openai_wms(
+    prompt: str,
+    api_key: str,
+    chat_history: List[Dict[str, str]],
+    context_info: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Envía la consulta del usuario a la API oficial de OpenAI (ChatGPT) utilizando la clave del usuario (sk-...).
+    Admite modelos gpt-4o-mini, gpt-4o y gpt-3.5-turbo con failover automático.
+    """
+    clean_key = api_key.strip() if api_key else ""
+    if not clean_key:
+        return {
+            "success": False,
+            "text": "⚠️ Por favor, introduce tu OpenAI API Key (sk-...) para activar el modo IA."
+        }
+
+    system_instruction = _build_wms_system_instruction(context_info)
+    messages = [{"role": "system", "content": system_instruction}]
+
+    for msg in chat_history[-6:]:
+        r = "assistant" if msg.get("role") == "model" else "user"
+        messages.append({"role": r, "content": msg.get("content", "")})
+    messages.append({"role": "user", "content": prompt})
+
+    models_to_try = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {clean_key}",
+        "Content-Type": "application/json"
+    }
+
+    last_error = ""
+    for model_name in models_to_try:
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": 0.4,
+            "max_tokens": 1000
+        }
+        try:
+            resp = requests.post(endpoint, headers=headers, json=payload, timeout=20)
+            if resp.status_code == 200:
+                data = resp.json()
+                text_out = data["choices"][0]["message"]["content"]
+                st.session_state["wms_active_ai_provider"] = "OpenAI"
+                st.session_state["wms_active_openai_model"] = model_name
+                return {"success": True, "text": text_out, "model": model_name, "provider": "OpenAI"}
+            elif resp.status_code == 401:
+                return {
+                    "success": False,
+                    "text": "❌ La clave de API de OpenAI introducida (sk-...) no es válida o ha caducado. Cópiala directamente desde https://platform.openai.com/api-keys"
+                }
+            elif resp.status_code == 429:
+                err_data = resp.json().get("error", {})
+                err_code = err_data.get("code", "")
+                err_msg = err_data.get("message", "")
+                if "insufficient_quota" in str(err_code) or "quota" in err_msg.lower():
+                    return {
+                        "success": False,
+                        "text": "⚠️ Tu cuenta de OpenAI ha excedido su cuota o no tiene saldo de créditos disponible. Recarga crédito en https://platform.openai.com/account/billing"
+                    }
+                last_error = f"Límite de peticiones alcanzado en OpenAI ({model_name})."
+                continue
+            elif resp.status_code == 404:
+                last_error = f"El modelo {model_name} no está disponible en tu cuenta de OpenAI."
+                continue
+            else:
+                err_msg = resp.json().get("error", {}).get("message", resp.text)
+                last_error = f"HTTP {resp.status_code}: {err_msg}"
+        except requests.exceptions.Timeout:
+            last_error = "Tiempo de espera agotado al consultar a OpenAI."
+            continue
+        except Exception as ex:
+            last_error = str(ex)
+            break
+
+    return {
+        "success": False,
+        "text": (
+            f"⚠️ No se pudo obtener respuesta de OpenAI ({last_error}).\n\n"
+            f"💡 **Ayuda:** Comprueba que tu clave esté activa en [OpenAI Platform](https://platform.openai.com/api-keys) y disponga de saldo. "
+            f"El asistente utilizará automáticamente el **Modo Local Verificado** para darte recomendaciones oficiales inmediatas."
+        )
+    }
 def discover_available_gemini_models(api_key: str) -> Tuple[List[str], Optional[str]]:
     """
     Descubre dinámicamente los modelos Gemini disponibles para la clave API del usuario
@@ -984,6 +1127,8 @@ def discover_available_gemini_models(api_key: str) -> Tuple[List[str], Optional[
         return [], "Clave vacía"
 
     clean_key = api_key.strip()
+    if clean_key.lower().startswith("sk-"):
+        return [], None
 
     # Comprobar si ya los tenemos en caché de sesión para esta misma clave
     cached_key = st.session_state.get("_cached_gemini_api_key")
@@ -1071,45 +1216,7 @@ def query_gemini_wms(
             "text": "⚠️ Por favor, introduce tu Gemini API Key en el campo superior para activar el modo IA."
         }
 
-    catalog_summary = []
-    for item in WMS_DATABASE[:40]:
-        catalog_summary.append(
-            f"- {item['name']} ({item['region']}): URL={item['url']} | Capa={item['default_layer']} | {item['description']}"
-        )
-    catalog_text = "\n".join(catalog_summary)
-
-    ctx_str = ""
-    if context_info:
-        ctx_str = (
-            f"\nCONTEXTO DEL PROYECTO ACTUAL DEL USUARIO EN LA PANTALLA:\n"
-            f"- Proyección cartográfica configurada: EPSG:{context_info.get('active_epsg', '25830')}\n"
-            f"- Archivo cargado en la app: {context_info.get('uploaded_filename', 'Ninguno')}\n"
-            f"- Servicio cartográfico actualmente seleccionado: {context_info.get('current_service', 'Ortofoto PNOA')}\n"
-            f"Utiliza este contexto para dar respuestas hiper-personalizadas al país o zona del usuario si aplica.\n"
-        )
-
-    system_instruction = f"""
-Eres 'WMS Assistant Worldwide', un Ingeniero Especialista Senior en Sistemas de Información Geográfica (SIG), Cartografía Oficial Mundial (España, Europa, Latinoamérica, EE.UU., Canadá, Australia y Global) y proyectos en AutoCAD, AutoCAD Map 3D y Civil 3D.
-Tu objetivo es ayudar al usuario a encontrar las URLs y capas exactas de servicios WMS (Web Map Service) para insertar ortofotos y mapas en su plano CAD.
-
-{ctx_str}
-
-Dispones de este catálogo verificado de referencia:
-{catalog_text}
-
-INSTRUCCIONES CLAVE Y REGLAS DE CONFIABILIDAD DE URLS:
-1. Responde de forma concisa, técnica y cordial en español.
-2. Tu alcance es MUNDIAL. Si el usuario pregunta por España, Colombia, México, Chile, Perú, EE.UU., Francia, Alemania o cualquier otro país, oriéntalo con el servicio oficial o regional correspondiente.
-3. SIEMPRE que recomiendes un servicio WMS concreto que el usuario pueda usar, incluye al final un bloque especial con este formato exacto para que la interfaz cree un botón de carga rápida con 1 clic:
-   [APPLY_WMS: {{"name": "Nombre descriptivo", "url": "https://url-del-servicio...", "layer": "nombre_capa"}}]
-4. REGLA ESTRICTA DE URLS OFICIALES:
-   - Para Colombia IGAC: Utiliza SIEMPRE 'https://mapas2.igac.gov.co/server/services/carto/carto100000colombia2019/MapServer/WMSServer' (capa 34 para vías, 0 para base) o 'https://mapas2.igac.gov.co/server/services/carto/municipios/MapServer/WMSServer'. NUNCA uses 'mapas.igac.gov.co' porque ese servidor antiguo ya no existe.
-   - Para Bogotá: Ortofoto oficial IDECA 'https://serviciosgis.catastrobogota.gov.co/arcgis/services/imagenes/Ortho2017/MapServer/WMSServer' (capa 0).
-   - Para Cali: IDESC 'https://ws-idesc.cali.gov.co/geoserver/wms'.
-   - Para España Catastro: 'https://ovc.catastro.meh.es/Cartografia/WMS/ServidorWMS.aspx' (capa Catastro) o INSPIRE 'https://ovc.catastro.meh.es/cartografia/INSPIRE/spadgcwms.aspx'.
-   - Si no estás 100% seguro de una URL fuera del catálogo, utiliza las del catálogo oficial verificado.
-5. Si el usuario pregunta dudas sobre AutoCAD (ej: qué es un archivo .tfw, cómo insertar con _MAPIINSERT, resolución m/px, EPSG para su zona), explícaselo con claridad técnica.
-"""
+    system_instruction = _build_wms_system_instruction(context_info)
 
     contents = []
     for msg in chat_history[-6:]:
@@ -1202,6 +1309,24 @@ INSTRUCCIONES CLAVE Y REGLAS DE CONFIABILIDAD DE URLS:
     }
 
 
+def query_ai_wms(
+    prompt: str,
+    api_key: str,
+    chat_history: List[Dict[str, str]],
+    context_info: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Función unificada de consulta de IA con auto-detección del proveedor:
+    - Si la clave empieza por 'sk-', consulta a OpenAI (ChatGPT: gpt-4o-mini / gpt-4o).
+    - Si la clave es de Google (AIzaSy...), consulta a Gemini (Google AI Studio).
+    """
+    provider = detect_ai_provider(api_key)
+    if provider == "openai":
+        return query_openai_wms(prompt, api_key, chat_history, context_info)
+    else:
+        return query_gemini_wms(prompt, api_key, chat_history, context_info)
+
+
 # --------------------------------------------------------------------------------------
 # 5. PARSEO DE ACCIONES WMS Y COMPONENTE MODAL / FLOTANTE
 # --------------------------------------------------------------------------------------
@@ -1244,7 +1369,7 @@ def render_wms_assistant_content(
     Renderiza el contenido interno del Asistente WMS (utilizable dentro del modal st.dialog o embebido).
     """
     if "wms_bot_api_key" not in st.session_state:
-        st.session_state["wms_bot_api_key"] = os.environ.get("GEMINI_API_KEY", "")
+        st.session_state["wms_bot_api_key"] = os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
     if "wms_chat_history" not in st.session_state:
         st.session_state["wms_chat_history"] = [
             {
@@ -1309,27 +1434,37 @@ def render_wms_assistant_content(
     </div>
     """, unsafe_allow_html=True)
 
-    # Cabecera de configuración de modo (Local vs Gemini)
+    # Cabecera de configuración de modo (Local vs OpenAI / Gemini)
     col_api, col_badge = st.columns([3, 2])
     with col_api:
         user_key = st.text_input(
-            "🔑 Tu Gemini API Key (Opcional para modo IA):",
+            "🔑 API Key de IA (OpenAI o Google Gemini - Opcional):",
             value=st.session_state.get("wms_bot_api_key", ""),
             type="password",
-            placeholder="AIzaSy...",
-            help="Opcional. Si introduces tu clave gratuita de Google AI Studio, activarás el Asistente IA conversacional. Si la dejas vacía, funcionará con el Catálogo Oficial local sin coste alguno."
+            placeholder="sk-... (OpenAI) o AIzaSy... (Gemini)",
+            help="Introduce tu clave de OpenAI (sk-...) o de Google Gemini (AIzaSy...) para activar el modo IA conversacional. Si la dejas vacía, funcionará gratis con el Catálogo Oficial local."
         )
         st.session_state["wms_bot_api_key"] = user_key.strip()
 
     with col_badge:
         if user_key.strip():
-            active_m = st.session_state.get("wms_active_gemini_model", "Auto-Detección")
-            st.markdown(f"""
-            <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
-                <div style="font-weight: 600; color: #34d399; font-size: 12.5px;">✨ Modo IA Gemini Activado</div>
-                <div style="color: #94a3b8; font-size: 11px;">Modelo: <b>{active_m}</b> | Razonamiento SIG + Catálogo.</div>
-            </div>
-            """, unsafe_allow_html=True)
+            ai_prov = detect_ai_provider(user_key)
+            if ai_prov == "openai":
+                active_m = st.session_state.get("wms_active_openai_model", "gpt-4o-mini")
+                st.markdown(f"""
+                <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
+                    <div style="font-weight: 600; color: #34d399; font-size: 12.5px;">✨ Modo IA OpenAI (ChatGPT)</div>
+                    <div style="color: #94a3b8; font-size: 11px;">Modelo: <b>{active_m}</b> | Razonamiento SIG + Catálogo.</div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                active_m = st.session_state.get("wms_active_gemini_model", "Auto-Detección")
+                st.markdown(f"""
+                <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
+                    <div style="font-weight: 600; color: #34d399; font-size: 12.5px;">✨ Modo IA Gemini Activado</div>
+                    <div style="color: #94a3b8; font-size: 11px;">Modelo: <b>{active_m}</b> | Razonamiento SIG + Catálogo.</div>
+                </div>
+                """, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div style="background: rgba(56, 189, 248, 0.12); border: 1px solid #38bdf8; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
@@ -1396,13 +1531,15 @@ def render_wms_assistant_content(
 
                 with st.chat_message("model", avatar=bot_avatar_img):
                     if st.session_state.get("wms_bot_api_key"):
-                        with st.spinner("Consultando a Gemini..."):
+                        cur_prov = detect_ai_provider(st.session_state["wms_bot_api_key"])
+                        prov_lbl = "OpenAI (ChatGPT)" if cur_prov == "openai" else "Gemini"
+                        with st.spinner(f"Consultando a {prov_lbl}..."):
                             context_dict = {
                                 "active_epsg": epsg_disp,
                                 "current_service": serv_disp,
                                 "uploaded_filename": file_disp
                             }
-                            res = query_gemini_wms(
+                            res = query_ai_wms(
                                 prompt=query_to_run,
                                 api_key=st.session_state["wms_bot_api_key"],
                                 chat_history=st.session_state["wms_chat_history"][:-1],
