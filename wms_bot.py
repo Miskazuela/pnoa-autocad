@@ -18,7 +18,7 @@ import base64
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import unicodedata
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Set
 import streamlit as st
 import requests
 import urllib3
@@ -696,6 +696,42 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "description": "Govern de les Illes Balears (IDEIB): Cartografía base e imagen de Mallorca, Menorca, Ibiza y Formentera.",
         "tags": ["baleares", "mallorca", "menorca", "ibiza", "formentera", "ideib", "palma", "mapa"],
         "layers": [("0", "Mapa Base Illes Balears")]
+    },
+    {
+        "id": "suecia_sgu_suelos",
+        "name": "Suecia - Suelos y Depósitos Cuaternarios (SGU)",
+        "category": "🌲 Medio Ambiente y Naturaleza",
+        "region": "Suecia",
+        "url": "https://resource.sgu.se/service/wms/130/jordarter-25-100-tusen",
+        "default_layer": "JORD_25K_Grundlager",
+        "description": "Cartografía oficial de tipos de suelo, sedimentos y depósitos cuaternarios 1:25.000 a 1:100.000 del Servicio Geológico de Suecia (SGU).",
+        "tags": ["suecia", "sweden", "suelos", "suelo", "jordarter", "geologia", "sgu", "deposito", "tierra", "edafologia", "sverige"],
+        "layers": [
+            ("JORD_25K_Grundlager", "Depósitos Cuaternarios / Suelos 25k"),
+            ("jord:SE.GOV.SGU.JORD.TACKNINGSKARTA.25K", "Cobertura de Suelos 25k")
+        ]
+    },
+    {
+        "id": "suecia_lantmateriet_orto",
+        "name": "Suecia - Ortofoto Nacional Oficial (Lantmäteriet)",
+        "category": "🛰️ Ortofotos Satelitales y Aéreas",
+        "region": "Suecia",
+        "url": "https://inspire.lantmateriet.se/inspire-om-wms/service",
+        "default_layer": "OI.OrthoimageCoverage",
+        "description": "Ortofotografía aérea oficial de alta resolución de toda Suecia certificada por Lantmäteriet (Instituto Geográfico de Suecia).",
+        "tags": ["suecia", "sweden", "lantmateriet", "ortofoto", "satelite", "estocolmo", "gotemburgo", "sverige"],
+        "layers": [("OI.OrthoimageCoverage", "Ortofoto Nacional de Suecia")]
+    },
+    {
+        "id": "espana_mapa_suelos",
+        "name": "España - Ocupación del Suelo y Coberturas SIOSE (IGN)",
+        "category": "🌲 Medio Ambiente y Naturaleza",
+        "region": "España (Nacional)",
+        "url": "https://servicios.idee.es/wms-inspire/ocupacion-suelo",
+        "default_layer": "LC.LandCoverSurfaces",
+        "description": "Ocupación y usos del suelo de España (SIOSE / Corine Land Cover) del Instituto Geográfico Nacional (IGN): clases agrológicas y coberturas de suelo.",
+        "tags": ["espana", "suelos", "suelo", "siose", "ocupacion", "corine", "edafologia", "ign", "medio ambiente"],
+        "layers": [("LC.LandCoverSurfaces", "Ocupación y Usos del Suelo SIOSE")]
     }
 ]
 
@@ -731,27 +767,43 @@ SYNONYMS = {
     ],
     "vias": [
         "vias", "calles", "carreteras", "autopistas", "malla", "vial", "calzada",
-        "calles", "rutas", "osm", "callejero"
+        "rutas", "osm", "callejero"
     ],
     "geologia": [
         "geologia", "geologico", "fallas", "rocas", "mineria", "geotecnia", "litologia"
+    ],
+    "suelos": [
+        "suelos", "suelo", "edafologia", "jordarter", "tierra", "geotecnia", "cuaternario",
+        "litologia", "pedologia", "agrologico", "siose", "usos del suelo"
     ]
 }
 
 GEO_LOCATIONS = {
-    "colombia": ["colombia", "bogota", "medellin", "cali", "barranquilla", "cundinamarca", "antioquia", "valle", "igac"],
+    "colombia": ["colombia", "bogota", "medellin", "cali", "barranquilla", "cundinamarca", "antioquia", "valle", "igac", "colombiano", "colombiana"],
     "bogota": ["bogota", "cundinamarca", "ideca"],
     "medellin": ["medellin", "antioquia", "geomedellin"],
     "cali": ["cali", "valle", "idecali", "idesc"],
-    "mexico": ["mexico", "cdmx", "guadalajara", "monterrey", "inegi"],
-    "chile": ["chile", "santiago", "valparaiso", "concepcion", "snit", "mma"],
-    "argentina": ["argentina", "buenos aires", "cordoba", "rosario", "idecor"],
-    "peru": ["peru", "lima", "arequipa", "ingemmet", "geocatmin"],
-    "estados unidos": ["eeuu", "usa", "estados unidos", "usgs"],
-    "canada": ["canada", "nrcan", "canvec"],
+    "mexico": ["mexico", "cdmx", "guadalajara", "monterrey", "inegi", "mexicano", "mexicana"],
+    "chile": ["chile", "santiago", "valparaiso", "concepcion", "snit", "mma", "chileno", "chilena"],
+    "argentina": ["argentina", "buenos aires", "cordoba", "rosario", "idecor", "argentino", "argentina"],
+    "peru": ["peru", "lima", "arequipa", "ingemmet", "geocatmin", "peruano", "peruana"],
+    "estados unidos": ["eeuu", "usa", "estados unidos", "usgs", "americano", "americana"],
+    "canada": ["canada", "nrcan", "canvec", "canadiense"],
+    "suecia": ["suecia", "sweden", "sverige", "sgu", "lantmateriet", "sueco", "sueca", "estocolmo", "gotemburgo", "malmo"],
+    "noruega": ["noruega", "norway", "norge", "kartverket", "oslo", "noruego", "noruega"],
+    "finlandia": ["finlandia", "finland", "suomi", "maanmittauslaitos", "helsinki", "finlandes"],
+    "dinamarca": ["dinamarca", "denmark", "danmark", "copenhague", "danes"],
+    "italia": ["italia", "italy", "roma", "milan", "napoles", "turin", "italiano", "italiana"],
+    "francia": ["francia", "france", "paris", "geoportail", "frances", "francesa"],
+    "alemania": ["alemania", "germany", "berlin", "bkg", "aleman", "alemana"],
+    "portugal": ["portugal", "lisboa", "porto", "dgt", "portugues", "portuguesa"],
+    "reino unido": ["reino unido", "uk", "inglaterra", "england", "gran bretana", "scotland", "escocia", "londres"],
+    "australia": ["australia", "sydney", "melbourne", "australiano", "australiana"],
+    "brasil": ["brasil", "brazil", "ibge", "rio", "sao paulo", "brasilia", "brasilero", "brasilera"],
+    "japon": ["japon", "japan", "gsi", "tokio", "osaka", "japones", "japonesa"],
     "espana": [
         "espana", "spain", "madrid", "cataluna", "barcelona", "andalucia", "sevilla",
-        "valencia", "galicia", "euskadi", "pais vasco", "navarra", "canarias", "baleares", "gipuzkoa", "bizkaia", "alava"
+        "valencia", "galicia", "euskadi", "pais vasco", "navarra", "canarias", "baleares", "gipuzkoa", "bizkaia", "alava", "espanol", "espanola"
     ],
     "madrid": ["madrid"],
     "andalucia": ["andalucia", "sevilla", "granada", "malaga", "cordoba"],
@@ -761,11 +813,7 @@ GEO_LOCATIONS = {
     "euskadi": ["euskadi", "pais vasco", "bizkaia", "araba", "gipuzkoa", "geoeuskadi", "b5m"],
     "navarra": ["navarra", "idena"],
     "canarias": ["canarias", "tenerife", "palmas", "grafcan"],
-    "baleares": ["baleares", "mallorca", "menorca", "ibiza", "ideib"],
-    "portugal": ["portugal", "lisboa", "porto", "dgt"],
-    "francia": ["francia", "france", "paris", "geoportail"],
-    "alemania": ["alemania", "germany", "berlin", "bkg"],
-    "australia": ["australia", "sydney", "melbourne"]
+    "baleares": ["baleares", "mallorca", "menorca", "ibiza", "ideib"]
 }
 
 
@@ -777,20 +825,32 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"[^a-z0-9\s]", " ", t)
 
 
+def _detect_query_geo(query: str) -> Set[str]:
+    """Detecta si el usuario mencionó un país, ciudad o región geográfica en su consulta."""
+    clean_q = _normalize_text(query)
+    words = clean_q.split()
+    detected = set()
+    for w in words:
+        for geo_key, aliases in GEO_LOCATIONS.items():
+            if w == geo_key or w in aliases:
+                detected.add(geo_key)
+    return detected
+
+
 def search_wms_catalog(
     query: str,
     category_filter: Optional[str] = None,
     region_filter: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Busca de forma inteligente en el catálogo local por palabras clave, sinónimos, países y categorías.
-    Filtra palabras vacías (stopwords), prioriza cobertura de conceptos y desambigua regiones geográficas.
+    Busca de forma inteligente y ESTRICTA en el catálogo local.
+    Aplica regla estricta de coherencia geográfica: si el usuario pide un país o región específica,
+    los servicios locales de otros países son DESCARTADOS (evita mezclar Argentina con Suecia o España).
     """
     clean_q = _normalize_text(query)
     raw_words = [w for w in clean_q.split() if len(w) >= 2]
     tokens = [w for w in raw_words if w not in SPANISH_STOPWORDS]
 
-    # Si todos los términos eran stopwords (ej: "de la"), usamos raw_words
     if not tokens:
         tokens = raw_words
 
@@ -806,6 +866,9 @@ def search_wms_catalog(
             if tok == geo_k or tok in aliases:
                 query_geo_keys.add(geo_k)
                 query_geo_keys.update(aliases)
+
+    # Identificar tokens temáticos sustantivos (excluyendo nombres de países/ciudades)
+    thematic_tokens = [tok for tok in tokens if tok not in query_geo_keys]
 
     scored_results = []
     for item in WMS_DATABASE:
@@ -824,11 +887,35 @@ def search_wms_catalog(
         item_desc = _normalize_text(item["description"])
         item_tags = [_normalize_text(t) for t in item.get("tags", [])]
 
+        # REGLA ESTRICTA DE DESAMBIGUACIÓN GEOGRÁFICA:
+        # Si el usuario solicitó un país o región específica:
+        if query_geo_keys:
+            item_matches_geo = any(g in item_reg or g in item_name or g in item_tags for g in query_geo_keys)
+            # Si el servicio pertenece a OTRO país y NO coincide con la búsqueda: DESCARTAR INMEDIATAMENTE
+            if not item_matches_geo:
+                continue
+
+        # REGLA ESTRICTA DE COHERENCIA TEMÁTICA:
+        # Si el usuario buscó conceptos temáticos además del país (ej: 'suelos', 'catastro', 'curvas'),
+        # el servicio DEBE coincidir con al menos un término temático (evita listar catastro si buscó suelos)
+        if thematic_tokens:
+            has_thematic_match = False
+            for t_tok in thematic_tokens:
+                syns = [t_tok]
+                for sk, sl in SYNONYMS.items():
+                    if t_tok == sk or t_tok in sl:
+                        syns.extend(sl)
+                syn_set = set(syns)
+                if any(s in item_tags or s in item_name or s in item_desc for s in syn_set):
+                    has_thematic_match = True
+                    break
+            if not has_thematic_match:
+                continue
+
         score = 0
         matched_tokens_count = 0
 
         for tok in tokens:
-            # Expandir sinónimos
             syns = [tok]
             for syn_key, syn_list in SYNONYMS.items():
                 if tok == syn_key or tok in syn_list:
@@ -846,12 +933,12 @@ def search_wms_catalog(
 
             # 2. Coincidencia en nombre del servicio
             if any(s in item_name for s in syns_set):
-                score += 25
+                score += 30
                 tok_matched = True
 
             # 3. Coincidencia en región / país
             if any(s in item_reg for s in syns_set):
-                score += 25
+                score += 30
                 tok_matched = True
 
             # 4. Coincidencia en descripción
@@ -862,25 +949,20 @@ def search_wms_catalog(
             if tok_matched:
                 matched_tokens_count += 1
 
-        # Multiplicador de cobertura de conceptos (premia servicios que cubren todas las palabras buscadas)
+        # Multiplicador de cobertura de conceptos
         coverage_ratio = matched_tokens_count / max(len(tokens), 1)
         if coverage_ratio >= 1.0:
             score += 100
         elif coverage_ratio >= 0.5:
             score += 25
         else:
-            score = int(score * 0.3)
+            score = int(score * 0.2)
 
-        # Desambiguación y alineamiento geográfico
+        # Bonificación a coincidencia exacta de región
         if query_geo_keys:
             item_matches_geo = any(g in item_reg or g in item_name or g in item_tags for g in query_geo_keys)
-            is_global_srv = "global" in item_reg or "mundo" in item_reg or "mundial" in item_name
-
             if item_matches_geo:
-                score += 90  # Gran bonificación a la zona solicitada
-            elif not is_global_srv:
-                # Servicio local de otra región no solicitada: penalización estricta
-                score -= 160
+                score += 90
 
         if score > 0:
             scored_results.append((score, item))
@@ -890,7 +972,7 @@ def search_wms_catalog(
     # Filtrar cola irrelevante
     if scored_results:
         top_score = scored_results[0][0]
-        min_threshold = max(top_score * 0.45, 20)
+        min_threshold = max(top_score * 0.45, 25)
         filtered = [item for sc, item in scored_results if sc >= min_threshold]
         return filtered[:12]
 
@@ -2149,11 +2231,22 @@ def render_wms_assistant_content(
                                 lines.append(f"*Y {len(matches) - 3} servicios adicionales disponibles en la pestaña '📚 Directorio Mundial'.*")
                             bot_response = "\n".join(lines)
                         else:
-                            bot_response = (
-                                "No encontré un servicio específico en el catálogo local con esos términos. "
-                                "Prueba buscando con palabras como *catastro*, *ortofoto*, *curvas*, *inundable*, *colombia*, *mexico*, *usgs*, "
-                                "o introduce tu **Gemini API Key** arriba para hacer consultas libres mundiales con inteligencia artificial."
-                            )
+                            detected_geos = _detect_query_geo(query_to_run)
+                            if detected_geos:
+                                country_title = list(detected_geos)[0].capitalize()
+                                bot_response = (
+                                    f"ℹ️ **No dispongo de un servicio WMS local específico para {country_title} en el catálogo offline.**\n\n"
+                                    f"Para garantizar la máxima precisión técnica y evitar mezclar servicios de otros países, el asistente no te mostrará resultados incoherentes.\n\n"
+                                    f"💡 **¿Cómo obtener capas oficiales para {country_title}?**\n"
+                                    f"1. **🤖 Activa el Asistente con IA:** Pega tu clave de API arriba (**Google Gemini**, **OpenAI**, **Claude** o **Groq**) para que el bot consulte en vivo los servidores oficiales de **{country_title}**.\n"
+                                    f"2. **🌐 Cobertura Global:** Puedes activar **Google Satélite**, **Esri World Imagery** o **OpenStreetMap** en la barra lateral para visualizar {country_title} en tu plano CAD."
+                                )
+                            else:
+                                bot_response = (
+                                    "ℹ️ No encontré un servicio WMS específico en el catálogo local para esos términos.\n\n"
+                                    "💡 **Sugerencia:** Prueba buscando por conceptos como *catastro*, *ortofoto*, *suelos*, *curvas*, *vías*, o por país (*España*, *Colombia*, *México*, *Suecia*, *Argentina*), "
+                                    "o introduce tu clave de API arriba para hacer consultas mundiales libres con IA."
+                                )
                         _parse_and_render_wms_actions(bot_response)
 
                 st.session_state["wms_chat_history"].append({"role": "model", "content": bot_response})
