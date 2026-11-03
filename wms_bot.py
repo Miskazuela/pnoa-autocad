@@ -974,27 +974,24 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 # --------------------------------------------------------------------------------------
 # 4. CLIENTE DE IA UNIVERSAL (OPENAI, ANTHROPIC CLAUDE, GEMINI, GROQ, DEEPSEEK, OPENROUTER, ETC.)
 # --------------------------------------------------------------------------------------
+# Catálogo estricto de modelos oficiales vigentes en producción
 PROVIDER_MODELS_CATALOG = {
     "openai": [
         "gpt-4o-mini",
         "gpt-4o",
         "o3-mini",
         "o1-mini",
-        "gpt-4-turbo",
-        "gpt-4",
-        "gpt-3.5-turbo",
-    ],
-    "anthropic": [
-        "claude-3-5-haiku-20241022",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-haiku-20240307",
-        "claude-3-opus-20240229",
+        "o1",
     ],
     "gemini": [
         "gemini-2.0-flash",
-        "gemini-2.5-flash",
         "gemini-1.5-flash",
         "gemini-1.5-pro",
+    ],
+    "anthropic": [
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "claude-3-opus-20240229",
     ],
     "groq": [
         "llama-3.3-70b-versatile",
@@ -1010,7 +1007,7 @@ PROVIDER_MODELS_CATALOG = {
         "meta-llama/llama-3.3-70b-instruct",
         "deepseek/deepseek-chat",
         "anthropic/claude-3.5-haiku",
-        "google/gemini-2.0-flash-exp:free",
+        "google/gemini-2.0-flash-001",
     ],
     "mistral": [
         "mistral-small-latest",
@@ -1023,8 +1020,8 @@ PROVIDER_MODELS_CATALOG = {
     ],
     "custom": [
         "llama3.2",
-        "mistral",
         "deepseek-r1",
+        "mistral",
         "qwen2.5",
     ]
 }
@@ -1069,7 +1066,7 @@ def detect_ai_provider(api_key: str, user_selected: str = "auto") -> str:
 
 
 def discover_available_openai_models(api_key: str) -> List[str]:
-    """Descubre dinámicamente los modelos a los que tiene acceso la clave API de OpenAI."""
+    """Descubre dinámicamente los modelos vigentes a los que tiene acceso la clave API de OpenAI."""
     if not api_key or not api_key.strip():
         return []
     clean_key = api_key.strip()
@@ -1093,9 +1090,11 @@ def discover_available_openai_models(api_key: str) -> List[str]:
             valid_chat = []
             for m in models_list:
                 m_low = m.lower()
-                if any(x in m_low for x in ["gpt-4", "gpt-3.5", "o1", "o3", "chatgpt"]):
-                    if not any(x in m_low for x in ["audio", "realtime", "transcribe", "tts", "embedding", "moderation", "instruct", "search"]):
-                        valid_chat.append(m)
+                # Excluir modelos antiguos obsoletos y de audio/embedding
+                if any(x in m_low for x in ["gpt-3.5", "gpt-4-03", "gpt-4-06", "audio", "realtime", "transcribe", "tts", "embedding", "moderation", "instruct", "search", "dall-e"]):
+                    continue
+                if any(x in m_low for x in ["gpt-4o", "o3-mini", "o1"]):
+                    valid_chat.append(m)
 
             def _rank_openai(name: str) -> int:
                 n = name.lower()
@@ -1103,8 +1102,7 @@ def discover_available_openai_models(api_key: str) -> List[str]:
                 if n == "gpt-4o": return 1
                 if "o3-mini" in n: return 2
                 if "o1-mini" in n: return 3
-                if "gpt-4-turbo" in n: return 4
-                if "gpt-3.5-turbo" in n: return 5
+                if "o1" in n: return 4
                 return 10
 
             valid_chat.sort(key=lambda x: (_rank_openai(x), x))
@@ -1234,7 +1232,7 @@ def query_openai_compatible_wms(
                 err_code = err_data.get("code", "")
                 err_type = err_data.get("type", "")
 
-                # Detectar saldo insuficiente (insufficient_quota en OpenAI / OpenRouter)
+                # Detectar saldo insuficiente en OpenAI / proveedor
                 if err_code == "insufficient_quota" or err_type == "insufficient_quota" or "quota" in err_msg.lower() or "billing" in err_msg.lower():
                     return {
                         "success": False,
@@ -1279,7 +1277,7 @@ def query_openai_compatible_wms(
         "success": False,
         "text": (
             f"⚠️ No se pudo obtener respuesta de {provider_name} ({last_error}).\n\n"
-            f"💡 **Recomendación:** Selecciona otro modelo en el menú desplegable (por ejemplo `gpt-4o` o `gpt-4o-mini`), verifica tu saldo o utiliza el **Modo Local Verificado**."
+            f"💡 **Recomendación:** Selecciona otro modelo en el menú desplegable (por ejemplo `gpt-4o-mini` o `gpt-4o`), verifica tu saldo o utiliza el **Modo Local Verificado**."
         )
     }
 
@@ -1303,11 +1301,7 @@ def query_anthropic_wms(
         messages.append({"role": r, "content": msg.get("content", "")})
     messages.append({"role": "user", "content": prompt})
 
-    models_to_try = [custom_model.strip()] if (custom_model and custom_model.strip()) else [
-        "claude-3-5-haiku-20241022",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-haiku-20240307"
-    ]
+    models_to_try = [custom_model.strip()] if (custom_model and custom_model.strip()) else PROVIDER_MODELS_CATALOG["anthropic"]
     endpoint = "https://api.anthropic.com/v1/messages"
     headers = {
         "x-api-key": clean_key,
@@ -1368,7 +1362,7 @@ def query_anthropic_wms(
 
 
 def discover_available_gemini_models(api_key: str) -> Tuple[List[str], Optional[str]]:
-    """Descubre dinámicamente los modelos Gemini disponibles para la clave API en Google AI Studio."""
+    """Descubre dinámicamente los modelos vigentes disponibles para la clave API en Google AI Studio."""
     if not api_key or not api_key.strip():
         return [], "Clave vacía"
 
@@ -1394,29 +1388,30 @@ def discover_available_gemini_models(api_key: str) -> Tuple[List[str], Optional[
                         name = m.get("name", "")
                         if name:
                             clean_name = name.replace("models/", "")
-                            models_found.append(clean_name)
+                            clean_low = clean_name.lower()
+                            # Filtrar solo versiones oficiales vigentes (2.0-flash, 1.5-flash, 1.5-pro)
+                            if any(x in clean_low for x in ["2.0-flash", "1.5-flash", "1.5-pro"]) and not any(x in clean_low for x in ["exp", "thinking", "imagen", "embedding", "aqa"]):
+                                models_found.append(clean_name)
 
                 if models_found:
                     def _rank(m_name: str) -> int:
                         n = m_name.lower()
-                        if "2.5-flash" in n and "lite" not in n:
-                            return 1
-                        if "2.0-flash" in n and "exp" not in n and "lite" not in n:
-                            return 2
-                        if "flash" in n and "lite" in n:
-                            return 3
-                        if "flash" in n:
-                            return 4
-                        if "2.5-pro" in n or "2.0-pro" in n:
-                            return 5
-                        if "pro" in n:
-                            return 6
+                        if n == "gemini-2.0-flash": return 0
+                        if n == "gemini-1.5-flash": return 1
+                        if n == "gemini-1.5-pro": return 2
+                        if "2.0" in n: return 3
                         return 10
 
-                    models_found.sort(key=_rank)
+                    seen = set()
+                    unique_models = []
+                    for m in sorted(models_found, key=_rank):
+                        if m not in seen:
+                            seen.add(m)
+                            unique_models.append(m)
+
                     st.session_state["_cached_gemini_api_key"] = clean_key
-                    st.session_state["_cached_gemini_models"] = models_found
-                    return models_found, None
+                    st.session_state["_cached_gemini_models"] = unique_models
+                    return unique_models, None
             elif resp.status_code == 400:
                 err_data = resp.json().get("error", {})
                 msg = err_data.get("message", "")
@@ -1429,14 +1424,8 @@ def discover_available_gemini_models(api_key: str) -> Tuple[List[str], Optional[
 
     fallback = [
         "gemini-2.0-flash",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash-exp",
-        "gemini-2.5-flash-lite",
-        "gemini-1.5-flash-002",
-        "gemini-1.5-flash-latest",
         "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-pro"
+        "gemini-1.5-pro"
     ]
     return fallback, None
 
@@ -1472,6 +1461,7 @@ def query_gemini_wms(
     is_single_choice = len(models_to_try) == 1
 
     for model_name in models_to_try:
+        # v1beta es la versión oficial recomendada para Gemini 2.0 y 1.5
         for api_ver in ["v1beta", "v1"]:
             endpoint = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent?key={clean_key}"
             payload = {
@@ -1509,7 +1499,7 @@ def query_gemini_wms(
                     if is_single_choice:
                         break
                 elif resp.status_code == 404:
-                    last_error = f"Modelo {model_name} no disponible en {api_ver}."
+                    last_error = f"El modelo '{model_name}' no existe o no está disponible en la versión {api_ver} de Gemini."
                     continue
                 else:
                     last_error = f"Código HTTP {resp.status_code}: {resp.text}"
@@ -1523,7 +1513,7 @@ def query_gemini_wms(
 
     return {
         "success": False,
-        "text": f"⚠️ No se pudo obtener respuesta de Gemini ({last_error})."
+        "text": f"⚠️ No se pudo obtener respuesta de Gemini ({last_error}).\n\n💡 **Recomendación:** Selecciona `gemini-2.0-flash` o `gemini-1.5-flash` en el menú de modelos."
     }
 
 
@@ -1693,7 +1683,7 @@ def render_wms_assistant_content(
             "🔑 API Key de tu servicio de IA (OpenAI, Claude, Gemini, Groq, etc.):",
             value=st.session_state.get("wms_bot_api_key", ""),
             type="password",
-            placeholder="sk-... (OpenAI), sk-ant-... (Claude), AIzaSy... (Gemini), gsk_... (Groq)",
+            placeholder="sk-... (OpenAI), AIzaSy... (Gemini), sk-ant-... (Claude), gsk_... (Groq)",
             help="Soporta cualquier servicio de IA del mundo. Si la dejas vacía, el bot opera en Modo Local Verificado 100% gratis y offline."
         )
         st.session_state["wms_bot_api_key"] = user_key.strip()
@@ -1711,8 +1701,8 @@ def render_wms_assistant_content(
             provider_options = [
                 ("auto", f"🔍 Auto-detectar ({effective_prov.capitalize() if effective_prov != 'none' else 'Por clave'})"),
                 ("openai", "OpenAI (ChatGPT)"),
-                ("anthropic", "Anthropic Claude"),
                 ("gemini", "Google Gemini"),
+                ("anthropic", "Anthropic Claude"),
                 ("groq", "Groq (Ultra-rápido)"),
                 ("deepseek", "DeepSeek"),
                 ("openrouter", "OpenRouter (+300 modelos)"),
@@ -1732,7 +1722,7 @@ def render_wms_assistant_content(
         with c_model:
             base_models = list(PROVIDER_MODELS_CATALOG.get(effective_prov, ["default"]))
             
-            # Si es OpenAI y hay clave, descubrir modelos de la cuenta del usuario
+            # Si es OpenAI y hay clave, descubrir modelos vigentes de la cuenta
             if effective_prov == "openai" and has_key:
                 discovered_openai = discover_available_openai_models(user_key)
                 if discovered_openai:
@@ -1752,36 +1742,38 @@ def render_wms_assistant_content(
 
             model_choices = list(base_models) + ["✏️ Escribir otro modelo personalizado..."]
             
-            # Índice actual seleccionado
-            prev_m = st.session_state.get("wms_chosen_model_name", "")
-            if prev_m in model_choices:
-                m_idx = model_choices.index(prev_m)
-            elif prev_m and prev_m != "":
+            # Mantener estado independiente por proveedor para no mezclar nombres
+            prov_state_key = f"wms_chosen_model_{effective_prov}"
+            prev_m = st.session_state.get(prov_state_key, base_models[0])
+            if prev_m in base_models:
+                m_idx = base_models.index(prev_m)
+            elif prev_m == "custom_input":
                 m_idx = len(model_choices) - 1
             else:
                 m_idx = 0
 
             sel_m_choice = st.selectbox(
-                "🧠 Modelo de IA a utilizar (Escoge el que prefieras):",
+                "🧠 Modelo a utilizar (Solo versiones actuales oficiales):",
                 options=model_choices,
                 index=m_idx,
                 key=f"sb_wms_model_choice_{effective_prov}"
             )
 
             if sel_m_choice == "✏️ Escribir otro modelo personalizado...":
+                st.session_state[prov_state_key] = "custom_input"
                 custom_m_in = st.text_input(
                     "Nombre exacto del modelo:",
-                    value=st.session_state.get("wms_custom_ai_model", ""),
-                    placeholder="Ej: gpt-4o, claude-3-5-sonnet, deepseek-chat, llama3.2",
+                    value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
+                    placeholder="Ej: gpt-4o, gemini-2.0-flash, claude-3-5-sonnet-20241022",
                     help="Introduce el identificador exacto del modelo según la API del proveedor."
                 )
                 active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
-                st.session_state["wms_custom_ai_model"] = active_model_name
+                st.session_state[f"wms_custom_name_{effective_prov}"] = active_model_name
             else:
                 active_model_name = sel_m_choice
-                st.session_state["wms_custom_ai_model"] = active_model_name
+                st.session_state[prov_state_key] = active_model_name
 
-            st.session_state["wms_chosen_model_name"] = active_model_name
+            st.session_state["wms_active_selected_model"] = active_model_name
 
         if effective_prov == "custom":
             cust_url_in = st.text_input(
@@ -1811,11 +1803,11 @@ def render_wms_assistant_content(
                 "custom": "Servidor Local / Custom"
             }
             p_title = prov_titles.get(effective_prov, effective_prov.upper())
-            disp_m = st.session_state.get("wms_chosen_model_name") or active_model_name
+            disp_m = st.session_state.get("wms_active_selected_model") or active_model_name
             st.markdown(f"""
             <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
                 <div style="font-weight: 600; color: #34d399; font-size: 12.5px;">✨ Modo IA {p_title} Activado</div>
-                <div style="color: #cbd5e1; font-size: 11px;">Modelo: <b style="color: #f8fafc;">{disp_m}</b></div>
+                <div style="color: #cbd5e1; font-size: 11px;">Modelo actual: <b style="color: #f8fafc;">{disp_m}</b></div>
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -1901,7 +1893,7 @@ def render_wms_assistant_content(
                                 context_info=context_dict,
                                 provider_override=active_p_setting,
                                 custom_url=st.session_state.get("wms_custom_ai_url"),
-                                custom_model=st.session_state.get("wms_chosen_model_name") or st.session_state.get("wms_custom_ai_model")
+                                custom_model=st.session_state.get("wms_active_selected_model") or st.session_state.get("wms_custom_ai_model")
                             )
                             bot_response = res["text"]
 
