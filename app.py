@@ -1078,52 +1078,9 @@ def detect_recommended_epsg(
         })
         return recommendations
 
-    # C. Hemisferio Sur - Australia (UTM False Northing = 10.000.000 m)
-    # Latitudes de Australia (-44° a -10° S) -> Y entre 5.100.000 m y 8.900.000 m; X entre 150.000 m y 850.000 m.
-    if 5000000 <= cy <= 9000000 and 150000 <= cx <= 850000:
-        text_lower = search_corpus.lower()
-        pref_zone = None
-        if any(w in text_lower for w in ["sydney", "nsw", "brisbane", "gold coast", "qld", "queensland"]):
-            pref_zone = 56
-        elif any(w in text_lower for w in ["melbourne", "victoria", "vic", "tasmania", "hobart", "act", "canberra"]):
-            pref_zone = 55
-        elif any(w in text_lower for w in ["adelaide", "south australia", "sa"]):
-            pref_zone = 54
-        elif any(w in text_lower for w in ["perth", "western australia", "wa"]):
-            pref_zone = 50
-
-        aus_zones = [55, 56, 54, 50, 51, 52, 53, 49]
-        if pref_zone and pref_zone in aus_zones:
-            aus_zones.remove(pref_zone)
-            aus_zones.insert(0, pref_zone)
-
-        zone_names = {
-            55: "Victoria, Melbourne, NSW, QLD",
-            56: "Sydney, Brisbane, Gold Coast, NSW Este",
-            54: "South Australia, Adelaide",
-            50: "Western Australia, Perth",
-            51: "Western Australia interior",
-            52: "NT / SA Central",
-            53: "Northern Territory, Darwin, Alice Springs",
-            49: "Western Australia Oeste"
-        }
-
-        for idx, z in enumerate(aus_zones[:4]):
-            gda2020_code = 7800 + z
-            recommendations.append({
-                "code": gda2020_code,
-                "name": f"GDA2020 / MGA zone {z} (EPSG:{gda2020_code})",
-                "region": f"🇦🇺 Australia ({zone_names.get(z, f'Zone {z}')})",
-                "reason": f"Coordenadas UTM del Hemisferio Sur (Y={cy:,.0f} m, X={cx:,.0f} m) típicas de Australia.",
-                "confidence": "Alta" if idx == 0 else "Media",
-                "alt_code": 28300 + z,
-                "alt_name": f"GDA94 / MGA zone {z} (EPSG:{28300 + z})"
-            })
-        return recommendations
-
-    # D. España Peninsular y Europa (UTM Husos 29, 30, 31)
-    # Latitudes 35.8° a 44° N -> Y entre 3.850.000 m y 4.900.000 m; X entre 150.000 m y 850.000 m.
-    if 3850000 <= cy <= 4900000 and 150000 <= cx <= 850000:
+    # C. España Peninsular y Europa Sur (UTM Husos 29, 30, 31)
+    # Latitudes 35.8° a 44.5° N -> Y entre 3.800.000 m y 4.980.000 m; X entre 150.000 m y 850.000 m.
+    if 3800000 <= cy <= 4980000 and 150000 <= cx <= 850000:
         text_lower = search_corpus.lower()
         pref_spain_zone = 30
         if any(w in text_lower for w in ["galicia", "coruña", "pontevedra", "ourense", "lugo", "huelva", "vigo", "asturias"]):
@@ -1153,6 +1110,69 @@ def detect_recommended_epsg(
                 "confidence": conf
             })
         return recommendations
+
+    # D. Hemisferio Sur - Australia (UTM False Northing = 10.000.000 m)
+    # Solo se prioriza Australia si existen palabras clave explícitas o se descarta Europa/Norte
+    if 5000000 <= cy <= 9000000 and 150000 <= cx <= 850000:
+        text_lower = search_corpus.lower()
+        has_aus_hints = any(w in text_lower for w in [
+            "sydney", "nsw", "brisbane", "gold coast", "qld", "queensland",
+            "melbourne", "victoria", "vic", "tasmania", "hobart", "act", "canberra",
+            "adelaide", "south australia", "sa", "perth", "western australia", "wa",
+            "australia", "gda", "mga"
+        ])
+
+        if has_aus_hints:
+            pref_zone = None
+            if any(w in text_lower for w in ["sydney", "nsw", "brisbane", "gold coast", "qld", "queensland"]):
+                pref_zone = 56
+            elif any(w in text_lower for w in ["melbourne", "victoria", "vic", "tasmania", "hobart", "act", "canberra"]):
+                pref_zone = 55
+            elif any(w in text_lower for w in ["adelaide", "south australia", "sa"]):
+                pref_zone = 54
+            elif any(w in text_lower for w in ["perth", "western australia", "wa"]):
+                pref_zone = 50
+
+            aus_zones = [55, 56, 54, 50, 51, 52, 53, 49]
+            if pref_zone and pref_zone in aus_zones:
+                aus_zones.remove(pref_zone)
+                aus_zones.insert(0, pref_zone)
+
+            zone_names = {
+                55: "Victoria, Melbourne, NSW, QLD",
+                56: "Sydney, Brisbane, Gold Coast, NSW Este",
+                54: "South Australia, Adelaide",
+                50: "Western Australia, Perth",
+                51: "Western Australia interior",
+                52: "NT / SA Central",
+                53: "Northern Territory, Darwin, Alice Springs",
+                49: "Western Australia Oeste"
+            }
+
+            for idx, z in enumerate(aus_zones[:4]):
+                gda2020_code = 7800 + z
+                recommendations.append({
+                    "code": gda2020_code,
+                    "name": f"GDA2020 / MGA zone {z} (EPSG:{gda2020_code})",
+                    "region": f"🇦🇺 Australia ({zone_names.get(z, f'Zone {z}')})",
+                    "reason": f"Coordenadas UTM de Australia (Y={cy:,.0f} m, X={cx:,.0f} m) con términos geográficos coincidentes.",
+                    "confidence": "Alta" if idx == 0 else "Media",
+                    "alt_code": 28300 + z,
+                    "alt_name": f"GDA94 / MGA zone {z} (EPSG:{28300 + z})"
+                })
+            return recommendations
+        else:
+            # Si no hay indicios de Australia, coordenadas Y entre 5.000.000 y 9.000.000 m corresponden a Europa / Hemisferio Norte
+            for z in [30, 31, 29]:
+                epsg_code_n = 25800 + z
+                recommendations.append({
+                    "code": epsg_code_n,
+                    "name": f"ETRS89 / UTM zone {z}N (EPSG:{epsg_code_n})",
+                    "region": "🇪🇺 Europa / Hemisferio Norte (UTM)",
+                    "reason": f"Coordenadas métricas UTM del Hemisferio Norte (Y={cy:,.0f} m, X={cx:,.0f} m).",
+                    "confidence": "Alta" if z == 30 else "Media"
+                })
+            return recommendations
 
     # E. Islas Canarias (UTM Huso 28N)
     # Latitudes 27.5° a 29.5° N -> Y entre 3.000.000 m y 3.350.000 m; X entre 150.000 m y 750.000 m.

@@ -986,9 +986,13 @@ def search_wms_catalog(
     q_words = set(clean_q.split())
     query_geo_keys, thematic_tokens = _extract_geo_and_thematic(query)
 
-    # Detección contextual: si el usuario pide capas del "archivo cargado" o no especificó región
+    # Detección contextual:
+    # Solo se restringe a project_geo_fallback si el usuario explícitamente se refirió a su plano/archivo
+    # (ej: 'archivo cargado', 'mi plano', 'mi proyecto', 'mi zona').
+    # Si la búsqueda es temática general (ej: 'curvas de nivel', 'catastro', 'ortofoto'), se busca en todo
+    # el catálogo y solo se prioriza con un bono de puntuación la zona del proyecto.
     has_context_intent = bool(q_words.intersection(CONTEXT_PROJECT_TRIGGERS))
-    if (has_context_intent or not query_geo_keys) and project_geo_fallback:
+    if has_context_intent and project_geo_fallback:
         query_geo_keys = set(project_geo_fallback)
 
     if category_filter and category_filter == "Todas las categorías":
@@ -1061,6 +1065,10 @@ def search_wms_catalog(
         if query_geo_keys:
             if any(g in item_reg for g in query_geo_keys):
                 score += 60
+        elif project_geo_fallback:
+            # Si es búsqueda general, priorizar en el listado las capas de la zona del proyecto
+            if any(g in item_reg or g in item_name or g in item_tags for g in project_geo_fallback):
+                score += 45
 
         if thematic_tokens:
             coverage_ratio = matched_tokens_count / max(len(thematic_tokens), 1)
@@ -2354,14 +2362,27 @@ def render_wms_assistant_content(
                             bot_response = "\n".join(lines)
                         else:
                             detected_geos = _detect_query_geo(query_to_run)
+                            fallback_global = []
+                            if is_context_q and not detected_geos:
+                                fallback_global = search_wms_catalog(query_to_run, project_geo_fallback=None)
+
                             target_loc = list(detected_geos)[0].capitalize() if detected_geos else (zone_disp or "esta región")
-                            bot_response = (
+                            lines = [
                                 f"ℹ️ **No dispongo de un servicio WMS local específico de esta temática para {target_loc} en el catálogo offline.**\n\n"
-                                f"Para garantizar la máxima precisión técnica y evitar mezclar capas de otros lugares, el asistente no te mostrará resultados incoherentes.\n\n"
                                 f"💡 **¿Cómo obtener capas oficiales para {target_loc}?**\n"
                                 f"1. **🤖 Activa el Asistente con IA:** Pega tu clave de API arriba (**Google Gemini**, **OpenAI**, **Claude** o **Groq**) para que el bot consulte en vivo los servidores oficiales de **{target_loc}**.\n"
                                 f"2. **🛰️ Cobertura Global:** Puedes activar **Google Satélite**, **Esri World Imagery** o **OpenStreetMap** en la barra lateral para visualizar {target_loc} en tu plano CAD."
-                            )
+                            ]
+                            if fallback_global:
+                                lines.append("\n\n---\n📚 **Servicios oficiales destacados de esta temática disponibles en el catálogo:**\n")
+                                for m in fallback_global[:3]:
+                                    lines.append(f"### {m['name']}")
+                                    lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
+                                    lines.append(f"- **Descripción:** {m['description']}")
+                                    lines.append(f"- **URL Base:** `{m['url']}`")
+                                    lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
+                                    lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
+                            bot_response = "\n".join(lines)
                         _parse_and_render_wms_actions(bot_response)
 
                 st.session_state["wms_chat_history"].append({"role": "model", "content": bot_response})
