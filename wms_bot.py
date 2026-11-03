@@ -974,19 +974,22 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 # --------------------------------------------------------------------------------------
 # 4. CLIENTE DE IA UNIVERSAL (OPENAI, ANTHROPIC CLAUDE, GEMINI, GROQ, DEEPSEEK, OPENROUTER, ETC.)
 # --------------------------------------------------------------------------------------
-# Catálogo estricto de modelos oficiales vigentes en producción
+# Catálogo base por defecto (se auto-actualiza en vivo dinámicamente con la API de cada proveedor)
 PROVIDER_MODELS_CATALOG = {
+    "gemini": [
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-1.5-flash",
+    ],
     "openai": [
         "gpt-4o-mini",
         "gpt-4o",
         "o3-mini",
         "o1-mini",
         "o1",
-    ],
-    "gemini": [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
     ],
     "anthropic": [
         "claude-3-5-sonnet-20241022",
@@ -1065,7 +1068,97 @@ def detect_ai_provider(api_key: str, user_selected: str = "auto") -> str:
     return "openai"
 
 
-def discover_available_openai_models(api_key: str) -> List[str]:
+def discover_available_gemini_models(api_key: str, force_refresh: bool = False) -> Tuple[List[str], Optional[str]]:
+    """
+    Descubre dinámicamente en tiempo real TODOS los modelos vigentes disponibles para la clave API en Google AI Studio.
+    Se auto-actualiza automáticamente cada vez que Google lanza nuevos modelos (Gemini 2.5, 3.x, 4, etc.).
+    """
+    if not api_key or not api_key.strip():
+        return [], "Clave vacía"
+
+    clean_key = api_key.strip()
+    if clean_key.lower().startswith("sk-") or clean_key.lower().startswith("gsk_") or clean_key.lower().startswith("pplx-"):
+        return [], None
+
+    cached_key = st.session_state.get("_cached_gemini_api_key")
+    cached_models = st.session_state.get("_cached_gemini_models")
+    if not force_refresh and cached_key == clean_key and cached_models:
+        return cached_models, None
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
+        resp = requests.get(url, timeout=7)
+        if resp.status_code == 200:
+            data = resp.json()
+            models_found = []
+            for m in data.get("models", []):
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" in methods:
+                    name = m.get("name", "")
+                    clean_name = name.replace("models/", "").strip()
+                    clean_low = clean_name.lower()
+                    # Descartar modelos que no son de chat/conversación
+                    if any(x in clean_low for x in ["embedding", "imagen", "aqa", "realtime", "tts"]):
+                        continue
+                    if "gemini" in clean_low:
+                        models_found.append(clean_name)
+
+            if models_found:
+                # Ordenamiento dinámico: modelos con versión más alta primero (ej: 4.x, 3.8, 3.5, 2.5...)
+                # y priorizando Flash sobre Pro para velocidad y economía
+                def _version_score(name: str) -> float:
+                    n = name.lower()
+                    score = 0.0
+                    match = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
+                    if match:
+                        try:
+                            score = float(match.group(1)) * 10.0
+                        except Exception:
+                            score = 10.0
+                    if "flash" in n and "lite" not in n:
+                        score += 0.5
+                    elif "flash-lite" in n or "lite" in n:
+                        score += 0.4
+                    elif "pro" in n or "argon" in n:
+                        score += 0.2
+                    if "exp" in n or "preview" in n:
+                        score -= 0.1
+                    return score
+
+                models_found.sort(key=_version_score, reverse=True)
+
+                seen = set()
+                unique_models = []
+                for m in models_found:
+                    if m not in seen:
+                        seen.add(m)
+                        unique_models.append(m)
+
+                st.session_state["_cached_gemini_api_key"] = clean_key
+                st.session_state["_cached_gemini_models"] = unique_models
+                return unique_models, None
+        elif resp.status_code == 400:
+            err_data = resp.json().get("error", {})
+            msg = err_data.get("message", "")
+            if "API key not valid" in msg or "INVALID_ARGUMENT" in err_data.get("status", ""):
+                return [], "❌ La clave de API introducida no es válida para Google Gemini. Cópiala directamente desde Google AI Studio (aistudio.google.com)."
+        elif resp.status_code == 403:
+            return [], "❌ La clave de API no tiene permisos para Generative Language o tiene restricciones en Google Cloud Console."
+    except Exception:
+        pass
+
+    fallback = [
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-1.5-flash"
+    ]
+    return fallback, None
+
+
+def discover_available_openai_models(api_key: str, force_refresh: bool = False) -> List[str]:
     """Descubre dinámicamente los modelos vigentes a los que tiene acceso la clave API de OpenAI."""
     if not api_key or not api_key.strip():
         return []
@@ -1075,7 +1168,7 @@ def discover_available_openai_models(api_key: str) -> List[str]:
 
     cached_key = st.session_state.get("_cached_openai_api_key")
     cached_models = st.session_state.get("_cached_openai_models")
-    if cached_key == clean_key and cached_models:
+    if not force_refresh and cached_key == clean_key and cached_models:
         return cached_models
 
     try:
@@ -1090,22 +1183,25 @@ def discover_available_openai_models(api_key: str) -> List[str]:
             valid_chat = []
             for m in models_list:
                 m_low = m.lower()
-                # Excluir modelos antiguos obsoletos y de audio/embedding
                 if any(x in m_low for x in ["gpt-3.5", "gpt-4-03", "gpt-4-06", "audio", "realtime", "transcribe", "tts", "embedding", "moderation", "instruct", "search", "dall-e"]):
                     continue
-                if any(x in m_low for x in ["gpt-4o", "o3-mini", "o1"]):
+                if any(x in m_low for x in ["gpt-4", "gpt-5", "o1", "o2", "o3", "o4", "chatgpt"]):
                     valid_chat.append(m)
 
-            def _rank_openai(name: str) -> int:
+            def _rank_openai(name: str) -> float:
                 n = name.lower()
-                if n == "gpt-4o-mini": return 0
-                if n == "gpt-4o": return 1
-                if "o3-mini" in n: return 2
-                if "o1-mini" in n: return 3
-                if "o1" in n: return 4
-                return 10
+                score = 0.0
+                match = re.search(r"(?:gpt-|o)(\d+(?:\.\d+)?)", n)
+                if match:
+                    try:
+                        score = float(match.group(1)) * 10.0
+                    except Exception:
+                        score = 10.0
+                if "mini" in n:
+                    score += 0.5
+                return score
 
-            valid_chat.sort(key=lambda x: (_rank_openai(x), x))
+            valid_chat.sort(key=_rank_openai, reverse=True)
             if valid_chat:
                 st.session_state["_cached_openai_api_key"] = clean_key
                 st.session_state["_cached_openai_models"] = valid_chat
@@ -1232,7 +1328,6 @@ def query_openai_compatible_wms(
                 err_code = err_data.get("code", "")
                 err_type = err_data.get("type", "")
 
-                # Detectar saldo insuficiente en OpenAI / proveedor
                 if err_code == "insufficient_quota" or err_type == "insufficient_quota" or "quota" in err_msg.lower() or "billing" in err_msg.lower():
                     return {
                         "success": False,
@@ -1277,7 +1372,7 @@ def query_openai_compatible_wms(
         "success": False,
         "text": (
             f"⚠️ No se pudo obtener respuesta de {provider_name} ({last_error}).\n\n"
-            f"💡 **Recomendación:** Selecciona otro modelo en el menú desplegable (por ejemplo `gpt-4o-mini` o `gpt-4o`), verifica tu saldo o utiliza el **Modo Local Verificado**."
+            f"💡 **Recomendación:** Haz clic en **🔄 Actualizar modelos en vivo** o selecciona otro modelo del menú."
         )
     }
 
@@ -1361,75 +1456,6 @@ def query_anthropic_wms(
     }
 
 
-def discover_available_gemini_models(api_key: str) -> Tuple[List[str], Optional[str]]:
-    """Descubre dinámicamente los modelos vigentes disponibles para la clave API en Google AI Studio."""
-    if not api_key or not api_key.strip():
-        return [], "Clave vacía"
-
-    clean_key = api_key.strip()
-    if clean_key.lower().startswith("sk-") or clean_key.lower().startswith("gsk_") or clean_key.lower().startswith("pplx-"):
-        return [], None
-
-    cached_key = st.session_state.get("_cached_gemini_api_key")
-    cached_models = st.session_state.get("_cached_gemini_models")
-    if cached_key == clean_key and cached_models:
-        return cached_models, None
-
-    for api_version in ["v1beta", "v1"]:
-        try:
-            url = f"https://generativelanguage.googleapis.com/{api_version}/models?key={clean_key}"
-            resp = requests.get(url, timeout=6)
-            if resp.status_code == 200:
-                data = resp.json()
-                models_found = []
-                for m in data.get("models", []):
-                    methods = m.get("supportedGenerationMethods", [])
-                    if "generateContent" in methods:
-                        name = m.get("name", "")
-                        if name:
-                            clean_name = name.replace("models/", "")
-                            clean_low = clean_name.lower()
-                            # Filtrar solo versiones oficiales vigentes (2.0-flash, 1.5-flash, 1.5-pro)
-                            if any(x in clean_low for x in ["2.0-flash", "1.5-flash", "1.5-pro"]) and not any(x in clean_low for x in ["exp", "thinking", "imagen", "embedding", "aqa"]):
-                                models_found.append(clean_name)
-
-                if models_found:
-                    def _rank(m_name: str) -> int:
-                        n = m_name.lower()
-                        if n == "gemini-2.0-flash": return 0
-                        if n == "gemini-1.5-flash": return 1
-                        if n == "gemini-1.5-pro": return 2
-                        if "2.0" in n: return 3
-                        return 10
-
-                    seen = set()
-                    unique_models = []
-                    for m in sorted(models_found, key=_rank):
-                        if m not in seen:
-                            seen.add(m)
-                            unique_models.append(m)
-
-                    st.session_state["_cached_gemini_api_key"] = clean_key
-                    st.session_state["_cached_gemini_models"] = unique_models
-                    return unique_models, None
-            elif resp.status_code == 400:
-                err_data = resp.json().get("error", {})
-                msg = err_data.get("message", "")
-                if "API key not valid" in msg or "INVALID_ARGUMENT" in err_data.get("status", ""):
-                    return [], "❌ La clave de API introducida no es válida para Google Gemini. Cópiala directamente desde Google AI Studio (aistudio.google.com)."
-            elif resp.status_code == 403:
-                return [], "❌ La clave de API no tiene permisos para Generative Language o tiene restricciones en Google Cloud Console."
-        except Exception:
-            pass
-
-    fallback = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro"
-    ]
-    return fallback, None
-
-
 def query_gemini_wms(
     prompt: str,
     api_key: str,
@@ -1437,7 +1463,7 @@ def query_gemini_wms(
     context_info: Optional[Dict[str, Any]] = None,
     custom_model: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Envía la consulta a la API oficial de Google Gemini (Google AI Studio)."""
+    """Envía la consulta a la API oficial de Google Gemini (Google AI Studio vía endpoint estándar v1beta)."""
     clean_key = api_key.strip() if api_key else ""
     if not clean_key:
         return {"success": False, "text": "⚠️ Por favor, introduce tu Gemini API Key en el campo superior."}
@@ -1461,59 +1487,71 @@ def query_gemini_wms(
     is_single_choice = len(models_to_try) == 1
 
     for model_name in models_to_try:
-        # v1beta es la versión oficial recomendada para Gemini 2.0 y 1.5
-        for api_ver in ["v1beta", "v1"]:
-            endpoint = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent?key={clean_key}"
-            payload = {
-                "contents": contents,
-                "systemInstruction": {"parts": [{"text": system_instruction}]},
-                "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}
-            }
-            try:
-                resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json=payload, timeout=14)
-                if resp.status_code == 400 and "systemInstruction" in resp.text:
-                    fallback_contents = [
-                        {"role": "user", "parts": [{"text": f"INSTRUCCIÓN DEL SISTEMA:\n{system_instruction}\n\nCONSULTA:\n{prompt}"}]}
-                    ]
-                    resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json={"contents": fallback_contents, "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}}, timeout=14)
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
+        payload = {
+            "contents": contents,
+            "systemInstruction": {"parts": [{"text": system_instruction}]},
+            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}
+        }
+        try:
+            resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json=payload, timeout=18)
+            if resp.status_code == 400 and "systemInstruction" in resp.text:
+                fallback_contents = [
+                    {"role": "user", "parts": [{"text": f"INSTRUCCIÓN DEL SISTEMA:\n{system_instruction}\n\nCONSULTA:\n{prompt}"}]}
+                ]
+                resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json={"contents": fallback_contents, "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}}, timeout=18)
 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    candidate = data.get("candidates", [{}])[0]
-                    text_out = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
-                    if text_out:
-                        st.session_state["wms_active_gemini_model"] = model_name
-                        st.session_state["wms_active_ai_provider"] = "Google Gemini"
-                        return {"success": True, "text": text_out, "model": model_name, "provider": "Google Gemini"}
-                elif resp.status_code == 400:
-                    err_json = resp.json().get("error", {})
-                    last_error = err_json.get("message", "Petición no válida.")
-                    if "API key not valid" in last_error:
-                        return {"success": False, "text": "❌ La clave de API de Gemini introducida no es válida. Genera una en https://aistudio.google.com/app/apikey"}
-                    if is_single_choice:
-                        break
-                elif resp.status_code == 403:
-                    return {"success": False, "text": "❌ Clave de API de Gemini sin permisos. Verifica que la API 'Generative Language' esté habilitada en Google AI Studio."}
-                elif resp.status_code == 429:
-                    last_error = "Límite de cuota alcanzado temporalmente en Gemini."
-                    if is_single_choice:
-                        break
-                elif resp.status_code == 404:
-                    last_error = f"El modelo '{model_name}' no existe o no está disponible en la versión {api_ver} de Gemini."
-                    continue
-                else:
-                    last_error = f"Código HTTP {resp.status_code}: {resp.text}"
-            except requests.exceptions.Timeout:
-                last_error = "Tiempo de espera agotado al consultar a Gemini."
+            if resp.status_code == 200:
+                data = resp.json()
+                candidate = data.get("candidates", [{}])[0]
+                text_out = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
+                if text_out:
+                    st.session_state["wms_active_gemini_model"] = model_name
+                    st.session_state["wms_active_ai_provider"] = "Google Gemini"
+                    return {"success": True, "text": text_out, "model": model_name, "provider": "Google Gemini"}
+            elif resp.status_code == 400:
+                err_json = resp.json().get("error", {})
+                last_error = err_json.get("message", "Petición no válida.")
+                if "API key not valid" in last_error:
+                    return {"success": False, "text": "❌ La clave de API de Gemini introducida no es válida. Genera una en https://aistudio.google.com/app/apikey"}
                 if is_single_choice:
                     break
-            except Exception as ex:
-                last_error = str(ex)
+            elif resp.status_code == 403:
+                return {"success": False, "text": "❌ Clave de API de Gemini sin permisos. Verifica que la API 'Generative Language' esté habilitada en Google AI Studio."}
+            elif resp.status_code == 429:
+                last_error = "Límite de cuota alcanzado temporalmente en Gemini."
+                if is_single_choice:
+                    break
+            elif resp.status_code == 404:
+                err_json = {}
+                try:
+                    err_json = resp.json().get("error", {})
+                except Exception:
+                    pass
+                err_msg = err_json.get("message", "")
+                last_error = f"El modelo '{model_name}' no existe o no está habilitado para esta clave en Google AI Studio ({err_msg or '404 Not Found'})."
+                if is_single_choice:
+                    break
+                continue
+            else:
+                last_error = f"Código HTTP {resp.status_code}: {resp.text}"
+                if is_single_choice:
+                    break
+        except requests.exceptions.Timeout:
+            last_error = "Tiempo de espera agotado al consultar a Gemini."
+            if is_single_choice:
                 break
+            continue
+        except Exception as ex:
+            last_error = str(ex)
+            break
 
     return {
         "success": False,
-        "text": f"⚠️ No se pudo obtener respuesta de Gemini ({last_error}).\n\n💡 **Recomendación:** Selecciona `gemini-2.0-flash` o `gemini-1.5-flash` en el menú de modelos."
+        "text": (
+            f"⚠️ No se pudo obtener respuesta de Gemini ({last_error}).\n\n"
+            f"💡 **Recomendación:** Haz clic en **🔄 Actualizar modelos en vivo** o selecciona otro modelo del menú desplegable."
+        )
     }
 
 
@@ -1680,10 +1718,10 @@ def render_wms_assistant_content(
     col_api, col_badge = st.columns([3, 2])
     with col_api:
         user_key = st.text_input(
-            "🔑 API Key de tu servicio de IA (OpenAI, Claude, Gemini, Groq, etc.):",
+            "🔑 API Key de tu servicio de IA (Google Gemini, OpenAI, Claude, Groq, etc.):",
             value=st.session_state.get("wms_bot_api_key", ""),
             type="password",
-            placeholder="sk-... (OpenAI), AIzaSy... (Gemini), sk-ant-... (Claude), gsk_... (Groq)",
+            placeholder="AIzaSy... (Gemini), sk-... (OpenAI), sk-ant-... (Claude), gsk_... (Groq)",
             help="Soporta cualquier servicio de IA del mundo. Si la dejas vacía, el bot opera en Modo Local Verificado 100% gratis y offline."
         )
         st.session_state["wms_bot_api_key"] = user_key.strip()
@@ -1700,8 +1738,8 @@ def render_wms_assistant_content(
         with c_prov:
             provider_options = [
                 ("auto", f"🔍 Auto-detectar ({effective_prov.capitalize() if effective_prov != 'none' else 'Por clave'})"),
-                ("openai", "OpenAI (ChatGPT)"),
                 ("gemini", "Google Gemini"),
+                ("openai", "OpenAI (ChatGPT)"),
                 ("anthropic", "Anthropic Claude"),
                 ("groq", "Groq (Ultra-rápido)"),
                 ("deepseek", "DeepSeek"),
@@ -1720,25 +1758,29 @@ def render_wms_assistant_content(
                 effective_prov = chosen_prov
 
         with c_model:
+            # Botón de refrescar en vivo la lista de modelos desde la cuenta del usuario
+            c_header_m, c_btn_ref = st.columns([3.5, 1.5])
+            with c_btn_ref:
+                if st.button("🔄 Actualizar", key=f"btn_ref_m_{effective_prov}", help="Consultar a la API los modelos disponibles actualmente para tu clave"):
+                    if effective_prov == "gemini":
+                        st.session_state.pop("_cached_gemini_api_key", None)
+                        st.session_state.pop("_cached_gemini_models", None)
+                    elif effective_prov == "openai":
+                        st.session_state.pop("_cached_openai_api_key", None)
+                        st.session_state.pop("_cached_openai_models", None)
+                    st.rerun()
+
             base_models = list(PROVIDER_MODELS_CATALOG.get(effective_prov, ["default"]))
-            
-            # Si es OpenAI y hay clave, descubrir modelos vigentes de la cuenta
-            if effective_prov == "openai" and has_key:
-                discovered_openai = discover_available_openai_models(user_key)
-                if discovered_openai:
-                    comb = []
-                    for m in discovered_openai + base_models:
-                        if m not in comb:
-                            comb.append(m)
-                    base_models = comb
-            elif effective_prov == "gemini" and has_key:
+
+            # Auto-descubrimiento en tiempo real de la cuenta del usuario
+            if effective_prov == "gemini" and has_key:
                 discovered_gem, _ = discover_available_gemini_models(user_key)
                 if discovered_gem:
-                    comb = []
-                    for m in discovered_gem + base_models:
-                        if m not in comb:
-                            comb.append(m)
-                    base_models = comb
+                    base_models = discovered_gem
+            elif effective_prov == "openai" and has_key:
+                discovered_openai = discover_available_openai_models(user_key)
+                if discovered_openai:
+                    base_models = discovered_openai
 
             model_choices = list(base_models) + ["✏️ Escribir otro modelo personalizado..."]
             
@@ -1752,8 +1794,11 @@ def render_wms_assistant_content(
             else:
                 m_idx = 0
 
+            with c_header_m:
+                st.caption(f"✨ {len(base_models)} modelos disponibles en tu cuenta de {effective_prov.capitalize()}")
+
             sel_m_choice = st.selectbox(
-                "🧠 Modelo a utilizar (Solo versiones actuales oficiales):",
+                "🧠 Modelo a utilizar:",
                 options=model_choices,
                 index=m_idx,
                 key=f"sb_wms_model_choice_{effective_prov}"
@@ -1764,7 +1809,7 @@ def render_wms_assistant_content(
                 custom_m_in = st.text_input(
                     "Nombre exacto del modelo:",
                     value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
-                    placeholder="Ej: gpt-4o, gemini-2.0-flash, claude-3-5-sonnet-20241022",
+                    placeholder="Ej: gemini-3.5-flash, gemini-3.8-flash, gpt-4o, claude-3-5-sonnet",
                     help="Introduce el identificador exacto del modelo según la API del proveedor."
                 )
                 active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
