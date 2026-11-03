@@ -974,7 +974,7 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 # --------------------------------------------------------------------------------------
 # 4. CLIENTE DE IA UNIVERSAL (OPENAI, ANTHROPIC CLAUDE, GEMINI, GROQ, DEEPSEEK, OPENROUTER, ETC.)
 # --------------------------------------------------------------------------------------
-# Catálogo base por defecto (se auto-actualiza en vivo dinámicamente con la API de cada proveedor)
+# Catálogo base por defecto (se auto-actualiza dinámicamente en tiempo real con la API en vivo de cada proveedor)
 PROVIDER_MODELS_CATALOG = {
     "gemini": [
         "gemini-3.5-flash",
@@ -1097,15 +1097,12 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
                     name = m.get("name", "")
                     clean_name = name.replace("models/", "").strip()
                     clean_low = clean_name.lower()
-                    # Descartar modelos que no son de chat/conversación
                     if any(x in clean_low for x in ["embedding", "imagen", "aqa", "realtime", "tts"]):
                         continue
                     if "gemini" in clean_low:
                         models_found.append(clean_name)
 
             if models_found:
-                # Ordenamiento dinámico: modelos con versión más alta primero (ej: 4.x, 3.8, 3.5, 2.5...)
-                # y priorizando Flash sobre Pro para velocidad y economía
                 def _version_score(name: str) -> float:
                     n = name.lower()
                     score = 0.0
@@ -1210,6 +1207,186 @@ def discover_available_openai_models(api_key: str, force_refresh: bool = False) 
         pass
 
     return []
+
+
+def discover_provider_models(
+    provider: str,
+    api_key: str,
+    custom_url: Optional[str] = None,
+    force_refresh: bool = False
+) -> List[str]:
+    """
+    Descubre dinámicamente en tiempo real los modelos vigentes para CUALQUIER proveedor del mundo:
+    - Google Gemini (v1beta/models)
+    - OpenAI (v1/models)
+    - Anthropic Claude (v1/models)
+    - Groq (openai/v1/models)
+    - DeepSeek (models)
+    - OpenRouter (api/v1/models)
+    - Mistral AI (v1/models)
+    - Servidor Local / Ollama / LM Studio (/models o /api/tags)
+    """
+    clean_key = api_key.strip() if api_key else ""
+    cache_key = f"_cached_models_{provider}_{clean_key[:12] if clean_key else 'nokey'}"
+    
+    if not force_refresh:
+        cached = st.session_state.get(cache_key)
+        if cached:
+            return cached
+
+    models_found = []
+
+    # 1. Google Gemini
+    if provider == "gemini":
+        gem_models, _ = discover_available_gemini_models(clean_key, force_refresh=force_refresh)
+        if gem_models:
+            models_found = gem_models
+
+    # 2. OpenAI
+    elif provider == "openai":
+        openai_models = discover_available_openai_models(clean_key, force_refresh=force_refresh)
+        if openai_models:
+            models_found = openai_models
+
+    # 3. Anthropic Claude
+    elif provider == "anthropic" and clean_key:
+        try:
+            resp = requests.get(
+                "https://api.anthropic.com/v1/models",
+                headers={
+                    "x-api-key": clean_key,
+                    "anthropic-version": "2023-06-01"
+                },
+                timeout=4
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for m in data.get("data", []):
+                    m_id = m.get("id", "")
+                    if m_id and "claude" in m_id.lower():
+                        models_found.append(m_id)
+        except Exception:
+            pass
+
+    # 4. Groq
+    elif provider == "groq" and clean_key:
+        try:
+            resp = requests.get(
+                "https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {clean_key}"},
+                timeout=4
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for m in data.get("data", []):
+                    m_id = m.get("id", "")
+                    m_low = m_id.lower()
+                    if any(x in m_low for x in ["whisper", "audio", "guard", "embedding"]):
+                        continue
+                    if m_id:
+                        models_found.append(m_id)
+        except Exception:
+            pass
+
+    # 5. DeepSeek
+    elif provider == "deepseek" and clean_key:
+        try:
+            resp = requests.get(
+                "https://api.deepseek.com/models",
+                headers={"Authorization": f"Bearer {clean_key}"},
+                timeout=4
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for m in data.get("data", []):
+                    m_id = m.get("id", "")
+                    if m_id:
+                        models_found.append(m_id)
+        except Exception:
+            pass
+
+    # 6. OpenRouter
+    elif provider == "openrouter":
+        try:
+            headers = {"Authorization": f"Bearer {clean_key}"} if clean_key else {}
+            resp = requests.get("https://openrouter.ai/api/v1/models", headers=headers, timeout=4)
+            if resp.status_code == 200:
+                data = resp.json()
+                for m in data.get("data", []):
+                    m_id = m.get("id", "")
+                    m_low = m_id.lower()
+                    if any(x in m_low for x in ["embed", "image", "audio", "vision-only"]):
+                        continue
+                    if any(x in m_low for x in ["llama-3", "claude-3", "deepseek", "gemini", "qwen", "mistral"]):
+                        models_found.append(m_id)
+                    if len(models_found) >= 30:
+                        break
+        except Exception:
+            pass
+
+    # 7. Mistral AI
+    elif provider == "mistral" and clean_key:
+        try:
+            resp = requests.get(
+                "https://api.mistral.ai/v1/models",
+                headers={"Authorization": f"Bearer {clean_key}"},
+                timeout=4
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for m in data.get("data", []):
+                    m_id = m.get("id", "")
+                    m_low = m_id.lower()
+                    if any(x in m_low for x in ["embed", "moderation"]):
+                        continue
+                    if m_id:
+                        models_found.append(m_id)
+        except Exception:
+            pass
+
+    # 8. Servidor Local / Ollama / LM Studio
+    elif provider == "custom":
+        url = custom_url.strip() if custom_url and custom_url.strip() else "http://localhost:11434"
+        clean_base = url.rstrip("/")
+        tested_endpoints = [
+            f"{clean_base}/models" if not clean_base.endswith("/v1") else f"{clean_base}/models",
+            f"{clean_base}/v1/models",
+            f"{clean_base}/api/tags"
+        ]
+        headers = {"Authorization": f"Bearer {clean_key}"} if clean_key else {}
+        for ep in tested_endpoints:
+            try:
+                resp = requests.get(ep, headers=headers, timeout=2.5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if "data" in data and isinstance(data["data"], list):
+                        for m in data["data"]:
+                            m_id = m.get("id", "")
+                            if m_id:
+                                models_found.append(m_id)
+                        if models_found:
+                            break
+                    elif "models" in data and isinstance(data["models"], list):
+                        for m in data["models"]:
+                            m_name = m.get("name", "")
+                            if m_name:
+                                models_found.append(m_name)
+                        if models_found:
+                            break
+            except Exception:
+                pass
+
+    if models_found:
+        seen = set()
+        unique = []
+        for m in models_found:
+            if m not in seen:
+                seen.add(m)
+                unique.append(m)
+        st.session_state[cache_key] = unique
+        return unique
+
+    return list(PROVIDER_MODELS_CATALOG.get(provider, ["default"]))
 
 
 def _build_wms_system_instruction(context_info: Optional[Dict[str, Any]] = None) -> str:
@@ -1761,26 +1938,20 @@ def render_wms_assistant_content(
             # Botón de refrescar en vivo la lista de modelos desde la cuenta del usuario
             c_header_m, c_btn_ref = st.columns([3.5, 1.5])
             with c_btn_ref:
-                if st.button("🔄 Actualizar", key=f"btn_ref_m_{effective_prov}", help="Consultar a la API los modelos disponibles actualmente para tu clave"):
-                    if effective_prov == "gemini":
-                        st.session_state.pop("_cached_gemini_api_key", None)
-                        st.session_state.pop("_cached_gemini_models", None)
-                    elif effective_prov == "openai":
-                        st.session_state.pop("_cached_openai_api_key", None)
-                        st.session_state.pop("_cached_openai_models", None)
+                if st.button("🔄 Actualizar", key=f"btn_ref_m_{effective_prov}", help="Consultar a la API en vivo los modelos disponibles actualmente para tu clave"):
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("_cached_"):
+                            st.session_state.pop(k, None)
                     st.rerun()
 
-            base_models = list(PROVIDER_MODELS_CATALOG.get(effective_prov, ["default"]))
-
-            # Auto-descubrimiento en tiempo real de la cuenta del usuario
-            if effective_prov == "gemini" and has_key:
-                discovered_gem, _ = discover_available_gemini_models(user_key)
-                if discovered_gem:
-                    base_models = discovered_gem
-            elif effective_prov == "openai" and has_key:
-                discovered_openai = discover_available_openai_models(user_key)
-                if discovered_openai:
-                    base_models = discovered_openai
+            # Auto-descubrimiento en tiempo real para TODOS los proveedores (Gemini, OpenAI, Claude, Groq, DeepSeek, etc.)
+            cust_url_active = st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1")
+            base_models = discover_provider_models(
+                provider=effective_prov,
+                api_key=user_key,
+                custom_url=cust_url_active,
+                force_refresh=False
+            )
 
             model_choices = list(base_models) + ["✏️ Escribir otro modelo personalizado..."]
             
@@ -1795,7 +1966,7 @@ def render_wms_assistant_content(
                 m_idx = 0
 
             with c_header_m:
-                st.caption(f"✨ {len(base_models)} modelos disponibles en tu cuenta de {effective_prov.capitalize()}")
+                st.caption(f"✨ {len(base_models)} modelos disponibles en vivo para {effective_prov.capitalize()}")
 
             sel_m_choice = st.selectbox(
                 "🧠 Modelo a utilizar:",
@@ -1809,7 +1980,7 @@ def render_wms_assistant_content(
                 custom_m_in = st.text_input(
                     "Nombre exacto del modelo:",
                     value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
-                    placeholder="Ej: gemini-3.5-flash, gemini-3.8-flash, gpt-4o, claude-3-5-sonnet",
+                    placeholder="Ej: gemini-3.5-flash, gpt-4o, claude-3-5-sonnet, llama-3.3-70b-versatile",
                     help="Introduce el identificador exacto del modelo según la API del proveedor."
                 )
                 active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
