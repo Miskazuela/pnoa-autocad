@@ -972,24 +972,48 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------------------
-# 4. CLIENTE DE IA CON OPENAI Y GOOGLE GEMINI (MODO CONVERSACIONAL EXPERTO MUNDIAL)
+# 4. CLIENTE DE IA UNIVERSAL (OPENAI, ANTHROPIC CLAUDE, GEMINI, GROQ, DEEPSEEK, OPENROUTER, ETC.)
 # --------------------------------------------------------------------------------------
-def detect_ai_provider(api_key: str) -> str:
+def detect_ai_provider(api_key: str, user_selected: str = "auto") -> str:
     """
-    Detecta automáticamente si la clave corresponde a OpenAI o Google Gemini.
-    - OpenAI: Claves que comienzan por 'sk-'.
-    - Gemini: Claves de Google AI Studio (habitualmente 'AIzaSy...').
+    Detecta automáticamente o respeta la selección manual del usuario para el proveedor de IA.
+    Soporta:
+      - 'openai': OpenAI ChatGPT (sk-..., sk-proj-...)
+      - 'anthropic': Anthropic Claude (sk-ant-...)
+      - 'gemini': Google Gemini (AIzaSy...)
+      - 'openrouter': OpenRouter (sk-or-...)
+      - 'groq': Groq (gsk_...)
+      - 'perplexity': Perplexity AI (pplx-...)
+      - 'deepseek': DeepSeek (sk-...)
+      - 'mistral': Mistral AI
+      - 'custom': Servidor Local o Personalizado (Ollama, LM Studio, vLLM, etc.)
     """
+    if user_selected and user_selected != "auto":
+        return user_selected
+
     k = api_key.strip() if api_key else ""
     if not k:
         return "none"
-    if k.lower().startswith("sk-"):
+
+    k_lower = k.lower()
+    if k_lower.startswith("sk-ant-"):
+        return "anthropic"
+    elif k_lower.startswith("sk-or-"):
+        return "openrouter"
+    elif k_lower.startswith("gsk_"):
+        return "groq"
+    elif k_lower.startswith("pplx-"):
+        return "perplexity"
+    elif k_lower.startswith("aiza"):
+        return "gemini"
+    elif k_lower.startswith("sk-"):
         return "openai"
-    return "gemini"
+
+    return "openai"
 
 
 def _build_wms_system_instruction(context_info: Optional[Dict[str, Any]] = None) -> str:
-    """Genera la instrucción del sistema experta en WMS y CAD compartida para OpenAI y Gemini."""
+    """Genera la instrucción del sistema experta en WMS y CAD compartida para todos los proveedores de IA."""
     catalog_summary = []
     for item in WMS_DATABASE[:40]:
         catalog_summary.append(
@@ -1032,22 +1056,24 @@ INSTRUCCIONES CLAVE Y REGLAS DE CONFIABILIDAD DE URLS:
     return system_instruction
 
 
-def query_openai_wms(
+def query_openai_compatible_wms(
     prompt: str,
     api_key: str,
+    base_url: str,
+    models: List[str],
+    provider_name: str,
     chat_history: List[Dict[str, str]],
-    context_info: Optional[Dict[str, Any]] = None
+    context_info: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
-    Envía la consulta del usuario a la API oficial de OpenAI (ChatGPT) utilizando la clave del usuario (sk-...).
-    Admite modelos gpt-4o-mini, gpt-4o y gpt-3.5-turbo con failover automático.
+    Cliente universal compatible con la especificación OpenAI Chat Completions.
+    Funciona con: OpenAI, OpenRouter, DeepSeek, Groq, Mistral, Perplexity, Ollama, vLLM, LM Studio, etc.
     """
     clean_key = api_key.strip() if api_key else ""
-    if not clean_key:
-        return {
-            "success": False,
-            "text": "⚠️ Por favor, introduce tu OpenAI API Key (sk-...) para activar el modo IA."
-        }
+    is_local = "localhost" in base_url or "127.0.0.1" in base_url
+    if not clean_key and not is_local:
+        return {"success": False, "text": f"⚠️ Por favor, introduce tu API Key para {provider_name}."}
 
     system_instruction = _build_wms_system_instruction(context_info)
     messages = [{"role": "system", "content": system_instruction}]
@@ -1057,15 +1083,20 @@ def query_openai_wms(
         messages.append({"role": r, "content": msg.get("content", "")})
     messages.append({"role": "user", "content": prompt})
 
-    models_to_try = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
-    endpoint = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {clean_key}",
-        "Content-Type": "application/json"
-    }
+    clean_base = base_url.rstrip("/")
+    if not clean_base.endswith("/chat/completions"):
+        endpoint = f"{clean_base}/chat/completions"
+    else:
+        endpoint = clean_base
+
+    headers = {"Content-Type": "application/json"}
+    if clean_key:
+        headers["Authorization"] = f"Bearer {clean_key}"
+    if extra_headers:
+        headers.update(extra_headers)
 
     last_error = ""
-    for model_name in models_to_try:
+    for model_name in models:
         payload = {
             "model": model_name,
             "messages": messages,
@@ -1073,37 +1104,37 @@ def query_openai_wms(
             "max_tokens": 1000
         }
         try:
-            resp = requests.post(endpoint, headers=headers, json=payload, timeout=20)
+            resp = requests.post(endpoint, headers=headers, json=payload, timeout=22)
             if resp.status_code == 200:
                 data = resp.json()
                 text_out = data["choices"][0]["message"]["content"]
-                st.session_state["wms_active_ai_provider"] = "OpenAI"
-                st.session_state["wms_active_openai_model"] = model_name
-                return {"success": True, "text": text_out, "model": model_name, "provider": "OpenAI"}
+                st.session_state["wms_active_ai_provider"] = provider_name
+                st.session_state["wms_active_ai_model"] = model_name
+                return {"success": True, "text": text_out, "model": model_name, "provider": provider_name}
             elif resp.status_code == 401:
                 return {
                     "success": False,
-                    "text": "❌ La clave de API de OpenAI introducida (sk-...) no es válida o ha caducado. Cópiala directamente desde https://platform.openai.com/api-keys"
+                    "text": f"❌ La clave de API para {provider_name} no es válida o ha caducado. Cópiala directamente desde la consola oficial del proveedor."
                 }
             elif resp.status_code == 429:
-                err_data = resp.json().get("error", {})
-                err_code = err_data.get("code", "")
-                err_msg = err_data.get("message", "")
-                if "insufficient_quota" in str(err_code) or "quota" in err_msg.lower():
-                    return {
-                        "success": False,
-                        "text": "⚠️ Tu cuenta de OpenAI ha excedido su cuota o no tiene saldo de créditos disponible. Recarga crédito en https://platform.openai.com/account/billing"
-                    }
-                last_error = f"Límite de peticiones alcanzado en OpenAI ({model_name})."
+                err_msg = ""
+                try:
+                    err_msg = resp.json().get("error", {}).get("message", "")
+                except Exception:
+                    pass
+                last_error = f"Límite de cuota o saldo alcanzado en {provider_name} ({err_msg or '429 Too Many Requests'})."
                 continue
             elif resp.status_code == 404:
-                last_error = f"El modelo {model_name} no está disponible en tu cuenta de OpenAI."
+                last_error = f"El modelo '{model_name}' no existe en {provider_name} o el endpoint es incorrecto."
                 continue
             else:
-                err_msg = resp.json().get("error", {}).get("message", resp.text)
+                try:
+                    err_msg = resp.json().get("error", {}).get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
                 last_error = f"HTTP {resp.status_code}: {err_msg}"
         except requests.exceptions.Timeout:
-            last_error = "Tiempo de espera agotado al consultar a OpenAI."
+            last_error = f"Tiempo de espera agotado al consultar a {provider_name}."
             continue
         except Exception as ex:
             last_error = str(ex)
@@ -1112,31 +1143,101 @@ def query_openai_wms(
     return {
         "success": False,
         "text": (
-            f"⚠️ No se pudo obtener respuesta de OpenAI ({last_error}).\n\n"
-            f"💡 **Ayuda:** Comprueba que tu clave esté activa en [OpenAI Platform](https://platform.openai.com/api-keys) y disponga de saldo. "
-            f"El asistente utilizará automáticamente el **Modo Local Verificado** para darte recomendaciones oficiales inmediatas."
+            f"⚠️ No se pudo obtener respuesta de {provider_name} ({last_error}).\n\n"
+            f"💡 **Recomendación:** Verifica tu clave, saldo o configuración de red. El asistente utilizará automáticamente el **Modo Local Verificado**."
         )
     }
+
+
+def query_anthropic_wms(
+    prompt: str,
+    api_key: str,
+    chat_history: List[Dict[str, str]],
+    context_info: Optional[Dict[str, Any]] = None,
+    custom_model: Optional[str] = None
+) -> Dict[str, Any]:
+    """Envía la consulta del usuario a la API oficial de Anthropic Claude (Messages API)."""
+    clean_key = api_key.strip() if api_key else ""
+    if not clean_key:
+        return {"success": False, "text": "⚠️ Por favor, introduce tu API Key de Anthropic (sk-ant-...)."}
+
+    system_instruction = _build_wms_system_instruction(context_info)
+    messages = []
+    for msg in chat_history[-6:]:
+        r = "assistant" if msg.get("role") == "model" else "user"
+        messages.append({"role": r, "content": msg.get("content", "")})
+    messages.append({"role": "user", "content": prompt})
+
+    models_to_try = [custom_model] if (custom_model and custom_model.strip()) else [
+        "claude-3-5-haiku-20241022",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-haiku-20240307"
+    ]
+    endpoint = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": clean_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
+
+    last_error = ""
+    for model_name in models_to_try:
+        payload = {
+            "model": model_name,
+            "max_tokens": 1000,
+            "system": system_instruction,
+            "messages": messages,
+            "temperature": 0.4
+        }
+        try:
+            resp = requests.post(endpoint, headers=headers, json=payload, timeout=22)
+            if resp.status_code == 200:
+                data = resp.json()
+                text_out = data["content"][0]["text"]
+                st.session_state["wms_active_ai_provider"] = "Anthropic Claude"
+                st.session_state["wms_active_ai_model"] = model_name
+                return {"success": True, "text": text_out, "model": model_name, "provider": "Anthropic Claude"}
+            elif resp.status_code == 401:
+                return {
+                    "success": False,
+                    "text": "❌ La clave de API de Anthropic (sk-ant-...) no es válida o ha caducado. Cópiala directamente desde https://console.anthropic.com/settings/keys"
+                }
+            elif resp.status_code == 429:
+                last_error = f"Límite de tasa en Anthropic ({model_name})."
+                continue
+            else:
+                try:
+                    err_msg = resp.json().get("error", {}).get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
+                last_error = f"HTTP {resp.status_code}: {err_msg}"
+        except requests.exceptions.Timeout:
+            last_error = "Tiempo de espera agotado al consultar a Anthropic."
+            continue
+        except Exception as ex:
+            last_error = str(ex)
+            break
+
+    return {
+        "success": False,
+        "text": f"⚠️ No se pudo obtener respuesta de Anthropic Claude ({last_error})."
+    }
+
+
 def discover_available_gemini_models(api_key: str) -> Tuple[List[str], Optional[str]]:
-    """
-    Descubre dinámicamente los modelos Gemini disponibles para la clave API del usuario
-    mediante el endpoint oficial ListModels (https://generativelanguage.googleapis.com/v1beta/models).
-    Retorna (lista_de_modelos, error_si_hubo).
-    """
+    """Descubre dinámicamente los modelos Gemini disponibles para la clave API en Google AI Studio."""
     if not api_key or not api_key.strip():
         return [], "Clave vacía"
 
     clean_key = api_key.strip()
-    if clean_key.lower().startswith("sk-"):
+    if clean_key.lower().startswith("sk-") or clean_key.lower().startswith("gsk_") or clean_key.lower().startswith("pplx-"):
         return [], None
 
-    # Comprobar si ya los tenemos en caché de sesión para esta misma clave
     cached_key = st.session_state.get("_cached_gemini_api_key")
     cached_models = st.session_state.get("_cached_gemini_models")
     if cached_key == clean_key and cached_models:
         return cached_models, None
 
-    # 1. Consultar ModelService.ListModels para ver exactamente qué modelos soporta esta clave
     for api_version in ["v1beta", "v1"]:
         try:
             url = f"https://generativelanguage.googleapis.com/{api_version}/models?key={clean_key}"
@@ -1177,13 +1278,12 @@ def discover_available_gemini_models(api_key: str) -> Tuple[List[str], Optional[
                 err_data = resp.json().get("error", {})
                 msg = err_data.get("message", "")
                 if "API key not valid" in msg or "INVALID_ARGUMENT" in err_data.get("status", ""):
-                    return [], "❌ La clave de API introducida no es válida. Cópiala directamente desde Google AI Studio (aistudio.google.com)."
+                    return [], "❌ La clave de API introducida no es válida para Google Gemini. Cópiala directamente desde Google AI Studio (aistudio.google.com)."
             elif resp.status_code == 403:
-                return [], "❌ La clave de API no tiene permisos para Generative Language o tiene restricciones de IP/dominio en Google Cloud Console."
+                return [], "❌ La clave de API no tiene permisos para Generative Language o tiene restricciones en Google Cloud Console."
         except Exception:
             pass
 
-    # 2. Lista de reserva en caso de fallo de conexión a ListModels
     fallback = [
         "gemini-2.0-flash",
         "gemini-2.5-flash",
@@ -1204,64 +1304,38 @@ def query_gemini_wms(
     chat_history: List[Dict[str, str]],
     context_info: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """
-    Envía la consulta del usuario a la API de Gemini (Google AI Studio) utilizando la clave
-    del usuario, contextualizado con el catálogo mundial y el estado actual del plano CAD.
-    Descubre dinámicamente los modelos activos de Google y prueba alternativas si uno no responde.
-    """
+    """Envía la consulta a la API oficial de Google Gemini (Google AI Studio)."""
     clean_key = api_key.strip() if api_key else ""
     if not clean_key:
-        return {
-            "success": False,
-            "text": "⚠️ Por favor, introduce tu Gemini API Key en el campo superior para activar el modo IA."
-        }
+        return {"success": False, "text": "⚠️ Por favor, introduce tu Gemini API Key en el campo superior."}
 
     system_instruction = _build_wms_system_instruction(context_info)
-
     contents = []
     for msg in chat_history[-6:]:
-        role = "user" if msg["role"] == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+        role = "user" if msg.get("role") == "user" else "model"
+        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
     contents.append({"role": "user", "parts": [{"text": prompt}]})
 
-    # Descubrir modelos disponibles para esta clave en Google AI Studio
     models_to_try, key_error = discover_available_gemini_models(clean_key)
     if key_error and not models_to_try:
         return {"success": False, "text": key_error}
 
     last_error = ""
-
     for model_name in models_to_try:
         for api_ver in ["v1beta", "v1"]:
             endpoint = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent?key={clean_key}"
             payload = {
                 "contents": contents,
                 "systemInstruction": {"parts": [{"text": system_instruction}]},
-                "generationConfig": {
-                    "temperature": 0.4,
-                    "maxOutputTokens": 1000
-                }
+                "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}
             }
-
             try:
-                resp = requests.post(
-                    endpoint,
-                    headers={"Content-Type": "application/json"},
-                    json=payload,
-                    timeout=14
-                )
-
-                # Si falló por systemInstruction (algunos modelos no lo admiten en raíz), reintentar integrándolo en contents
+                resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json=payload, timeout=14)
                 if resp.status_code == 400 and "systemInstruction" in resp.text:
                     fallback_contents = [
                         {"role": "user", "parts": [{"text": f"INSTRUCCIÓN DEL SISTEMA:\n{system_instruction}\n\nCONSULTA:\n{prompt}"}]}
                     ]
-                    resp = requests.post(
-                        endpoint,
-                        headers={"Content-Type": "application/json"},
-                        json={"contents": fallback_contents, "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}},
-                        timeout=14
-                    )
+                    resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json={"contents": fallback_contents, "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}}, timeout=14)
 
                 if resp.status_code == 200:
                     data = resp.json()
@@ -1269,23 +1343,18 @@ def query_gemini_wms(
                     text_out = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
                     if text_out:
                         st.session_state["wms_active_gemini_model"] = model_name
-                        return {"success": True, "text": text_out, "model": model_name}
+                        st.session_state["wms_active_ai_provider"] = "Google Gemini"
+                        return {"success": True, "text": text_out, "model": model_name, "provider": "Google Gemini"}
                 elif resp.status_code == 400:
                     err_json = resp.json().get("error", {})
                     last_error = err_json.get("message", "Petición no válida.")
                     if "API key not valid" in last_error:
-                        return {
-                            "success": False,
-                            "text": "❌ La clave de API de Gemini introducida no es válida. Genera una clave gratuita en https://aistudio.google.com/app/apikey"
-                        }
+                        return {"success": False, "text": "❌ La clave de API de Gemini introducida no es válida. Genera una en https://aistudio.google.com/app/apikey"}
                     break
                 elif resp.status_code == 403:
-                    return {
-                        "success": False,
-                        "text": "❌ Clave de API de Gemini sin permisos. Verifica que la API 'Generative Language' esté habilitada en Google AI Studio o que no tenga restricciones de IP."
-                    }
+                    return {"success": False, "text": "❌ Clave de API de Gemini sin permisos. Verifica que la API 'Generative Language' esté habilitada en Google AI Studio."}
                 elif resp.status_code == 429:
-                    last_error = "Límite de cuota alcanzado temporalmente."
+                    last_error = "Límite de cuota alcanzado temporalmente en Gemini."
                     break
                 elif resp.status_code == 404:
                     last_error = f"Modelo {model_name} no disponible en {api_ver}."
@@ -1301,30 +1370,73 @@ def query_gemini_wms(
 
     return {
         "success": False,
-        "text": (
-            f"⚠️ No se pudo obtener respuesta de Gemini ({last_error}).\n\n"
-            f"💡 **Ayuda:** Comprueba que tu clave esté activa en [Google AI Studio](https://aistudio.google.com/app/apikey). "
-            f"El asistente utilizará automáticamente el **Modo Local Verificado** para darte recomendaciones oficiales inmediatas."
-        )
+        "text": f"⚠️ No se pudo obtener respuesta de Gemini ({last_error})."
     }
 
 
-def query_ai_wms(
+def query_universal_ai_wms(
     prompt: str,
     api_key: str,
     chat_history: List[Dict[str, str]],
-    context_info: Optional[Dict[str, Any]] = None
+    context_info: Optional[Dict[str, Any]] = None,
+    provider_override: str = "auto",
+    custom_url: Optional[str] = None,
+    custom_model: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Función unificada de consulta de IA con auto-detección del proveedor:
-    - Si la clave empieza por 'sk-', consulta a OpenAI (ChatGPT: gpt-4o-mini / gpt-4o).
-    - Si la clave es de Google (AIzaSy...), consulta a Gemini (Google AI Studio).
+    Enrutador central universal de IA. Soporta cualquier proveedor del mundo:
+    - OpenAI (ChatGPT)
+    - Anthropic (Claude)
+    - Google Gemini
+    - OpenRouter (+300 modelos globales)
+    - DeepSeek
+    - Groq
+    - Mistral AI
+    - Perplexity AI
+    - Servidor Personalizado / Local (Ollama, LM Studio, vLLM, Azure, etc.)
     """
-    provider = detect_ai_provider(api_key)
-    if provider == "openai":
-        return query_openai_wms(prompt, api_key, chat_history, context_info)
-    else:
+    prov = detect_ai_provider(api_key, user_selected=provider_override)
+
+    if prov == "anthropic":
+        return query_anthropic_wms(prompt, api_key, chat_history, context_info, custom_model)
+    elif prov == "gemini":
         return query_gemini_wms(prompt, api_key, chat_history, context_info)
+    elif prov == "openrouter":
+        models = [custom_model] if (custom_model and custom_model.strip()) else [
+            "meta-llama/llama-3.3-70b-instruct",
+            "deepseek/deepseek-chat",
+            "anthropic/claude-3.5-haiku",
+            "google/gemini-2.0-flash-exp:free"
+        ]
+        return query_openai_compatible_wms(
+            prompt, api_key, "https://openrouter.ai/api/v1", models, "OpenRouter",
+            chat_history, context_info,
+            extra_headers={"HTTP-Referer": "https://github.com/Miskazuela/pnoa-autocad", "X-Title": "AutoCAD PNOA OrthoExtractor"}
+        )
+    elif prov == "deepseek":
+        models = [custom_model] if (custom_model and custom_model.strip()) else ["deepseek-chat", "deepseek-reasoner"]
+        return query_openai_compatible_wms(prompt, api_key, "https://api.deepseek.com", models, "DeepSeek", chat_history, context_info)
+    elif prov == "groq":
+        models = [custom_model] if (custom_model and custom_model.strip()) else ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+        return query_openai_compatible_wms(prompt, api_key, "https://api.groq.com/openai/v1", models, "Groq", chat_history, context_info)
+    elif prov == "mistral":
+        models = [custom_model] if (custom_model and custom_model.strip()) else ["mistral-small-latest", "mistral-large-latest", "codestral-latest"]
+        return query_openai_compatible_wms(prompt, api_key, "https://api.mistral.ai/v1", models, "Mistral AI", chat_history, context_info)
+    elif prov == "perplexity":
+        models = [custom_model] if (custom_model and custom_model.strip()) else ["sonar", "sonar-pro"]
+        return query_openai_compatible_wms(prompt, api_key, "https://api.perplexity.ai", models, "Perplexity AI", chat_history, context_info)
+    elif prov == "custom":
+        url = custom_url.strip() if custom_url and custom_url.strip() else "http://localhost:11434/v1"
+        models = [custom_model.strip()] if custom_model and custom_model.strip() else ["llama3.2", "default"]
+        return query_openai_compatible_wms(prompt, api_key, url, models, "Servidor Personalizado / Local", chat_history, context_info)
+    else:  # openai
+        models = [custom_model] if (custom_model and custom_model.strip()) else ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+        return query_openai_compatible_wms(prompt, api_key, "https://api.openai.com/v1", models, "OpenAI", chat_history, context_info)
+
+
+# Alias para compatibilidad total con código existente
+query_ai_wms = query_universal_ai_wms
+query_openai_wms = lambda p, k, h, c=None: query_universal_ai_wms(p, k, h, c, provider_override="openai")
 
 
 # --------------------------------------------------------------------------------------
@@ -1434,37 +1546,82 @@ def render_wms_assistant_content(
     </div>
     """, unsafe_allow_html=True)
 
-    # Cabecera de configuración de modo (Local vs OpenAI / Gemini)
+    # Configuración del Proveedor y Clave de IA (Universal: OpenAI, Claude, Gemini, Groq, DeepSeek, etc.)
+    with st.expander("⚙️ Proveedor de IA y Opciones Avanzadas (Compatible con cualquier servicio del mundo)", expanded=False):
+        c_sel_p, c_cust_m = st.columns([1.5, 1.5])
+        with c_sel_p:
+            provider_options = [
+                ("auto", "🔍 Auto-detectar por clave (Cualquier servicio)"),
+                ("openai", "OpenAI (ChatGPT: GPT-4o / GPT-4o-mini)"),
+                ("anthropic", "Anthropic (Claude 3.5 Sonnet / Haiku)"),
+                ("gemini", "Google Gemini (Gemini 2.0 / 1.5 Flash)"),
+                ("openrouter", "OpenRouter (+300 modelos: Llama, Claude, etc.)"),
+                ("deepseek", "DeepSeek (DeepSeek-V3 / R1)"),
+                ("groq", "Groq (Inferencia Ultra-rápida Llama / Mixtral)"),
+                ("mistral", "Mistral AI (Large / Codestral)"),
+                ("perplexity", "Perplexity AI (Sonar / Sonar Pro)"),
+                ("custom", "⚙️ Servidor Personalizado / Local (Ollama, LM Studio, vLLM)")
+            ]
+            prov_keys = [p[0] for p in provider_options]
+            prov_labels = [p[1] for p in provider_options]
+            cur_p = st.session_state.get("wms_selected_ai_provider", "auto")
+            cur_p_idx = prov_keys.index(cur_p) if cur_p in prov_keys else 0
+            sel_label = st.selectbox("Proveedor de IA:", options=prov_labels, index=cur_p_idx, key="sb_wms_ai_prov")
+            chosen_prov = prov_keys[prov_labels.index(sel_label)]
+            st.session_state["wms_selected_ai_provider"] = chosen_prov
+
+        with c_cust_m:
+            custom_m_in = st.text_input(
+                "Modelo específico (opcional):",
+                value=st.session_state.get("wms_custom_ai_model", ""),
+                placeholder="Ej: gpt-4o, claude-3-5-sonnet, deepseek-chat, llama3.2",
+                help="Deja vacío para usar el modelo óptimo recomendado automáticamente."
+            )
+            st.session_state["wms_custom_ai_model"] = custom_m_in.strip()
+
+        if chosen_prov == "custom":
+            cust_url_in = st.text_input(
+                "URL Base del Servidor (compatible OpenAI):",
+                value=st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1"),
+                placeholder="http://localhost:11434/v1 o https://tu-servidor/v1",
+                help="URL de tu servidor local o en la nube (ej: Ollama, vLLM, LM Studio, Azure OpenAI)."
+            )
+            st.session_state["wms_custom_ai_url"] = cust_url_in.strip()
+
     col_api, col_badge = st.columns([3, 2])
     with col_api:
         user_key = st.text_input(
-            "🔑 API Key de IA (OpenAI o Google Gemini - Opcional):",
+            "🔑 API Key de tu servicio de IA:",
             value=st.session_state.get("wms_bot_api_key", ""),
             type="password",
-            placeholder="sk-... (OpenAI) o AIzaSy... (Gemini)",
-            help="Introduce tu clave de OpenAI (sk-...) o de Google Gemini (AIzaSy...) para activar el modo IA conversacional. Si la dejas vacía, funcionará gratis con el Catálogo Oficial local."
+            placeholder="Pega aquí la clave (OpenAI, Claude, Gemini, Groq, DeepSeek, OpenRouter...)",
+            help="Soporta cualquier servicio de IA del mundo. Si la dejas vacía, el bot opera en Modo Local Verificado 100% gratis y offline."
         )
         st.session_state["wms_bot_api_key"] = user_key.strip()
 
     with col_badge:
-        if user_key.strip():
-            ai_prov = detect_ai_provider(user_key)
-            if ai_prov == "openai":
-                active_m = st.session_state.get("wms_active_openai_model", "gpt-4o-mini")
-                st.markdown(f"""
-                <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
-                    <div style="font-weight: 600; color: #34d399; font-size: 12.5px;">✨ Modo IA OpenAI (ChatGPT)</div>
-                    <div style="color: #94a3b8; font-size: 11px;">Modelo: <b>{active_m}</b> | Razonamiento SIG + Catálogo.</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                active_m = st.session_state.get("wms_active_gemini_model", "Auto-Detección")
-                st.markdown(f"""
-                <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
-                    <div style="font-weight: 600; color: #34d399; font-size: 12.5px;">✨ Modo IA Gemini Activado</div>
-                    <div style="color: #94a3b8; font-size: 11px;">Modelo: <b>{active_m}</b> | Razonamiento SIG + Catálogo.</div>
-                </div>
-                """, unsafe_allow_html=True)
+        active_p_setting = st.session_state.get("wms_selected_ai_provider", "auto")
+        effective_prov = detect_ai_provider(user_key, user_selected=active_p_setting)
+        if user_key.strip() or active_p_setting == "custom":
+            prov_titles = {
+                "openai": "OpenAI (ChatGPT)",
+                "anthropic": "Anthropic Claude",
+                "gemini": "Google Gemini",
+                "openrouter": "OpenRouter",
+                "deepseek": "DeepSeek",
+                "groq": "Groq",
+                "mistral": "Mistral AI",
+                "perplexity": "Perplexity AI",
+                "custom": "Servidor Local / Custom"
+            }
+            p_title = prov_titles.get(effective_prov, effective_prov.upper())
+            active_m = st.session_state.get("wms_custom_ai_model") or st.session_state.get("wms_active_ai_model", "Auto-Detección")
+            st.markdown(f"""
+            <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
+                <div style="font-weight: 600; color: #34d399; font-size: 12.5px;">✨ Modo IA {p_title} Activado</div>
+                <div style="color: #94a3b8; font-size: 11px;">Modelo: <b>{active_m}</b> | Razonamiento SIG + Catálogo.</div>
+            </div>
+            """, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div style="background: rgba(56, 189, 248, 0.12); border: 1px solid #38bdf8; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
@@ -1530,20 +1687,25 @@ def render_wms_assistant_content(
                 st.session_state["wms_chat_history"].append({"role": "user", "content": query_to_run})
 
                 with st.chat_message("model", avatar=bot_avatar_img):
-                    if st.session_state.get("wms_bot_api_key"):
-                        cur_prov = detect_ai_provider(st.session_state["wms_bot_api_key"])
-                        prov_lbl = "OpenAI (ChatGPT)" if cur_prov == "openai" else "Gemini"
-                        with st.spinner(f"Consultando a {prov_lbl}..."):
+                    current_key = st.session_state.get("wms_bot_api_key", "").strip()
+                    active_p_setting = st.session_state.get("wms_selected_ai_provider", "auto")
+                    if current_key or active_p_setting == "custom":
+                        eff_prov = detect_ai_provider(current_key, user_selected=active_p_setting)
+                        prov_name = eff_prov.capitalize()
+                        with st.spinner(f"Consultando a {prov_name}..."):
                             context_dict = {
                                 "active_epsg": epsg_disp,
                                 "current_service": serv_disp,
                                 "uploaded_filename": file_disp
                             }
-                            res = query_ai_wms(
+                            res = query_universal_ai_wms(
                                 prompt=query_to_run,
-                                api_key=st.session_state["wms_bot_api_key"],
+                                api_key=current_key,
                                 chat_history=st.session_state["wms_chat_history"][:-1],
-                                context_info=context_dict
+                                context_info=context_dict,
+                                provider_override=active_p_setting,
+                                custom_url=st.session_state.get("wms_custom_ai_url"),
+                                custom_model=st.session_state.get("wms_custom_ai_model")
                             )
                             bot_response = res["text"]
 
