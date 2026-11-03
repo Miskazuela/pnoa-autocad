@@ -723,6 +723,21 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "layers": [("OI.OrthoimageCoverage", "Ortofoto Nacional de Suecia")]
     },
     {
+        "id": "euskadi_ura_hidrologia",
+        "name": "País Vasco / URA - Red Hidrográfica, Ríos y Masas de Agua (Agencia Vasca del Agua)",
+        "category": "🌊 Aguas, Costas e Inundabilidad",
+        "region": "País Vasco (España)",
+        "url": "https://www.geo.euskadi.eus/WMS_URA",
+        "default_layer": "has_masas_agua_rio_entorno_CAPV_CHE",
+        "description": "Cartografía oficial de la red hidrográfica, ríos, cuencas vertientes y masas de agua del País Vasco (URA / GeoEuskadi).",
+        "tags": ["euskadi", "pais vasco", "ura", "hidrologia", "rios", "agua", "aguas", "cuencas", "vertientes", "cauces", "geoeuskadi", "araba", "bizkaia", "gipuzkoa"],
+        "layers": [
+            ("has_masas_agua_rio_entorno_CAPV_CHE", "Ríos y Masas de Agua Superficial"),
+            ("has_cuencas_vertientes_a_masas_agua_superficiales", "Cuencas Vertientes"),
+            ("has_unidades_hidrologicas", "Unidades Hidrológicas")
+        ]
+    },
+    {
         "id": "espana_mapa_suelos",
         "name": "España - Ocupación del Suelo y Coberturas SIOSE (IGN)",
         "category": "🌲 Medio Ambiente y Naturaleza",
@@ -761,6 +776,11 @@ SYNONYMS = {
         "curvas", "nivel", "topografia", "topografico", "relieve", "elevacion",
         "mdt", "altimetria", "cota", "cotas", "sombreado"
     ],
+    "hidrologia": [
+        "hidrologia", "hidrologico", "hidrografia", "hidrografico", "agua", "aguas",
+        "rio", "rios", "cauce", "cauces", "cuenca", "cuencas", "dph", "drenaje",
+        "snczi", "inundable", "inundables", "inundabilidad", "embalse", "ura", "arroyo"
+    ],
     "inundable": [
         "inundable", "inundables", "inundacion", "inundaciones", "inundabilidad",
         "snczi", "dph", "cauce", "rio", "retorno", "ramsar"
@@ -775,6 +795,10 @@ SYNONYMS = {
     "suelos": [
         "suelos", "suelo", "edafologia", "jordarter", "tierra", "geotecnia", "cuaternario",
         "litologia", "pedologia", "agrologico", "siose", "usos del suelo"
+    ],
+    "medio_ambiente": [
+        "medio ambiente", "natura", "red natura", "lic", "zec", "zepa", "enp", "parque",
+        "protegido", "montes", "mup", "forestal", "biodiversidad"
     ]
 }
 
@@ -801,16 +825,16 @@ GEO_LOCATIONS = {
     "australia": ["australia", "sydney", "melbourne", "australiano", "australiana"],
     "brasil": ["brasil", "brazil", "ibge", "rio", "sao paulo", "brasilia", "brasilero", "brasilera"],
     "japon": ["japon", "japan", "gsi", "tokio", "osaka", "japones", "japonesa"],
+    "euskadi": ["euskadi", "pais vasco", "bizkaia", "araba", "alava", "gipuzkoa", "geoeuskadi", "b5m", "donostia", "san sebastian", "bilbao", "vitoria", "vasco", "vasca"],
     "espana": [
         "espana", "spain", "madrid", "cataluna", "barcelona", "andalucia", "sevilla",
-        "valencia", "galicia", "euskadi", "pais vasco", "navarra", "canarias", "baleares", "gipuzkoa", "bizkaia", "alava", "espanol", "espanola"
+        "valencia", "galicia", "navarra", "canarias", "baleares", "espanol", "espanola"
     ],
     "madrid": ["madrid"],
     "andalucia": ["andalucia", "sevilla", "granada", "malaga", "cordoba"],
     "cataluna": ["cataluna", "barcelona", "girona", "tarragona", "lleida", "icgc"],
     "valencia": ["valencia", "alicante", "castellon", "icv"],
     "galicia": ["galicia", "coruna", "pontevedra", "ourense", "lugo", "ideg"],
-    "euskadi": ["euskadi", "pais vasco", "bizkaia", "araba", "gipuzkoa", "geoeuskadi", "b5m"],
     "navarra": ["navarra", "idena"],
     "canarias": ["canarias", "tenerife", "palmas", "grafcan"],
     "baleares": ["baleares", "mallorca", "menorca", "ibiza", "ideib"]
@@ -825,16 +849,41 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"[^a-z0-9\s]", " ", t)
 
 
+def _extract_geo_and_thematic(query: str) -> Tuple[Set[str], List[str]]:
+    """
+    Extrae con precisión entidades geográficas (incluyendo frases compuestas como 'pais vasco',
+    'estados unidos', 'buenos aires') y separa los tokens temáticos sustantivos puros (ej: 'hidrologia', 'suelos').
+    """
+    clean_q = _normalize_text(query)
+    detected_geo_keys = set()
+    matched_phrases = []
+
+    # Detectar primero frases compuestas ordenando por longitud descendente
+    for geo_k, aliases in GEO_LOCATIONS.items():
+        all_terms = [geo_k] + aliases
+        for term in sorted(all_terms, key=len, reverse=True):
+            term_norm = _normalize_text(term)
+            pattern = rf"\b{re.escape(term_norm)}\b"
+            if re.search(pattern, clean_q):
+                detected_geo_keys.add(geo_k)
+                detected_geo_keys.update(aliases)
+                matched_phrases.append(term_norm)
+
+    # Eliminar las frases geográficas del texto para dejar solo los conceptos temáticos
+    remaining_text = clean_q
+    for phrase in matched_phrases:
+        remaining_text = re.sub(rf"\b{re.escape(phrase)}\b", " ", remaining_text)
+
+    raw_thematic = [w for w in remaining_text.split() if len(w) >= 2]
+    thematic_tokens = [w for w in raw_thematic if w not in SPANISH_STOPWORDS]
+
+    return detected_geo_keys, thematic_tokens
+
+
 def _detect_query_geo(query: str) -> Set[str]:
     """Detecta si el usuario mencionó un país, ciudad o región geográfica en su consulta."""
-    clean_q = _normalize_text(query)
-    words = clean_q.split()
-    detected = set()
-    for w in words:
-        for geo_key, aliases in GEO_LOCATIONS.items():
-            if w == geo_key or w in aliases:
-                detected.add(geo_key)
-    return detected
+    geo_keys, _ = _extract_geo_and_thematic(query)
+    return geo_keys
 
 
 def search_wms_catalog(
@@ -843,32 +892,18 @@ def search_wms_catalog(
     region_filter: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Busca de forma inteligente y ESTRICTA en el catálogo local.
-    Aplica regla estricta de coherencia geográfica: si el usuario pide un país o región específica,
-    los servicios locales de otros países son DESCARTADOS (evita mezclar Argentina con Suecia o España).
+    Buscador determinista, de alta precisión y sin alucinaciones.
+    1. Si se menciona una región (ej: 'pais vasco', 'suecia'), descarta cualquier servicio de otra región.
+    2. Si se menciona un tema (ej: 'hidrologia', 'suelos'), exige coincidencia a nivel de palabra completa (evita que 'rio' coincida con 'parcelario').
+    3. Si ambos coinciden, devuelve únicamente la capa exacta solicitada.
     """
     clean_q = _normalize_text(query)
-    raw_words = [w for w in clean_q.split() if len(w) >= 2]
-    tokens = [w for w in raw_words if w not in SPANISH_STOPWORDS]
-
-    if not tokens:
-        tokens = raw_words
+    query_geo_keys, thematic_tokens = _extract_geo_and_thematic(query)
 
     if category_filter and category_filter == "Todas las categorías":
         category_filter = None
     if region_filter and region_filter == "Todas las regiones":
         region_filter = None
-
-    # Detectar entidades geográficas en la consulta del usuario
-    query_geo_keys = set()
-    for tok in tokens:
-        for geo_k, aliases in GEO_LOCATIONS.items():
-            if tok == geo_k or tok in aliases:
-                query_geo_keys.add(geo_k)
-                query_geo_keys.update(aliases)
-
-    # Identificar tokens temáticos sustantivos (excluyendo nombres de países/ciudades)
-    thematic_tokens = [tok for tok in tokens if tok not in query_geo_keys]
 
     scored_results = []
     for item in WMS_DATABASE:
@@ -878,26 +913,23 @@ def search_wms_catalog(
         if region_filter and region_filter.lower() not in item["region"].lower():
             continue
 
-        if not tokens:
-            scored_results.append((10, item))
-            continue
-
         item_name = _normalize_text(item["name"])
         item_reg = _normalize_text(item["region"])
         item_desc = _normalize_text(item["description"])
         item_tags = [_normalize_text(t) for t in item.get("tags", [])]
 
-        # REGLA ESTRICTA DE DESAMBIGUACIÓN GEOGRÁFICA:
-        # Si el usuario solicitó un país o región específica:
+        # Conjunto de palabras completas para evitar colisiones de subcadenas (ej: 'rio' en 'parcelario')
+        item_words = set(item_name.split() + item_desc.split() + item_tags)
+
+        # REGLA ESTRICTA 1: COHERENCIA GEOGRÁFICA
         if query_geo_keys:
             item_matches_geo = any(g in item_reg or g in item_name or g in item_tags for g in query_geo_keys)
-            # Si el servicio pertenece a OTRO país y NO coincide con la búsqueda: DESCARTAR INMEDIATAMENTE
             if not item_matches_geo:
                 continue
 
-        # REGLA ESTRICTA DE COHERENCIA TEMÁTICA:
-        # Si el usuario buscó conceptos temáticos además del país (ej: 'suelos', 'catastro', 'curvas'),
-        # el servicio DEBE coincidir con al menos un término temático (evita listar catastro si buscó suelos)
+        # REGLA ESTRICTA 2: COHERENCIA TEMÁTICA
+        # Si el usuario especificó una temática (ej: 'hidrologia', 'suelos', 'catastro'),
+        # el servicio DEBE coincidir con al menos un término temático a nivel de palabra completa.
         if thematic_tokens:
             has_thematic_match = False
             for t_tok in thematic_tokens:
@@ -906,75 +938,53 @@ def search_wms_catalog(
                     if t_tok == sk or t_tok in sl:
                         syns.extend(sl)
                 syn_set = set(syns)
-                if any(s in item_tags or s in item_name or s in item_desc for s in syn_set):
+                if syn_set.intersection(item_words):
                     has_thematic_match = True
                     break
             if not has_thematic_match:
                 continue
 
+        # Puntuación
         score = 0
         matched_tokens_count = 0
+        all_tokens = list(query_geo_keys) + thematic_tokens if query_geo_keys else thematic_tokens
 
-        for tok in tokens:
+        for tok in thematic_tokens:
             syns = [tok]
             for syn_key, syn_list in SYNONYMS.items():
                 if tok == syn_key or tok in syn_list:
                     syns.extend(syn_list)
             syns_set = set(syns)
 
-            tok_matched = False
-            # 1. Coincidencia en etiquetas (tags)
-            if any(s in item_tags for s in syns_set):
-                score += 35
-                tok_matched = True
-            elif any(any(s in t or t in s for s in syns_set) for t in item_tags):
-                score += 20
-                tok_matched = True
-
-            # 2. Coincidencia en nombre del servicio
-            if any(s in item_name for s in syns_set):
-                score += 30
-                tok_matched = True
-
-            # 3. Coincidencia en región / país
-            if any(s in item_reg for s in syns_set):
-                score += 30
-                tok_matched = True
-
-            # 4. Coincidencia en descripción
-            if any(s in item_desc for s in syns_set):
-                score += 15
-                tok_matched = True
-
-            if tok_matched:
+            if syns_set.intersection(set(item_tags)):
+                score += 40
                 matched_tokens_count += 1
-
-        # Multiplicador de cobertura de conceptos
-        coverage_ratio = matched_tokens_count / max(len(tokens), 1)
-        if coverage_ratio >= 1.0:
-            score += 100
-        elif coverage_ratio >= 0.5:
-            score += 25
-        else:
-            score = int(score * 0.2)
+            elif syns_set.intersection(set(item_name.split())):
+                score += 35
+                matched_tokens_count += 1
+            elif syns_set.intersection(set(item_desc.split())):
+                score += 20
+                matched_tokens_count += 1
 
         # Bonificación a coincidencia exacta de región
         if query_geo_keys:
-            item_matches_geo = any(g in item_reg or g in item_name or g in item_tags for g in query_geo_keys)
-            if item_matches_geo:
-                score += 90
+            if any(g in item_reg for g in query_geo_keys):
+                score += 60
 
-        if score > 0:
-            scored_results.append((score, item))
+        if thematic_tokens:
+            coverage_ratio = matched_tokens_count / max(len(thematic_tokens), 1)
+            if coverage_ratio >= 1.0:
+                score += 100
+
+        scored_results.append((score, item))
 
     scored_results.sort(key=lambda x: x[0], reverse=True)
 
-    # Filtrar cola irrelevante
     if scored_results:
         top_score = scored_results[0][0]
-        min_threshold = max(top_score * 0.45, 25)
+        min_threshold = max(top_score * 0.5, 30)
         filtered = [item for sc, item in scored_results if sc >= min_threshold]
-        return filtered[:12]
+        return filtered[:10]
 
     return []
 
