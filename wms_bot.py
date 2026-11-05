@@ -385,14 +385,25 @@ WMS_DATABASE: List[Dict[str, Any]] = [
     },
     {
         "id": "australia_cadastre_nsw",
-        "name": "Australia - Catastro y Parcelario Oficial (NSW Spatial Services)",
+        "name": "Australia - Catastro Oficial (NSW SIX Maps)",
         "category": "🏛️ Catastro y Parcelario",
         "region": "Australia",
         "url": "https://maps.six.nsw.gov.au/arcgis/services/public/NSW_Cadastre/MapServer/WMSServer",
         "default_layer": "0",
-        "description": "Cartografía catastral de parcelas, límites de propiedad y predios de Nueva Gales del Sur / Sydney (Spatial Services NSW).",
-        "tags": ["australia", "catastro", "parcelas", "nsw", "sydney", "parcelario", "predios", "lotes"],
+        "description": "Cartografía catastral de parcelas, límites de propiedad y predios de Nueva Gales del Sur / Sydney (Spatial Services NSW SIX Maps).",
+        "tags": ["australia", "catastro", "parcelas", "nsw", "sydney", "parcelario", "predios", "lotes", "six"],
         "layers": [("0", "NSW Land Cadastre")]
+    },
+    {
+        "id": "australia_cadastre_portal",
+        "name": "Australia - Catastro y Parcelario (NSW Spatial Collaboration Portal)",
+        "category": "🏛️ Catastro y Parcelario",
+        "region": "Australia",
+        "url": "https://portal.spatial.nsw.gov.au/server/services/Cadastre_History/MapServer/WMSServer",
+        "default_layer": "0",
+        "description": "Servicio moderno de parcelas y catastro oficial del Spatial Collaboration Portal de NSW (DCS Spatial Services).",
+        "tags": ["australia", "catastro", "parcelas", "nsw", "sydney", "parcelario", "portal", "dcs", "history"],
+        "layers": [("0", "NSW Cadastre Service")]
     },
     {
         "id": "australia_geology",
@@ -1456,26 +1467,78 @@ def build_smart_offline_response(
 def inspect_wms_live(url: str) -> Dict[str, Any]:
     """
     Inspecciona en tiempo real cualquier URL de servidor WMS mediante GetCapabilities.
+    Incluye diagnóstico inteligente para URLs desactualizadas, migradas o raíces de ArcGIS.
     """
     clean_url = url.split("?")[0].strip()
     if not clean_url or not clean_url.startswith("http"):
         return {"success": False, "error": "URL no válida. Debe comenzar con http:// o https://"}
+
+    parsed = urllib.parse.urlparse(clean_url)
+    host = parsed.netloc
+
+    # Comprobación de URL raíz de ArcGIS (muy común pegar la raíz /arcgis/services/ en vez del MapServer)
+    clean_low = clean_url.lower()
+    is_arcgis_root = any(p in clean_low for p in ["/arcgis/services", "/server/services", "/arcgis/rest", "/server/rest"]) and "wmsserver" not in clean_low and "mapserver" not in clean_low
+
+    migrated_domains = {
+        "maps.six.nsw.gov.au": {
+            "new_domain": "portal.spatial.nsw.gov.au",
+            "desc": "Spatial Services NSW ha migrado progresivamente sus servicios del antiguo SIX Maps al nuevo Spatial Collaboration Portal.",
+            "example": "https://portal.spatial.nsw.gov.au/server/services/Cadastre_History/MapServer/WMSServer"
+        }
+    }
+
+    if is_arcgis_root:
+        dork_q = f"site:{host} WMSServer OR GetCapabilities"
+        dork_url = f"https://www.google.com/search?q={urllib.parse.quote_plus(dork_q)}"
+        mig_info = migrated_domains.get(host.lower(), {})
+        mig_msg = f"\n\n💡 **Nota de migración:** {mig_info.get('desc')} (Ejemplo activo: `{mig_info.get('example')}`)." if mig_info else ""
+        return {
+            "success": False,
+            "error": (
+                f"⚠️ Has introducido la dirección raíz de un servidor ArcGIS (`{clean_url}`).\n\n"
+                "Un servicio WMS de ArcGIS no puede ser la raíz, debe apuntar a un servicio específico y terminar en `/MapServer/WMSServer` "
+                f"(por ejemplo: `{clean_url.rstrip('/')}/NombreCapa/MapServer/WMSServer`).{mig_msg}\n\n"
+                f"👉 **[🔗 Buscar servicios WMS activos de {host} en Google]({dork_url})**"
+            )
+        }
 
     try:
         resp = requests.get(
             clean_url,
             params={"SERVICE": "WMS", "REQUEST": "GetCapabilities"},
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 "Accept": "text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8"
             },
-            timeout=9,
+            timeout=10,
             verify=False
         )
         if resp.status_code != 200:
+            dork_q = f"{host} WMS GetCapabilities service"
+            dork_url = f"https://www.google.com/search?q={urllib.parse.quote_plus(dork_q)}"
+            mig_info = migrated_domains.get(host.lower(), {})
+            mig_msg = f"\n\n💡 **Nota de migración:** {mig_info.get('desc')} (Ejemplo: `{mig_info.get('example')}`)." if mig_info else ""
             return {
                 "success": False,
-                "error": f"El servidor respondió con código HTTP {resp.status_code}. Es posible que requiera autenticación o esté fuera de servicio."
+                "error": (
+                    f"El servidor respondió con código HTTP {resp.status_code}. Es muy probable que el enlace esté desactualizado o fuera de servicio.{mig_msg}\n\n"
+                    f"👉 **[🔗 Localizar enlace WMS actualizado en Google]({dork_url})**"
+                )
+            }
+
+        # Si el servidor devolvió HTML en vez de XML (por ejemplo página de error de ArcGIS o Apache)
+        content_type = resp.headers.get("Content-Type", "").lower()
+        if "html" in content_type and not resp.content.strip().startswith(b"<?xml"):
+            dork_q = f"site:{host} WMSServer OR GetCapabilities"
+            dork_url = f"https://www.google.com/search?q={urllib.parse.quote_plus(dork_q)}"
+            return {
+                "success": False,
+                "error": (
+                    f"El servidor no devolvió un documento XML OGC WMS (devolvió una página web HTML con código {resp.status_code}). "
+                    "Verifica que la URL sea un endpoint WMS válido terminado en `/WMSServer` o `/wms`.\n\n"
+                    f"👉 **[🔗 Buscar servicios WMS activos de {host} en Google]({dork_url})**"
+                )
             }
 
         root = ET.fromstring(resp.content)
@@ -1530,12 +1593,11 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 # Catálogo base por defecto (se auto-actualiza dinámicamente en tiempo real con la API en vivo de cada proveedor)
 PROVIDER_MODELS_CATALOG = {
     "gemini": [
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.8-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
-        "gemini-1.5-flash",
     ],
     "openai": [
         "gpt-4o-mini",
@@ -1698,12 +1760,11 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
         pass
 
     fallback = [
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.8-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
         "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-1.5-flash"
+        "gemini-2.5-pro"
     ]
     return fallback, None
 

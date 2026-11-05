@@ -293,6 +293,14 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
                 continue
 
             poly = Polygon(pts)
+            if not poly.is_valid:
+                try:
+                    poly = poly.buffer(0)
+                except Exception:
+                    pass
+            if poly.is_empty or not hasattr(poly, "bounds"):
+                continue
+
             minx, miny, maxx, maxy = poly.bounds
             width = maxx - minx
             height = maxy - miny
@@ -323,6 +331,55 @@ def parse_dxf_polygons(file_bytes: bytes, filename: str, service_tag: str = "pno
             })
             polygon_counter += 1
 
+        except Exception:
+            continue
+
+    # Lectura de entidades CIRCLE (Afecciones, buffers o límites radiales)
+    for circle in msp.query("CIRCLE"):
+        try:
+            layer = getattr(circle.dxf, "layer", "0")
+            c_center = circle.dxf.center
+            radius = float(circle.dxf.radius)
+            if radius <= 0.1:
+                continue
+
+            cx_c, cy_c = float(c_center.x), float(c_center.y)
+            num_pts = 36
+            circle_pts = [
+                (
+                    cx_c + radius * math.cos(2 * math.pi * i / num_pts),
+                    cy_c + radius * math.sin(2 * math.pi * i / num_pts)
+                )
+                for i in range(num_pts)
+            ]
+            circle_pts.append(circle_pts[0])
+            poly = Polygon(circle_pts)
+            minx, miny, maxx, maxy = poly.bounds
+            width = maxx - minx
+            height = maxy - miny
+            if width <= 0.001 or height <= 0.001:
+                continue
+
+            clean_layer = sanitize_filename(layer)
+            clean_tag = sanitize_filename(service_tag)
+            output_name = f"{base_file_prefix}_{clean_tag}_{clean_layer}_circ{polygon_counter}"
+            rec_res, rec_label, _ = get_recommended_resolution(poly.area)
+
+            extracted_polygons.append({
+                "incluir": True,
+                "id": polygon_counter,
+                "capa": f"{layer} (Círculo)",
+                "nombre_archivo": output_name,
+                "resolucion_m_px": rec_res,
+                "calidad_sugerida": rec_label,
+                "ancho_m": round(width, 2),
+                "alto_m": round(height, 2),
+                "area_m2": round(poly.area, 2),
+                "num_vertices": len(circle_pts),
+                "bounds": (minx, miny, maxx, maxy),
+                "pts": circle_pts
+            })
+            polygon_counter += 1
         except Exception:
             continue
 
@@ -1111,6 +1168,25 @@ def detect_recommended_epsg(
             })
         return recommendations
 
+    # D1. Suecia / Escandinavia (SWEREF99 TM - EPSG:3006)
+    # Latitudes 55° a 69° N -> Y entre 6.100.000 m y 7.650.000 m; X entre 250.000 m y 950.000 m.
+    if 6100000 <= cy <= 7650000 and 250000 <= cx <= 950000:
+        recommendations.append({
+            "code": 3006,
+            "name": "SWEREF99 TM (EPSG:3006)",
+            "region": "🇸🇪 Suecia (Proyección Oficial Nacional SWEREF99 TM)",
+            "reason": f"Coordenadas métricas características de Suecia con Falso Norte ~{cy:,.0f} m y Falso Este ~{cx:,.0f} m.",
+            "confidence": "Muy Alta"
+        })
+        recommendations.append({
+            "code": 3007,
+            "name": "SWEREF99 12 00 (EPSG:3007)",
+            "region": "🇸🇪 Suecia (Zona Local Oeste 12° 00' E)",
+            "reason": "Zona de proyección local SWEREF99 para el oeste de Suecia.",
+            "confidence": "Media"
+        })
+        return recommendations
+
     # D. Hemisferio Sur - Australia (UTM False Northing = 10.000.000 m)
     # Solo se prioriza Australia si existen palabras clave explícitas o se descarta Europa/Norte
     if 5000000 <= cy <= 9000000 and 150000 <= cx <= 850000:
@@ -1190,25 +1266,6 @@ def detect_recommended_epsg(
             "region": "🇪🇸 Islas Canarias (Red Geodésica Oficial REGCAN95)",
             "reason": "Referencia geodésica oficial de las Islas Canarias.",
             "confidence": "Alta"
-        })
-        return recommendations
-
-    # F1. Suecia / Escandinavia (SWEREF99 TM - EPSG:3006)
-    # Latitudes 55° a 69° N -> Y entre 6.100.000 m y 7.650.000 m; X entre 250.000 m y 950.000 m.
-    if 6100000 <= cy <= 7650000 and 250000 <= cx <= 950000:
-        recommendations.append({
-            "code": 3006,
-            "name": "SWEREF99 TM (EPSG:3006)",
-            "region": "🇸🇪 Suecia (Proyección Oficial Nacional SWEREF99 TM)",
-            "reason": f"Coordenadas métricas características de Suecia con Falso Norte ~{cy:,.0f} m y Falso Este ~{cx:,.0f} m.",
-            "confidence": "Muy Alta"
-        })
-        recommendations.append({
-            "code": 3007,
-            "name": "SWEREF99 12 00 (EPSG:3007)",
-            "region": "🇸🇪 Suecia (Zona Local Oeste 12° 00' E)",
-            "reason": "Zona de proyección local SWEREF99 para el oeste de Suecia.",
-            "confidence": "Media"
         })
         return recommendations
 
@@ -1301,6 +1358,26 @@ def identify_zone_country(
             return {"name": "Perú", "flag": "🇵🇪", "key": "peru"}
         elif 24.0 <= lat <= 50.0 and -125.0 <= lon <= -66.5:
             return {"name": "Estados Unidos", "flag": "🇺🇸", "key": "united states"}
+        elif (36.8 <= lat <= 42.2 and -9.6 <= lon <= -6.1) or (32.3 <= lat <= 33.2 and -17.3 <= lon <= -16.2):
+            return {"name": "Portugal", "flag": "🇵🇹", "key": "portugal"}
+        elif 41.3 <= lat <= 51.1 and -5.5 <= lon <= 9.6:
+            return {"name": "Francia", "flag": "🇫🇷", "key": "france"}
+        elif 47.2 <= lat <= 55.1 and 5.8 <= lon <= 15.1:
+            return {"name": "Alemania", "flag": "🇩🇪", "key": "germany"}
+        elif 49.8 <= lat <= 60.9 and -8.7 <= lon <= 1.8:
+            return {"name": "Reino Unido", "flag": "🇬🇧", "key": "united kingdom"}
+        elif 35.4 <= lat <= 47.1 and 6.6 <= lon <= 18.6:
+            return {"name": "Italia", "flag": "🇮🇹", "key": "italy"}
+        elif 57.9 <= lat <= 71.2 and 4.5 <= lon <= 31.1:
+            return {"name": "Noruega", "flag": "🇳🇴", "key": "norway"}
+        elif 59.7 <= lat <= 70.1 and 19.4 <= lon <= 31.6:
+            return {"name": "Finlandia", "flag": "🇫🇮", "key": "finland"}
+        elif 41.6 <= lat <= 83.2 and -141.0 <= lon <= -52.6:
+            return {"name": "Canadá", "flag": "🇨🇦", "key": "canada"}
+        elif -33.8 <= lat <= 5.3 and -74.0 <= lon <= -34.7:
+            return {"name": "Brasil", "flag": "🇧🇷", "key": "brazil"}
+        elif -5.1 <= lat <= 1.5 and -92.0 <= lon <= -75.1:
+            return {"name": "Ecuador", "flag": "🇪🇨", "key": "ecuador"}
 
     # 2. Por CRS del Shapefile (.prj) o recomendaciones geodésicas de coordenadas
     check_texts = []
@@ -3404,6 +3481,7 @@ def render_ui():
                 sel = st.session_state.get("custom_detected_layer_select")
                 if sel and sel != "(Escribir o editar abajo)":
                     idx = layer_labels.index(sel)
+                    st.session_state["custom_wms_layer_input"] = layer_names[idx]
                     st.session_state["pending_custom_wms_layer"] = layer_names[idx]
 
             st.sidebar.selectbox(
@@ -4186,6 +4264,7 @@ def render_ui():
             used_names = set()
             total_count = len(selected_rows)
             cached_mosaic_polygons = []
+            downloaded_rasters_for_scr = []
 
             base_dxf_stem = os.path.splitext(sanitize_filename(dxf_display_name))[0]
             if not base_dxf_stem:
@@ -4261,6 +4340,7 @@ def render_ui():
                                         sub_bytes = fetch_wms_ortho(session=session, wms_url=wms_url, wms_layer=wms_layer, crs_str=crs_str, bbox_buf=job["bbox_buf"], ancho_px=job["ancho_px"], alto_px=job["alto_px"])
                                     zf.writestr(f"{final_name}.tif", sub_bytes)
                                     zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
+                                    downloaded_rasters_for_scr.append({'name': final_name, 'minx': job['bbox_buf'][0], 'miny': job['bbox_buf'][1], 'scale': abs(job['pixel_x'])})
                                     s_kb = len(sub_bytes) / 1024.0
                                     summary_log.append({"Archivo": final_name, "Servicio": service_info["badge"], "Dimensiones (px)": f"{job['ancho_px']} × {job['alto_px']}", "Extensión (m)": f"{job['width_m']:.1f} × {job['height_m']:.1f}", "Resolución Real": f"{abs(job['pixel_x']):.3f} m/px", "Estado": "Descargado", "Detalle": f"{s_kb:.1f} KB"})
                                     success_count += 1
@@ -4354,6 +4434,7 @@ def render_ui():
 
                             zf.writestr(f"{final_name}.tif", stitched_bytes)
                             zf.writestr(f"{final_name}.tfw", master_tfw.encode("utf-8"))
+                            downloaded_rasters_for_scr.append({'name': final_name, 'minx': full_bbox[0], 'miny': full_bbox[1], 'scale': abs(pix_x)})
 
                             size_mb = len(stitched_bytes) / (1024.0 * 1024.0)
                             log_expander.success(
@@ -4413,6 +4494,7 @@ def render_ui():
 
                                 zf.writestr(f"{final_name}.tif", img_bytes)
                                 zf.writestr(f"{final_name}.tfw", job["tfw_content"].encode("utf-8"))
+                                downloaded_rasters_for_scr.append({'name': final_name, 'minx': job['bbox_buf'][0], 'miny': job['bbox_buf'][1], 'scale': abs(job['pixel_x'])})
 
                                 row_mosaic_cache["tiles_data"].append({
                                     "job": job,
@@ -4486,6 +4568,7 @@ def render_ui():
                                 auto_name = f"{clean_base}_unida"
                                 zf.writestr(f"{auto_name}.tif", auto_bytes)
                                 zf.writestr(f"{auto_name}.tfw", auto_tfw.encode("utf-8"))
+                                downloaded_rasters_for_scr.append({'name': auto_name, 'minx': f_job['full_bbox_buf'][0], 'miny': f_job['full_bbox_buf'][1], 'scale': abs(p_x)})
                                 auto_mb = len(auto_bytes) / (1024.0 * 1024.0)
                                 log_expander.info(f"🧩 [{auto_name}] Versión unida añadida al ZIP ({a_w} × {a_h} px, {auto_mb:.2f} MB)")
                                 summary_log.append({
@@ -4501,6 +4584,36 @@ def render_ui():
                                 log_expander.warning(f"⚠️ No se pudo ensamblar versión unida automática: {auto_err}")
 
                     cached_mosaic_polygons.append(row_mosaic_cache)
+
+                if downloaded_rasters_for_scr:
+                    scr_lines = [
+                        "; ==============================================================================",
+                        "; SCRIPT DE INSERCIÓN AUTOMÁTICA EN AUTOCAD (TODAS LAS VERSIONES / LT / BRICSCAD)",
+                        "; Generado automáticamente por PNOA-AutoCAD",
+                        ";",
+                        "; INSTRUCCIONES DE USO:",
+                        "; 1. Descomprime TODO el contenido de este archivo ZIP en la MISMA carpeta donde",
+                        ";    tienes guardado tu archivo de dibujo DWG.",
+                        "; 2. En AutoCAD, escribe el comando SCRIPT y selecciona este archivo .scr,",
+                        ";    o simplemente ARRASTRA este archivo .scr dentro de la ventana de dibujo.",
+                        "; 3. Las imágenes se insertarán exactamente en sus coordenadas métricas reales.",
+                        "; ==============================================================================",
+                        "FILEDIA 0",
+                        "CMDDIA 0",
+                        "_TILEMODE 1",
+                    ]
+                    for dr in downloaded_rasters_for_scr:
+                        fname = f"{dr['name']}.tif"
+                        scr_lines.append(f"; --- Inserción de {fname} ---")
+                        scr_lines.append(f"_-IMAGE _A \"{fname}\" {dr['minx']:.4f},{dr['miny']:.4f} {dr['scale']:.8f} 0")
+                    scr_lines.extend([
+                        "_ZOOM _E",
+                        "FILEDIA 1",
+                        "CMDDIA 1",
+                        "; Fin del script",
+                        ""
+                    ])
+                    zf.writestr("insercion_autocad.scr", "\r\n".join(scr_lines).encode("latin1", errors="replace"))
 
             progress_bar.progress(1.0, text="✅ Descarga 100% completada")
             status_text.empty()
@@ -4563,11 +4676,19 @@ def render_ui():
 
         # Instrucciones organizadas en pestañas para AutoCAD
         with st.expander("📖 Guía de inserción en AutoCAD / Civil 3D y recorte por contorno", expanded=False):
-            r_tab1, r_tab2, r_tab3 = st.tabs([
+            r_tab0, r_tab1, r_tab2, r_tab3 = st.tabs([
+                "⚡ En 1 Clic con Script (.scr)",
                 "🖥️ AutoCAD Map 3D / Civil 3D",
                 "📐 AutoCAD Estándar / LT",
                 "✂️ Recorte de Minutas (DELIMIMG)"
             ])
+            with r_tab0:
+                st.markdown("""
+                **Inserción automática en 1 clic (Válida para todas las versiones de AutoCAD, AutoCAD LT, Civil 3D, BricsCAD y ZWCAD):**
+                1. Descomprime todo el contenido del archivo `.zip` en la **misma carpeta** donde tienes guardado tu plano de AutoCAD (`.dwg`).
+                2. Simplemente **arrastra el archivo `insercion_autocad.scr`** dentro de la ventana de dibujo de AutoCAD (o escribe el comando <span class="cad-kbd">SCRIPT</span> y selecciónalo).
+                3. AutoCAD insertará automáticamente todas las ortofotos en sus coordenadas métricas reales exactas con su escala correspondiente y ejecutará un Zoom Extensión.
+                """)
             with r_tab1:
                 st.markdown("""
                 **Inserción automática en coordenadas reales con `_MAPIINSERT`:**
@@ -4643,6 +4764,7 @@ def render_ui():
                     stitch_error_msg = None
                     try:
                         stitched_zip_buf = io.BytesIO()
+                        stitched_rasters_for_scr = []
                         with zipfile.ZipFile(stitched_zip_buf, "w", zipfile.ZIP_DEFLATED) as szf:
                             if st.session_state.get("is_vector_exportable") and mosaic_cache.get("polys_for_dxf"):
                                 try:
@@ -4656,6 +4778,7 @@ def render_ui():
                                         j = td["job"]
                                         szf.writestr(f"{poly_info['clean_base']}.tif", td["img_bytes"])
                                         szf.writestr(f"{poly_info['clean_base']}.tfw", j["tfw_content"].encode("utf-8"))
+                                        stitched_rasters_for_scr.append({'name': poly_info['clean_base'], 'minx': j['bbox_buf'][0], 'miny': j['bbox_buf'][1], 'scale': abs(j['pixel_x'])})
                                     continue
 
                                 first_job = poly_info["tile_jobs"][0]
@@ -4695,6 +4818,34 @@ def render_ui():
                                 stitched_name = f"{poly_info['clean_base']}_unida"
                                 szf.writestr(f"{stitched_name}.tif", s_bytes)
                                 szf.writestr(f"{stitched_name}.tfw", m_tfw.encode("utf-8"))
+                                stitched_rasters_for_scr.append({'name': stitched_name, 'minx': full_bbox[0], 'miny': full_bbox[1], 'scale': abs(pix_x)})
+
+                            if stitched_rasters_for_scr:
+                                scr_lines_s = [
+                                    "; ==============================================================================",
+                                    "; SCRIPT DE INSERCIÓN AUTOMÁTICA EN AUTOCAD (IMAGEN UNIDA)",
+                                    "; Generado automáticamente por PNOA-AutoCAD",
+                                    ";",
+                                    "; INSTRUCCIONES DE USO:",
+                                    "; 1. Descomprime este archivo en la misma carpeta del archivo DWG.",
+                                    "; 2. Arrastra este archivo .scr dentro de la ventana de AutoCAD o ejecuta SCRIPT.",
+                                    "; ==============================================================================",
+                                    "FILEDIA 0",
+                                    "CMDDIA 0",
+                                    "_TILEMODE 1",
+                                ]
+                                for dr in stitched_rasters_for_scr:
+                                    fname = f"{dr['name']}.tif"
+                                    scr_lines_s.append(f"; --- Inserción de {fname} ---")
+                                    scr_lines_s.append(f"_-IMAGE _A \"{fname}\" {dr['minx']:.4f},{dr['miny']:.4f} {dr['scale']:.8f} 0")
+                                scr_lines_s.extend([
+                                    "_ZOOM _E",
+                                    "FILEDIA 1",
+                                    "CMDDIA 1",
+                                    "; Fin del script",
+                                    ""
+                                ])
+                                szf.writestr("insercion_autocad.scr", "\r\n".join(scr_lines_s).encode("latin1", errors="replace"))
 
                         if not stitch_error_msg:
                             stitched_zip_buf.seek(0)
