@@ -1593,39 +1593,46 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 # Catálogo base por defecto (se auto-actualiza dinámicamente en tiempo real con la API en vivo de cada proveedor)
 PROVIDER_MODELS_CATALOG = {
     "gemini": [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
+        "gemini-2.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview",
+        "gemini-4-argon",
     ],
     "openai": [
-        "gpt-4o-mini",
+        "gpt-5",
+        "gpt-4.5",
         "gpt-4o",
+        "gpt-4o-mini",
+        "o3",
         "o3-mini",
-        "o1-mini",
         "o1",
     ],
     "anthropic": [
+        "claude-3-7-sonnet-20250219",
         "claude-3-5-sonnet-20241022",
         "claude-3-5-haiku-20241022",
         "claude-3-opus-20240229",
     ],
     "groq": [
         "llama-3.3-70b-versatile",
+        "deepseek-r1-distill-qwen-32b",
+        "qwen-2.5-32b",
+        "qwen-2.5-coder-32b",
         "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
-        "deepseek-r1-distill-llama-70b",
     ],
     "deepseek": [
         "deepseek-chat",
         "deepseek-reasoner",
     ],
     "openrouter": [
+        "anthropic/claude-3.7-sonnet",
+        "google/gemini-2.5-flash",
+        "deepseek/deepseek-r1",
         "meta-llama/llama-3.3-70b-instruct",
-        "deepseek/deepseek-chat",
-        "anthropic/claude-3.5-haiku",
-        "google/gemini-2.0-flash-001",
     ],
     "mistral": [
         "mistral-small-latest",
@@ -1637,7 +1644,7 @@ PROVIDER_MODELS_CATALOG = {
         "sonar-pro",
     ],
     "custom": [
-        "llama3.2",
+        "llama3.3",
         "deepseek-r1",
         "mistral",
         "qwen2.5",
@@ -1760,11 +1767,14 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
         pass
 
     fallback = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
         "gemini-2.5-flash",
-        "gemini-2.5-pro"
+        "gemini-2.5-pro",
+        "gemini-2.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview",
+        "gemini-4-argon"
     ]
     return fallback, None
 
