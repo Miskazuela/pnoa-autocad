@@ -357,8 +357,41 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "url": "https://ows.dea.ga.gov.au/wms",
         "default_layer": "ga_ls_ard_3",
         "description": "Mosaicos y cubos de datos satelitales calibrados de todo el continente australiano (Geoscience Australia).",
-        "tags": ["australia", "sydney", "melbourne", "geoscience", "dea", "landsat", "gda2020"],
+        "tags": ["australia", "sydney", "melbourne", "geoscience", "dea", "landsat", "gda2020", "ortofoto", "satelite"],
         "layers": [("ga_ls_ard_3", "DEA Surface Reflectance Australia")]
+    },
+    {
+        "id": "australia_topo",
+        "name": "Australia - Topografía Nacional y Relieve (Geoscience Australia)",
+        "category": "🗺️ Topografía y Relieve",
+        "region": "Australia",
+        "url": "https://services.ga.gov.au/gis/services/Topographic_Base_Map_WM/MapServer/WMSServer",
+        "default_layer": "0",
+        "description": "Mapa topográfico base nacional con curvas de nivel, relieve y elevación de Australia (Geoscience Australia).",
+        "tags": ["australia", "topografia", "curvas", "relieve", "elevacion", "geoscience", "mapa", "sydney", "melbourne", "gda2020"],
+        "layers": [("0", "Topographic Base Map Australia")]
+    },
+    {
+        "id": "australia_hydrology",
+        "name": "Australia - Hidrología y Masas de Agua (Geoscience Australia)",
+        "category": "🌊 Aguas, Costas e Inundabilidad",
+        "region": "Australia",
+        "url": "https://services.ga.gov.au/gis/services/Surface_Hydrology/MapServer/WMSServer",
+        "default_layer": "0",
+        "description": "Red hidrográfica nacional de ríos, cuencas, lagos y masas de agua de Australia (Geoscience Australia).",
+        "tags": ["australia", "hidrologia", "agua", "rios", "cauces", "cuencas", "geoscience", "aguas"],
+        "layers": [("0", "Surface Hydrology Network")]
+    },
+    {
+        "id": "australia_cadastre_nsw",
+        "name": "Australia - Catastro y Parcelario Oficial (NSW Spatial Services)",
+        "category": "🏛️ Catastro y Parcelario",
+        "region": "Australia",
+        "url": "https://maps.six.nsw.gov.au/arcgis/services/public/NSW_Cadastre/MapServer/WMSServer",
+        "default_layer": "0",
+        "description": "Cartografía catastral de parcelas, límites de propiedad y predios de Nueva Gales del Sur / Sydney (Spatial Services NSW).",
+        "tags": ["australia", "catastro", "parcelas", "nsw", "sydney", "parcelario", "predios", "lotes"],
+        "layers": [("0", "NSW Land Cadastre")]
     },
 
     # ==========================================
@@ -869,6 +902,50 @@ GEO_LOCATIONS = {
 }
 
 
+GEO_CANONICAL_NAMES = {
+    "espana": "España",
+    "euskadi": "País Vasco",
+    "colombia": "Colombia",
+    "suecia": "Suecia",
+    "australia": "Australia",
+    "argentina": "Argentina",
+    "mexico": "México",
+    "chile": "Chile",
+    "peru": "Perú",
+    "estados unidos": "Estados Unidos",
+    "canada": "Canadá",
+    "francia": "Francia",
+    "alemania": "Alemania",
+    "portugal": "Portugal",
+    "reino unido": "Reino Unido",
+    "italia": "Italia",
+    "noruega": "Noruega",
+    "finlandia": "Finlandia",
+    "dinamarca": "Dinamarca",
+    "brasil": "Brasil",
+    "japon": "Japón",
+    "madrid": "Madrid",
+    "cataluna": "Cataluña",
+    "andalucia": "Andalucía",
+    "valencia": "Comunidad Valenciana",
+    "galicia": "Galicia",
+    "navarra": "Navarra",
+    "canarias": "Canarias",
+    "baleares": "Baleares",
+    "bogota": "Bogotá",
+    "medellin": "Medellín",
+    "cali": "Cali"
+}
+
+
+def get_canonical_geo_name(geo_key: str) -> str:
+    """Devuelve el nombre oficial canónico legible de una clave geográfica."""
+    if not geo_key:
+        return "esta región"
+    norm_k = _normalize_text(geo_key)
+    return GEO_CANONICAL_NAMES.get(norm_k, geo_key.capitalize())
+
+
 def _normalize_text(text: str) -> str:
     """Normaliza texto eliminando acentos, mayúsculas y caracteres especiales."""
     if not text:
@@ -987,10 +1064,20 @@ def infer_project_geo_keys(
     return geos
 
 
-def _detect_query_geo(query: str) -> Set[str]:
-    """Detecta si el usuario mencionó un país, ciudad o región geográfica en su consulta."""
-    geo_keys, _ = _extract_geo_and_thematic(query)
-    return geo_keys
+def _detect_query_geo(query: str) -> List[str]:
+    """Detecta las claves geográficas principales canónicas mencionadas en la consulta."""
+    clean_q = _normalize_text(query)
+    detected_primary_keys = []
+    for geo_k, aliases in GEO_LOCATIONS.items():
+        all_terms = [geo_k] + aliases
+        for term in sorted(all_terms, key=len, reverse=True):
+            term_norm = _normalize_text(term)
+            pattern = rf"\b{re.escape(term_norm)}\b"
+            if re.search(pattern, clean_q):
+                if geo_k not in detected_primary_keys:
+                    detected_primary_keys.append(geo_k)
+                break
+    return detected_primary_keys
 
 
 def search_wms_catalog(
@@ -2390,7 +2477,12 @@ def render_wms_assistant_content(
                             if is_context_q and not detected_geos:
                                 fallback_global = search_wms_catalog(query_to_run, project_geo_fallback=None)
 
-                            target_loc = list(detected_geos)[0].capitalize() if detected_geos else (zone_disp or "esta región")
+                            if detected_geos:
+                                target_loc = get_canonical_geo_name(detected_geos[0])
+                            elif zone_disp:
+                                target_loc = zone_disp
+                            else:
+                                target_loc = "esta región"
                             lines = [
                                 f"ℹ️ **No dispongo de un servicio WMS local específico de esta temática para {target_loc} en el catálogo offline.**\n\n"
                                 f"💡 **¿Cómo obtener capas oficiales para {target_loc}?**\n"
