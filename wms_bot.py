@@ -18,6 +18,7 @@ import base64
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import unicodedata
+import urllib.parse
 from typing import List, Dict, Any, Tuple, Optional, Set
 import streamlit as st
 import requests
@@ -392,6 +393,28 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "description": "Cartografía catastral de parcelas, límites de propiedad y predios de Nueva Gales del Sur / Sydney (Spatial Services NSW).",
         "tags": ["australia", "catastro", "parcelas", "nsw", "sydney", "parcelario", "predios", "lotes"],
         "layers": [("0", "NSW Land Cadastre")]
+    },
+    {
+        "id": "australia_geology",
+        "name": "Australia - Geología y Recursos Naturales (Geoscience Australia)",
+        "category": "🗺️ Topografía y Relieve",
+        "region": "Australia",
+        "url": "https://services.ga.gov.au/gis/services/GA_Surface_Geology/MapServer/WMSServer",
+        "default_layer": "0",
+        "description": "Cartografía geológica de superficie, litología y unidades estructurales de Australia (Geoscience Australia).",
+        "tags": ["australia", "geologia", "suelos", "litologia", "rocas", "geoscience", "mineria", "gda2020"],
+        "layers": [("0", "Surface Geology Australia")]
+    },
+    {
+        "id": "australia_landcover",
+        "name": "Australia - Suelos y Coberturas Vegetales (DEA Land Cover)",
+        "category": "🌲 Medio Ambiente y Montes",
+        "region": "Australia",
+        "url": "https://services.ga.gov.au/gis/services/DEA_Land_Cover/MapServer/WMSServer",
+        "default_layer": "0",
+        "description": "Clasificación de coberturas de la tierra, vegetación y usos del suelo de Australia (Digital Earth Australia).",
+        "tags": ["australia", "suelos", "usos del suelo", "coberturas", "vegetacion", "dea", "geoscience", "cultivos"],
+        "layers": [("0", "DEA Land Cover 25m")]
     },
 
     # ==========================================
@@ -937,6 +960,149 @@ GEO_CANONICAL_NAMES = {
     "cali": "Cali"
 }
 
+OFFICIAL_GEOPORTALS: Dict[str, Dict[str, str]] = {
+    "australia": {
+        "name": "Australia",
+        "portal_name": "Geoscience Australia & NationalMap",
+        "portal_url": "https://nationalmap.gov.au",
+        "description": "Geoportal federal de Australia con servicios WMS de topografía, recursos, costas e hidrología.",
+        "search_tips": "En Australia, los servicios WMS estatales más potentes son NSW Spatial Services (Sídney), Vicmap (Victoria) y Qld Spatial (Queensland)."
+    },
+    "espana": {
+        "name": "España",
+        "portal_name": "IDEE - Infraestructura de Datos Espaciales de España",
+        "portal_url": "https://www.idee.es",
+        "description": "Directorio oficial del Consejo Superior Geográfico con más de 3.000 servicios WMS de España.",
+        "search_tips": "Puedes consultar la Sede Electrónica del Catastro (DGC) para parcelario rústico/urbano o el IGN para ortofotos PNOA."
+    },
+    "euskadi": {
+        "name": "País Vasco",
+        "portal_name": "GeoEuskadi - Infraestructura de Datos Espaciales de Euskadi",
+        "portal_url": "https://www.geo.euskadi.eus",
+        "description": "Cartografía topográfica, ortofotos de máxima resolución, hidrología (URA) y catastro foral.",
+        "search_tips": "En País Vasco, busca los WMS de b5m (Gipuzkoa), Bizkaia o Álava para parcelario y curvas de nivel de 1m."
+    },
+    "colombia": {
+        "name": "Colombia",
+        "portal_name": "Geoportal IGAC & Datos Abiertos",
+        "portal_url": "https://geoportal.igac.gov.co",
+        "description": "Instituto Geográfico Agustín Codazzi (IGAC) y Ministerio de Ambiente (SIAC / IDEAM).",
+        "search_tips": "Para Bogotá consulta IDECA (ideca.gov.co) y para geología el SGC (sgc.gov.co)."
+    },
+    "mexico": {
+        "name": "México",
+        "portal_name": "INEGI - Instituto Nacional de Estadística y Geografía",
+        "portal_url": "https://www.inegi.org.mx/datosabiertos/",
+        "description": "Cartografía topográfica, hidrológica, edafológica y catastral de México.",
+        "search_tips": "Busca servicios OGC WMS de INEGI o el Geoportal de la Comisión Nacional del Agua (CONAGUA)."
+    },
+    "estados unidos": {
+        "name": "Estados Unidos",
+        "portal_name": "USGS The National Map & Data.gov",
+        "portal_url": "https://www.usgs.gov/programs/national-geospatial-program/national-map",
+        "description": "Servicios WMS oficiales de elevación 3DEP, topografía nacional e hidrografía NHD.",
+        "search_tips": "Para límites de propiedad consulta los servidores GIS de cada Condado (County GIS / Property Appraiser)."
+    },
+    "suecia": {
+        "name": "Suecia",
+        "portal_name": "Geodataportalen & Lantmäteriet",
+        "portal_url": "https://www.geodata.se",
+        "description": "Portal nacional de geodatos de Suecia (Lantmäteriet y SGU).",
+        "search_tips": "SGU (Sveriges Geologiska Undersökning) ofrece servicios WMS de geología y suelos (jordarter) de libre acceso."
+    },
+    "argentina": {
+        "name": "Argentina",
+        "portal_name": "IDERA - Infraestructura de Datos Espaciales de la República Argentina",
+        "portal_url": "https://www.idera.gob.ar",
+        "description": "Catálogo nacional de capas del IGN Argentina, IDECOR Córdoba, Arba Buenos Aires y Catastro provincial.",
+        "search_tips": "Para Córdoba utiliza el geoportal IDECOR (mapascordoba.gob.ar) que publica WMS abiertos."
+    },
+    "chile": {
+        "name": "Chile",
+        "portal_name": "IDE Chile - Infraestructura de Datos Geoespaciales",
+        "portal_url": "https://www.ide.cl",
+        "description": "Geoportal nacional con capas del IGM Chile, Ministerio de Bienes Nacionales y CIREN.",
+        "search_tips": "Para recursos hídricos consulta DGA y para catastro el Geoportal del SNIT."
+    },
+    "peru": {
+        "name": "Perú",
+        "portal_name": "IDEP & Geocatmin (INGEMMET)",
+        "portal_url": "https://geocatmin.ingemmet.gob.pe",
+        "description": "Infraestructura de Datos Espaciales del Perú y catastro minero/geológico oficial.",
+        "search_tips": "Para topografía nacional consulta IGN Perú y para catastro rural el MINAGRI."
+    },
+    "francia": {
+        "name": "Francia",
+        "portal_name": "Géoportail & IGN France",
+        "portal_url": "https://www.geoportail.gouv.fr",
+        "description": "Institut National de l'Information Géographique et Forestière (IGN) y BRGM.",
+        "search_tips": "IGN publica servicios WMS libres de parcelas catastrales (Cadastre) y ortofotos BD ORTHO."
+    },
+    "alemania": {
+        "name": "Alemania",
+        "portal_name": "Geoportal Deutschland (BKG)",
+        "portal_url": "https://www.geoportal.de",
+        "description": "Agencia Federal de Cartografía y Geodesia de Alemania (BKG).",
+        "search_tips": "Para catastro inmobiliario busca los servicios ALKIS de cada Bundesland (estado federado)."
+    },
+    "reino unido": {
+        "name": "Reino Unido",
+        "portal_name": "data.gov.uk & Ordnance Survey",
+        "portal_url": "https://osdatahub.os.uk",
+        "description": "Catálogo nacional de geodatos abiertos del gobierno británico y Ordnance Survey.",
+        "search_tips": "OS Data Hub ofrece API WMS de mapas topográficos detallados (OS Open Zoomstack)."
+    },
+    "canada": {
+        "name": "Canadá",
+        "portal_name": "Natural Resources Canada (GeoGratis / CanVec)",
+        "portal_url": "https://maps.canada.ca",
+        "description": "Geoportal del gobierno de Canadá con capas topográficas CanVec, hidrología y elevación.",
+        "search_tips": "CanVec publica WMS de infraestructura vial, curvas de nivel y masas hídricas."
+    },
+    "noruega": {
+        "name": "Noruega",
+        "portal_name": "Kartverket (Geonorge)",
+        "portal_url": "https://www.geonorge.no",
+        "description": "Portal nacional de geodatos de Noruega (Kartverket) con WMS abiertos de relieve, costa y parcelario.",
+        "search_tips": "Geonorge ofrece servicios WMS abiertos de mapas topográficos (Topografisk norgeskart)."
+    },
+    "finlandia": {
+        "name": "Finlandia",
+        "portal_name": "Maanmittauslaitos (National Land Survey of Finland)",
+        "portal_url": "https://www.maanmittauslaitos.fi/en/e-services/geodata-portal-paikkatietoikkuna",
+        "description": "Infraestructura de datos espaciales Paikkatietoikkuna con topografía, parcelas e hidrografía.",
+        "search_tips": "Paikkatietoikkuna integra más de 2.000 capas de organismos públicos finlandeses."
+    },
+    "dinamarca": {
+        "name": "Dinamarca",
+        "portal_name": "Datafordeler (Klimadatastyrelsen)",
+        "portal_url": "https://datafordeler.dk",
+        "description": "Plataforma oficial de distribución de datos geoespaciales y cartografía de Dinamarca.",
+        "search_tips": "Suministra servicios WMS de ortofotos Skraafoto y modelos digitales del terreno."
+    },
+    "italia": {
+        "name": "Italia",
+        "portal_name": "Geoportale Nazionale (Ministero dell'Ambiente)",
+        "portal_url": "http://www.pcn.minambiente.it/mattm/",
+        "description": "Portal cartográfico nacional de Italia con ortofotos, hidrografía y mapas IGM.",
+        "search_tips": "Para catastro inmobiliario regional consulta los geoportales de cada Regione (ej: Regione Lombardia o Lazio)."
+    },
+    "brasil": {
+        "name": "Brasil",
+        "portal_name": "INDE - Infraestrutura Nacional de Dados Espaciais (IBGE)",
+        "portal_url": "https://visualizador.inde.gov.br",
+        "description": "Portal geoespacial del Instituto Brasileiro de Geografia e Estatística (IBGE).",
+        "search_tips": "IBGE y ANA (Agência Nacional de Águas) disponen de servicios WMS abiertos para todo Brasil."
+    },
+    "japon": {
+        "name": "Japón",
+        "portal_name": "GSI - Geospatial Information Authority of Japan",
+        "portal_url": "https://www.gsi.go.jp",
+        "description": "Autoridad de Información Geoespacial de Japón con mapas base nacionales y ortofotos.",
+        "search_tips": "GSI Maps ofrece servicios de teselas y WMS para proyectos de ingeniería y topografía."
+    }
+}
+
 
 def get_canonical_geo_name(geo_key: str) -> str:
     """Devuelve el nombre oficial canónico legible de una clave geográfica."""
@@ -1197,6 +1363,91 @@ def search_wms_catalog(
         return filtered[:10]
 
     return []
+
+
+def build_smart_offline_response(
+    query: str,
+    detected_geos: List[str],
+    zone_disp: Optional[str] = None,
+    is_context_q: bool = False
+) -> str:
+    """
+    Construye una respuesta técnica, realista y orientada a la ingeniería para el modo sin API.
+    En lugar de dar un mensaje de error genérico, proporciona enlaces directos a Google con sintaxis
+    GIS WMS, enlaces al Geoportal oficial nacional y recomendaciones para cargarlo con el Inspector WMS.
+    """
+    target_k = detected_geos[0] if detected_geos else None
+    target_name = get_canonical_geo_name(target_k) if target_k else (zone_disp or "esta región")
+
+    # Construcción de consulta optimizada para Google Dorks (WMS / GetCapabilities)
+    clean_q = _normalize_text(query)
+    q_words = [w for w in clean_q.split() if w not in SPANISH_STOPWORDS]
+    thematic_str = " ".join(q_words) if q_words else query
+
+    norm_target = _normalize_text(target_name)
+    geo_tokens = set()
+    if detected_geos:
+        for g in detected_geos:
+            geo_tokens.add(g)
+            for term in GEO_LOCATIONS.get(g, []):
+                geo_tokens.update(_normalize_text(term).split())
+    if norm_target and norm_target != "esta region":
+        geo_tokens.update(norm_target.split())
+
+    thematic_only_words = [w for w in q_words if w not in geo_tokens]
+    thematic_clean_str = " ".join(thematic_only_words) if thematic_only_words else thematic_str
+
+    if norm_target in clean_q or not target_k:
+        google_query_term = f"{query} WMS GetCapabilities service"
+    else:
+        google_query_term = f"{target_name} {thematic_clean_str} WMS GetCapabilities service"
+
+    encoded_google_q = urllib.parse.quote_plus(google_query_term)
+    google_search_url = f"https://www.google.com/search?q={encoded_google_q}"
+
+    # Geoportal oficial si existe
+    portal = OFFICIAL_GEOPORTALS.get(target_k) if target_k else None
+
+    # Búsqueda de alternativas temáticas en el catálogo local
+    global_alternatives = search_wms_catalog(thematic_str, project_geo_fallback=None) if thematic_str else []
+
+    lines = [
+        f"### 🌐 Localizador Cartográfico Oficial: **{target_name}**\n",
+        f"Actualmente en la base de datos local no dispongo de la URL precargada para **'{query}'** en **{target_name}**, pero puedes obtener el servidor oficial en segundos con estos recursos directos:\n",
+        f"#### 1. 🔍 Búsqueda directa del servidor WMS en Google",
+        f"Haz clic en este enlace preparado técnicamente para localizar el endpoint WMS oficial en Google:",
+        f"👉 **[🔗 Buscar '{google_query_term}' en Google]({google_search_url})**\n"
+    ]
+
+    if portal:
+        lines.append(f"#### 2. 🏛️ Geoportal Nacional Oficial ({portal['portal_name']})")
+        lines.append(f"- **Web:** [{portal['portal_url']}]({portal['portal_url']})")
+        lines.append(f"- **Ámbito:** {portal['description']}")
+        lines.append(f"- 💡 **Tip para AutoCAD:** {portal['search_tips']}\n")
+
+    lines.append("#### 3. ⚡ ¿Cómo insertarlo en tu plano CAD?")
+    lines.append("1. Copia la URL del servicio WMS que encuentres en Google o en el Geoportal (la que contiene `.../wms` o `.../WMSServer`).")
+    lines.append("2. Dirígete a la pestaña de arriba: **'🔍 Inspeccionar URL Externa (GetCapabilities)'**.")
+    lines.append("3. Pega la URL y pulsa **'Inspeccionar Servidor en Vivo'**: el sistema leerá automáticamente todas las capas publicadas por la entidad y te creará el botón interactivo para descargarlo e insertarlo en AutoCAD con archivo `.tfw` georreferenciado.\n")
+
+    lines.append("---")
+    lines.append("💡 **Sobre el uso de IA (¡Es 100% GRATIS, no necesitas cuenta de pago!):**")
+    lines.append("No requieres ninguna cuenta de pago ni tarjeta bancaria para usar IA en este asistente:")
+    lines.append("- **Google Gemini:** Es **100% gratuito** con tu cuenta de Gmail en [Google AI Studio](https://aistudio.google.com/) (generas tu API Key en 30 segundos sin tarjeta bancaria).")
+    lines.append("- **Groq Cloud:** Es **100% gratuito** y ultra-rápido en [console.groq.com](https://console.groq.com/) (modelos Llama-3 de código abierto sin tarjeta).")
+    lines.append("Con cualquiera de las dos, el asistente busca e inserta los WMS mundiales automáticamente sin coste alguno.")
+
+    if global_alternatives:
+        lines.append("\n---\n📚 **Capas oficiales verificadas de esta temática disponibles en otros ámbitos como referencia:**\n")
+        for m in global_alternatives[:3]:
+            lines.append(f"### {m['name']}")
+            lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
+            lines.append(f"- **Descripción:** {m['description']}")
+            lines.append(f"- **URL Base:** `{m['url']}`")
+            lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
+            lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
+
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------------------
@@ -2473,32 +2724,12 @@ def render_wms_assistant_content(
                             bot_response = "\n".join(lines)
                         else:
                             detected_geos = _detect_query_geo(query_to_run)
-                            fallback_global = []
-                            if is_context_q and not detected_geos:
-                                fallback_global = search_wms_catalog(query_to_run, project_geo_fallback=None)
-
-                            if detected_geos:
-                                target_loc = get_canonical_geo_name(detected_geos[0])
-                            elif zone_disp:
-                                target_loc = zone_disp
-                            else:
-                                target_loc = "esta región"
-                            lines = [
-                                f"ℹ️ **No dispongo de un servicio WMS local específico de esta temática para {target_loc} en el catálogo offline.**\n\n"
-                                f"💡 **¿Cómo obtener capas oficiales para {target_loc}?**\n"
-                                f"1. **🤖 Activa el Asistente con IA:** Pega tu clave de API arriba (**Google Gemini**, **OpenAI**, **Claude** o **Groq**) para que el bot consulte en vivo los servidores oficiales de **{target_loc}**.\n"
-                                f"2. **🛰️ Cobertura Global:** Puedes activar **Google Satélite**, **Esri World Imagery** o **OpenStreetMap** en la barra lateral para visualizar {target_loc} en tu plano CAD."
-                            ]
-                            if fallback_global:
-                                lines.append("\n\n---\n📚 **Servicios oficiales destacados de esta temática disponibles en el catálogo:**\n")
-                                for m in fallback_global[:3]:
-                                    lines.append(f"### {m['name']}")
-                                    lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
-                                    lines.append(f"- **Descripción:** {m['description']}")
-                                    lines.append(f"- **URL Base:** `{m['url']}`")
-                                    lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
-                                    lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
-                            bot_response = "\n".join(lines)
+                            bot_response = build_smart_offline_response(
+                                query=query_to_run,
+                                detected_geos=detected_geos,
+                                zone_disp=zone_disp,
+                                is_context_q=is_context_q
+                            )
                         _parse_and_render_wms_actions(bot_response)
 
                 st.session_state["wms_chat_history"].append({"role": "model", "content": bot_response})
