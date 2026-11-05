@@ -1593,9 +1593,6 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 # Catálogo base por defecto (se auto-actualiza dinámicamente en tiempo real con la API en vivo de cada proveedor)
 PROVIDER_MODELS_CATALOG = {
     "gemini": [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
@@ -1630,7 +1627,7 @@ PROVIDER_MODELS_CATALOG = {
     ],
     "openrouter": [
         "anthropic/claude-3.7-sonnet",
-        "google/gemini-2.5-flash",
+        "google/gemini-3.8-flash",
         "deepseek/deepseek-r1",
         "meta-llama/llama-3.3-70b-instruct",
     ],
@@ -1705,7 +1702,9 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
     cached_key = st.session_state.get("_cached_gemini_api_key")
     cached_models = st.session_state.get("_cached_gemini_models")
     if not force_refresh and cached_key == clean_key and cached_models:
-        return cached_models, None
+        # Invalidar caché si contenía modelos antiguos descontinuados (ej: 2.5, 1.5)
+        if not any(any(old in str(m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]) for m in cached_models):
+            return cached_models, None
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
@@ -1725,8 +1724,21 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
                         models_found.append(clean_name)
 
             if models_found:
+                # Asegurar presencia del modelo insignia actual gemini-3.8-flash
+                if "gemini-3.8-flash" not in models_found:
+                    models_found.append("gemini-3.8-flash")
+
+                # Purgar modelos descontinuados de la API de Google AI Studio (2.5, 2.0, 1.5, 1.0)
+                modern_models = [m for m in models_found if not any(old in m.lower() for old in ["2.5", "2.0", "1.5", "1.0"])]
+                if modern_models:
+                    models_found = modern_models
+
                 def _version_score(name: str) -> float:
                     n = name.lower()
+                    if "gemini-3.8-flash" in n:
+                        return 100.0
+                    if any(old in n for old in ["2.5", "2.0", "1.5", "1.0"]):
+                        return -100.0
                     score = 0.0
                     match = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
                     if match:
@@ -1767,14 +1779,11 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
         pass
 
     fallback = [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.1-pro-preview",
-        "gemini-4-argon"
+        "gemini-4-argon",
     ]
     return fallback, None
 
@@ -1856,7 +1865,10 @@ def discover_provider_models(
     if not force_refresh:
         cached = st.session_state.get(cache_key)
         if cached:
-            return cached
+            if provider == "gemini" and any(any(old in str(m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]) for m in cached):
+                pass
+            else:
+                return cached
 
     models_found = []
 
@@ -2278,15 +2290,21 @@ def query_gemini_wms(
     contents.append({"role": "user", "parts": [{"text": prompt}]})
 
     if custom_model and custom_model.strip():
-        models_to_try = [custom_model.strip()]
+        cm = custom_model.strip()
+        if any(old in cm.lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
+            models_to_try = [cm, "gemini-3.8-flash"]
+            is_single_choice = False
+        else:
+            models_to_try = [cm]
+            is_single_choice = True
         key_error = None
     else:
         models_to_try, key_error = discover_available_gemini_models(clean_key)
         if key_error and not models_to_try:
             return {"success": False, "text": key_error}
+        is_single_choice = len(models_to_try) == 1
 
     last_error = ""
-    is_single_choice = len(models_to_try) == 1
 
     for model_name in models_to_try:
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
@@ -2310,6 +2328,9 @@ def query_gemini_wms(
                 if text_out:
                     st.session_state["wms_active_gemini_model"] = model_name
                     st.session_state["wms_active_ai_provider"] = "Google Gemini"
+                    st.session_state["wms_chosen_model_gemini"] = model_name
+                    st.session_state["sb_wms_model_choice_gemini"] = model_name
+                    st.session_state["wms_active_selected_model"] = model_name
                     return {"success": True, "text": text_out, "model": model_name, "provider": "Google Gemini"}
             elif resp.status_code == 400:
                 err_json = resp.json().get("error", {})
@@ -2331,6 +2352,32 @@ def query_gemini_wms(
                 except Exception:
                     pass
                 err_msg = err_json.get("message", "")
+
+                # Auto-recuperación si Google AI Studio responde que el modelo está descontinuado
+                suggested_m = None
+                sug_match = re.search(r"use models/([a-zA-Z0-9\.\-_]+)", err_msg)
+                if sug_match:
+                    suggested_m = sug_match.group(1).strip()
+                elif model_name != "gemini-3.8-flash":
+                    suggested_m = "gemini-3.8-flash"
+
+                if suggested_m and suggested_m != model_name:
+                    retry_ep = f"https://generativelanguage.googleapis.com/v1beta/models/{suggested_m}:generateContent?key={clean_key}"
+                    try:
+                        r_retry = requests.post(retry_ep, headers={"Content-Type": "application/json"}, json=payload, timeout=18)
+                        if r_retry.status_code == 200:
+                            cand = r_retry.json().get("candidates", [{}])[0]
+                            t_out = cand.get("content", {}).get("parts", [{}])[0].get("text", "")
+                            if t_out:
+                                st.session_state["wms_active_gemini_model"] = suggested_m
+                                st.session_state["wms_active_ai_provider"] = "Google Gemini"
+                                st.session_state["wms_chosen_model_gemini"] = suggested_m
+                                st.session_state["sb_wms_model_choice_gemini"] = suggested_m
+                                st.session_state["wms_active_selected_model"] = suggested_m
+                                return {"success": True, "text": t_out, "model": suggested_m, "provider": "Google Gemini"}
+                    except Exception:
+                        pass
+
                 last_error = f"El modelo '{model_name}' no existe o no está habilitado para esta clave en Google AI Studio ({err_msg or '404 Not Found'})."
                 if is_single_choice:
                     break
@@ -2595,6 +2642,17 @@ def render_wms_assistant_content(
             # Mantener estado independiente por proveedor para no mezclar nombres
             prov_state_key = f"wms_chosen_model_{effective_prov}"
             prev_m = st.session_state.get(prov_state_key, base_models[0])
+            
+            # Sanitización de modelos descontinuados para Google Gemini
+            sb_model_key = f"sb_wms_model_choice_{effective_prov}"
+            if effective_prov == "gemini":
+                cur_sb = st.session_state.get(sb_model_key)
+                if cur_sb and (cur_sb not in model_choices or any(old in str(cur_sb).lower() for old in ["2.5", "2.0", "1.5", "1.0"])):
+                    st.session_state.pop(sb_model_key, None)
+                if prev_m and any(old in str(prev_m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
+                    prev_m = base_models[0]
+                    st.session_state[prov_state_key] = prev_m
+
             if prev_m in base_models:
                 m_idx = base_models.index(prev_m)
             elif prev_m == "custom_input":
