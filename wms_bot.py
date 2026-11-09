@@ -2517,41 +2517,7 @@ def render_wms_assistant_content(
             }
         ]
 
-    # Banner del personaje GeoBot y botón de cerrar
-    col_banner_main, col_banner_close = st.columns([5, 1])
-    with col_banner_main:
-        avatar_b64 = get_bot_avatar_b64()
-        avatar_tag = (
-            f'<img src="data:image/png;base64,{avatar_b64}" style="width: 68px; height: 68px; object-fit: contain; filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.65)); animation: avatarLevitate 3.5s ease-in-out infinite;" />'
-            if avatar_b64 else '<span style="font-size: 38px;">🤖</span>'
-        )
-        st.markdown(f"""
-        <style>
-        @keyframes avatarLevitate {{
-            0% {{ transform: translateY(0px) rotate(0deg); }}
-            50% {{ transform: translateY(-6px) rotate(1.5deg); }}
-            100% {{ transform: translateY(0px) rotate(0deg); }}
-        }}
-        </style>
-        <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 8px; background: linear-gradient(135deg, rgba(2, 132, 199, 0.18) 0%, rgba(15, 23, 42, 0.7) 100%); padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(56, 189, 248, 0.35);">
-            {avatar_tag}
-            <div>
-                <div style="font-size: 20px; font-weight: 800; color: #f8fafc; letter-spacing: -0.3px; display: flex; align-items: center; gap: 8px;">
-                    GeoBot WMS <span style="font-size: 11px; background: linear-gradient(135deg, #0284c7, #3b82f6); color: white; padding: 2px 8px; border-radius: 20px; font-weight: 700;">Mundial & IA</span>
-                </div>
-                <div style="color: #94a3b8; font-size: 12.5px; margin-top: 2px;">
-                    Asesor cartográfico para extraer ortofotos y capas oficiales para AutoCAD
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_banner_close:
-        if st.button("✖️ Cerrar", key="btn_close_modal_geo", use_container_width=True, help="Cerrar ventana del Asistente"):
-            st.session_state["wms_dialog_is_open"] = False
-            st.rerun()
-
-    # Barra informativa de contexto actual (lo que el usuario está viendo)
+    # Barra informativa de contexto actual (lo que el usuario está viendo en su plano)
     epsg_disp = str(active_epsg or st.session_state.get("wms_active_epsg", "25830"))
     file_disp = uploaded_filename or st.session_state.get("wms_uploaded_filename", "Ninguno (Dibujando en visor)")
     serv_disp = current_service_name or st.session_state.get("wms_current_service_name", "Ortofoto PNOA (IGN)")
@@ -2565,204 +2531,60 @@ def render_wms_assistant_content(
         uploaded_filename=file_disp
     )
 
-    zone_badge = f'<div>🌍 <b>Zona detectada:</b> <span style="color: #f59e0b; font-weight: 600;">{zone_disp}</span></div>' if zone_disp else ''
+    zone_badge = f'<div>🌍 <span style="color: #f59e0b; font-weight: 600;">{zone_disp}</span></div>' if zone_disp else ''
     st.markdown(f"""
-    <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 8px 14px; margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; font-size: 12.5px;">
-        <div>📍 <b>Proyección (CRS):</b> <code style="color: #38bdf8; font-weight: 600;">EPSG:{epsg_disp}</code></div>
-        <div>📁 <b>Plano cargado:</b> <span style="color: #cbd5e1;">{file_disp}</span></div>
+    <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 5px 8px; margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11px; color: #cbd5e1;">
+        <div>📍 <code style="color: #38bdf8; font-weight: 600;">EPSG:{epsg_disp}</code></div>
+        <div>📁 <span style="color: #94a3b8;">{file_disp[:20]}</span></div>
         {zone_badge}
-        <div>🛰️ <b>Servicio actual:</b> <span style="color: #34d399; font-weight: 500;">{serv_disp}</span></div>
+        <div>🛰️ <span style="color: #34d399; font-weight: 500;">{serv_disp[:24]}</span></div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Configuración de Clave de IA y Selector Visible de Modelo
-    col_api, col_badge = st.columns([3, 2])
-    with col_api:
-        user_key = st.text_input(
-            "🔑 API Key de tu servicio de IA (Google Gemini, OpenAI, Claude, Groq, etc.):",
-            value=st.session_state.get("wms_bot_api_key", ""),
-            type="password",
-            placeholder="AIzaSy... (Gemini), sk-... (OpenAI), sk-ant-... (Claude), gsk_... (Groq)",
-            help="Soporta cualquier servicio de IA del mundo. Si la dejas vacía, el bot opera en Modo Local Verificado 100% gratis y offline."
-        )
-        st.session_state["wms_bot_api_key"] = user_key.strip()
-
-    # Determinar proveedor activo
-    has_key = bool(user_key.strip())
+    user_key = st.session_state.get("wms_bot_api_key", "").strip()
+    has_key = bool(user_key)
     cur_p_setting = st.session_state.get("wms_selected_ai_provider", "auto")
     effective_prov = detect_ai_provider(user_key, user_selected=cur_p_setting)
+    disp_m = st.session_state.get("wms_active_selected_model", "gemini-3.8-flash")
 
-    # Si hay clave o se configuró servidor personalizado, mostrar selectores directos
-    active_model_name = "Auto"
-    if has_key or cur_p_setting == "custom":
-        c_prov, c_model = st.columns([1.1, 1.9])
-        with c_prov:
-            provider_options = [
-                ("auto", f"🔍 Auto-detectar ({effective_prov.capitalize() if effective_prov != 'none' else 'Por clave'})"),
-                ("gemini", "Google Gemini"),
-                ("openai", "OpenAI (ChatGPT)"),
-                ("anthropic", "Anthropic Claude"),
-                ("groq", "Groq (Ultra-rápido)"),
-                ("deepseek", "DeepSeek"),
-                ("openrouter", "OpenRouter (+300 modelos)"),
-                ("mistral", "Mistral AI"),
-                ("perplexity", "Perplexity AI"),
-                ("custom", "⚙️ Servidor Local / Custom (Ollama)")
-            ]
-            prov_keys = [p[0] for p in provider_options]
-            prov_labels = [p[1] for p in provider_options]
-            cur_p_idx = prov_keys.index(cur_p_setting) if cur_p_setting in prov_keys else 0
-            sel_label = st.selectbox("🤖 Proveedor:", options=prov_labels, index=cur_p_idx, key="sb_wms_prov_selector")
-            chosen_prov = prov_keys[prov_labels.index(sel_label)]
-            st.session_state["wms_selected_ai_provider"] = chosen_prov
-            if chosen_prov != "auto":
-                effective_prov = chosen_prov
-
-        with c_model:
-            # Botón de refrescar en vivo la lista de modelos desde la cuenta del usuario
-            c_header_m, c_btn_ref = st.columns([3.5, 1.5])
-            with c_btn_ref:
-                if st.button("🔄 Actualizar", key=f"btn_ref_m_{effective_prov}", help="Consultar a la API en vivo los modelos disponibles actualmente para tu clave"):
-                    for k in list(st.session_state.keys()):
-                        if k.startswith("_cached_"):
-                            st.session_state.pop(k, None)
-                    st.rerun()
-
-            # Auto-descubrimiento en tiempo real para TODOS los proveedores (Gemini, OpenAI, Claude, Groq, DeepSeek, etc.)
-            cust_url_active = st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1")
-            base_models = discover_provider_models(
-                provider=effective_prov,
-                api_key=user_key,
-                custom_url=cust_url_active,
-                force_refresh=False
-            )
-
-            model_choices = list(base_models) + ["✏️ Escribir otro modelo personalizado..."]
-            
-            # Mantener estado independiente por proveedor para no mezclar nombres
-            prov_state_key = f"wms_chosen_model_{effective_prov}"
-            prev_m = st.session_state.get(prov_state_key, base_models[0])
-            
-            # Sanitización de modelos descontinuados para Google Gemini
-            sb_model_key = f"sb_wms_model_choice_{effective_prov}"
-            if effective_prov == "gemini":
-                cur_sb = st.session_state.get(sb_model_key)
-                if cur_sb and (cur_sb not in model_choices or any(old in str(cur_sb).lower() for old in ["2.5", "2.0", "1.5", "1.0"])):
-                    st.session_state.pop(sb_model_key, None)
-                if prev_m and any(old in str(prev_m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
-                    prev_m = base_models[0]
-                    st.session_state[prov_state_key] = prev_m
-
-            if prev_m in base_models:
-                m_idx = base_models.index(prev_m)
-            elif prev_m == "custom_input":
-                m_idx = len(model_choices) - 1
-            else:
-                m_idx = 0
-
-            with c_header_m:
-                st.caption(f"✨ {len(base_models)} modelos disponibles en vivo para {effective_prov.capitalize()}")
-
-            sel_m_choice = st.selectbox(
-                "🧠 Modelo a utilizar:",
-                options=model_choices,
-                index=m_idx,
-                key=f"sb_wms_model_choice_{effective_prov}"
-            )
-
-            if sel_m_choice == "✏️ Escribir otro modelo personalizado...":
-                st.session_state[prov_state_key] = "custom_input"
-                custom_m_in = st.text_input(
-                    "Nombre exacto del modelo:",
-                    value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
-                    placeholder="Ej: gemini-3.5-flash, gpt-4o, claude-3-5-sonnet, llama-3.3-70b-versatile",
-                    help="Introduce el identificador exacto del modelo según la API del proveedor."
-                )
-                active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
-                st.session_state[f"wms_custom_name_{effective_prov}"] = active_model_name
-            else:
-                active_model_name = sel_m_choice
-                st.session_state[prov_state_key] = active_model_name
-
-            st.session_state["wms_active_selected_model"] = active_model_name
-
-        if effective_prov == "custom":
-            cust_url_in = st.text_input(
-                "URL Base del Servidor Local (compatible OpenAI):",
-                value=st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1"),
-                placeholder="http://localhost:11434/v1 o https://tu-servidor/v1",
-                help="URL de tu servidor local o en la nube (ej: Ollama, vLLM, LM Studio, Azure OpenAI)."
-            )
-            st.session_state["wms_custom_ai_url"] = cust_url_in.strip()
-    else:
-        with st.expander("⚙️ ¿Quieres conectar un Servidor Local sin clave? (Ollama, LM Studio)", expanded=False):
-            if st.button("🔌 Conectar Servidor Local Ollama (localhost:11434)", key="btn_activate_local_ollama"):
-                st.session_state["wms_selected_ai_provider"] = "custom"
-                st.rerun()
-
-    with col_badge:
-        if has_key or cur_p_setting == "custom":
-            prov_titles = {
-                "openai": "OpenAI (ChatGPT)",
-                "anthropic": "Anthropic Claude",
-                "gemini": "Google Gemini",
-                "openrouter": "OpenRouter",
-                "deepseek": "DeepSeek",
-                "groq": "Groq",
-                "mistral": "Mistral AI",
-                "perplexity": "Perplexity AI",
-                "custom": "Servidor Local / Custom"
-            }
-            p_title = prov_titles.get(effective_prov, effective_prov.upper())
-            disp_m = st.session_state.get("wms_active_selected_model") or active_model_name
-            st.markdown(f"""
-            <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
-                <div style="font-weight: 600; color: #34d399; font-size: 12.5px;">✨ Modo IA {p_title} Activado</div>
-                <div style="color: #cbd5e1; font-size: 11px;">Modelo actual: <b style="color: #f8fafc;">{disp_m}</b></div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="background: rgba(56, 189, 248, 0.12); border: 1px solid #38bdf8; border-radius: 8px; padding: 8px 12px; margin-top: 6px;">
-                <div style="font-weight: 600; color: #38bdf8; font-size: 12.5px;">🟢 Modo Local Verificado</div>
-                <div style="color: #94a3b8; font-size: 11px;">Búsqueda oficial offline (100% gratuita, sin clave ni registros).</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    # Pestañas del Asistente
-    tab_chat, tab_catalog, tab_inspect = st.tabs([
-        "💬 Chat con el Asistente",
-        "📚 Directorio Mundial de WMS",
-        "🔍 Inspeccionar URL Externa (GetCapabilities)"
+    # Pestañas compactas del Asistente en ventana flotante
+    tab_chat, tab_catalog, tab_inspect, tab_config = st.tabs([
+        "💬 Chat",
+        "📚 Directorio",
+        "🔍 Inspeccionar",
+        "⚙️ Ajustes"
     ])
 
     # ------------------------------------------------------------------------------
     # PESTAÑA 1: CHAT CON EL ASISTENTE
     # ------------------------------------------------------------------------------
     with tab_chat:
-        col_quick_lbl, col_quick_clear = st.columns([5, 1])
-        with col_quick_lbl:
-            st.markdown("<p style='font-size: 12px; color: #94a3b8; margin: 0;'>💡 <b>Consultas frecuentes rápidas:</b></p>", unsafe_allow_html=True)
-        with col_quick_clear:
-            if st.button("🗑️ Limpiar", key="btn_clear_chat_modal", help="Reiniciar la conversación del bot"):
+        col_st_lbl, col_st_clear = st.columns([5, 1])
+        with col_st_lbl:
+            if has_key or cur_p_setting == "custom":
+                eff_name = effective_prov.capitalize()
+                st.markdown(f"<div style='font-size: 11.5px; color: #34d399; font-weight: 600;'>✨ Modo IA: <span style='color: #f8fafc;'>{eff_name} ({disp_m})</span></div>", unsafe_allow_html=True)
+            else:
+                st.markdown("<div style='font-size: 11.5px; color: #38bdf8; font-weight: 600;'>🟢 Modo Catálogo Local (Offline y Gratis)</div>", unsafe_allow_html=True)
+        with col_st_clear:
+            if st.button("🗑️", key="btn_clear_chat_modal", help="Reiniciar conversación"):
                 st.session_state["wms_chat_history"] = []
                 st.rerun(scope="fragment")
 
-        chip_cols = st.columns(5)
-        quick_prompts = [
-            ("🏛️ Catastro", "Necesito la cartografía del Catastro para ver parcelas y linderos"),
-            ("🌊 Zonas Inundables", "Busco las zonas inundables de periodo de retorno 100 y 500 años de MITECO"),
-            ("⛰️ Curvas de Nivel", "Necesito curvas de nivel y mapa topográfico ráster MTN"),
-            ("🌎 América Latina", "Qué servicios WMS oficiales hay disponibles para Colombia, México o Chile"),
-            ("🌐 OpenStreetMap", "Necesito una capa base mundial de calles y carreteras con OpenStreetMap")
-        ]
+        col_q1, col_q2 = st.columns(2)
         selected_prompt = None
-        for i, (label, prompt_text) in enumerate(quick_prompts):
-            with chip_cols[i]:
-                if st.button(label, key=f"chip_modal_btn_{i}", use_container_width=True):
-                    selected_prompt = prompt_text
+        with col_q1:
+            if st.button("🏛️ Catastro / Parcelas", key="chip_modal_btn_0", use_container_width=True):
+                selected_prompt = "Necesito la cartografía del Catastro para ver parcelas y linderos"
+            if st.button("⛰️ Curvas de Nivel MTN", key="chip_modal_btn_2", use_container_width=True):
+                selected_prompt = "Necesito curvas de nivel y mapa topográfico ráster MTN"
+        with col_q2:
+            if st.button("🌊 Zonas Inundables", key="chip_modal_btn_1", use_container_width=True):
+                selected_prompt = "Busco las zonas inundables de periodo de retorno 100 y 500 años de MITECO"
+            if st.button("🌐 Calles / OpenStreetMap", key="chip_modal_btn_4", use_container_width=True):
+                selected_prompt = "Necesito una capa base mundial de calles y carreteras con OpenStreetMap"
 
-        chat_box = st.container(height=360)
+        chat_box = st.container(height=310)
         bot_avatar_img = get_bot_avatar_path()
         with chat_box:
             for msg in st.session_state["wms_chat_history"]:
@@ -2776,7 +2598,7 @@ def render_wms_assistant_content(
 
             new_turn_container = st.container()
 
-        user_input = st.chat_input("Escribe tu pregunta sobre WMS, capas oficiales o tu plano CAD...")
+        user_input = st.chat_input("Escribe tu pregunta sobre capas WMS o tu plano...")
 
         query_to_run = selected_prompt or user_input
         if query_to_run:
@@ -2867,27 +2689,26 @@ def render_wms_assistant_content(
     # PESTAÑA 2: DIRECTORIO MUNDIAL DE SERVICIOS
     # ------------------------------------------------------------------------------
     with tab_catalog:
-        col_f1, col_f2, col_f3 = st.columns([2, 2, 3])
+        col_f1, col_f2 = st.columns(2)
         categories = ["Todas las categorías"] + sorted(list({item["category"] for item in WMS_DATABASE}))
         with col_f1:
-            sel_cat = st.selectbox("Filtrar por categoría:", options=categories, key="dir_modal_cat_filter")
+            sel_cat = st.selectbox("Categoría:", options=categories, key="dir_modal_cat_filter")
         with col_f2:
             regions = [
                 "Todas las regiones", "Global", "España", "América", "Colombia", "Bogotá", "Medellín", "Cali", "México", "Chile", "Argentina", "Perú",
                 "Estados Unidos", "Canadá", "Europa", "Francia", "Alemania", "Portugal", "Australia"
             ]
-            sel_reg = st.selectbox("Filtrar por región / país:", options=regions, key="dir_modal_reg_filter")
-        with col_f3:
-            search_txt = st.text_input("Buscar por palabra clave:", placeholder="Ej: parcelas, lidar, rio, usgs, igac...", key="dir_modal_search_txt")
+            sel_reg = st.selectbox("Región / País:", options=regions, key="dir_modal_reg_filter")
+        search_txt = st.text_input("Buscar por palabra clave:", placeholder="Ej: parcelas, lidar, rio, usgs...", key="dir_modal_search_txt")
 
         dir_results = search_wms_catalog(search_txt, category_filter=sel_cat, region_filter=sel_reg)
         st.caption(f"Mostrando **{len(dir_results)}** servicios cartográficos oficiales verificados:")
 
         for srv in dir_results:
             with st.container():
-                c_info, c_action = st.columns([4, 1])
+                c_info, c_action = st.columns([3.5, 1.2])
                 with c_info:
-                    st.markdown(f"**{srv['name']}** — <span style='color: #38bdf8; font-size: 12px;'>{srv['category']} ({srv['region']})</span>", unsafe_allow_html=True)
+                    st.markdown(f"**{srv['name']}** — <span style='color: #38bdf8; font-size: 11px;'>{srv['category']} ({srv['region']})</span>", unsafe_allow_html=True)
                     st.caption(srv["description"])
                     st.code(f"URL: {srv['url']}\nCapa: {srv['default_layer']}", language="text")
                 with c_action:
@@ -2900,16 +2721,13 @@ def render_wms_assistant_content(
     # PESTAÑA 3: INSPECTOR DE URL EXTERNA (GETCAPABILITIES EN VIVO)
     # ------------------------------------------------------------------------------
     with tab_inspect:
-        st.markdown("""
-        Pega cualquier dirección de un servidor WMS externo del mundo (nacional, autonómico, municipal o extranjero).
-        El inspector comprobará si responde y extraerá el listado completo de capas publicadas y sistemas de proyección (EPSG).
-        """)
+        st.markdown("<p style='font-size: 12px; color: #cbd5e1;'>Pega la URL de cualquier servidor WMS externo para inspeccionar capas y EPSG soportados:</p>", unsafe_allow_html=True)
         inspect_url = st.text_input(
             "URL del servidor WMS a inspeccionar:",
             placeholder="https://servidor-geoportal.com/.../wms",
             key="inspector_modal_wms_input"
         )
-        if st.button("🔍 Inspeccionar Servidor en Vivo", key="btn_modal_run_inspector", type="primary"):
+        if st.button("🔍 Inspeccionar Servidor en Vivo", key="btn_modal_run_inspector", type="primary", use_container_width=True):
             if inspect_url:
                 with st.spinner("Consultando GetCapabilities al servidor..."):
                     report = inspect_wms_live(inspect_url)
@@ -2920,7 +2738,7 @@ def render_wms_assistant_content(
 
                         st.write(f"📋 **Capas publicadas detectadas ({len(report['layers'])}):**")
                         for lyr in report["layers"][:25]:
-                            col_l_name, col_l_btn = st.columns([4, 1])
+                            col_l_name, col_l_btn = st.columns([3.5, 1.2])
                             with col_l_name:
                                 st.markdown(f"• **`{lyr['name']}`** : {lyr['title']}")
                             with col_l_btn:
@@ -2938,6 +2756,113 @@ def render_wms_assistant_content(
             else:
                 st.warning("Por favor, introduce una URL para inspeccionar.")
 
+    # ------------------------------------------------------------------------------
+    # PESTAÑA 4: AJUSTES Y CONFIGURACIÓN DE IA
+    # ------------------------------------------------------------------------------
+    with tab_config:
+        st.markdown("<p style='font-size: 13px; font-weight: 700; color: #f8fafc; margin-bottom: 2px;'>⚙️ Configuración del Motor de IA</p>", unsafe_allow_html=True)
+        user_key_in = st.text_input(
+            "🔑 API Key de tu servicio de IA:",
+            value=st.session_state.get("wms_bot_api_key", ""),
+            type="password",
+            placeholder="AIzaSy... (Gemini), sk-... (OpenAI), gsk_... (Groq)",
+            help="Soporta cualquier servicio de IA del mundo. Si la dejas vacía, el bot opera en Modo Local Verificado 100% gratis y offline."
+        )
+        st.session_state["wms_bot_api_key"] = user_key_in.strip()
+
+        c_prov, c_model = st.columns([1, 1.4])
+        with c_prov:
+            provider_options = [
+                ("auto", f"🔍 Auto ({effective_prov.capitalize() if effective_prov != 'none' else 'Por clave'})"),
+                ("gemini", "Google Gemini"),
+                ("openai", "OpenAI (ChatGPT)"),
+                ("anthropic", "Anthropic Claude"),
+                ("groq", "Groq (Ultra-rápido)"),
+                ("deepseek", "DeepSeek"),
+                ("openrouter", "OpenRouter"),
+                ("mistral", "Mistral AI"),
+                ("perplexity", "Perplexity AI"),
+                ("custom", "⚙️ Servidor Local (Ollama)")
+            ]
+            prov_keys = [p[0] for p in provider_options]
+            prov_labels = [p[1] for p in provider_options]
+            cur_p_idx = prov_keys.index(cur_p_setting) if cur_p_setting in prov_keys else 0
+            sel_label = st.selectbox("Proveedor:", options=prov_labels, index=cur_p_idx, key="sb_wms_prov_selector")
+            chosen_prov = prov_keys[prov_labels.index(sel_label)]
+            st.session_state["wms_selected_ai_provider"] = chosen_prov
+            if chosen_prov != "auto":
+                effective_prov = chosen_prov
+
+        with c_model:
+            cust_url_active = st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1")
+            base_models = discover_provider_models(
+                provider=effective_prov,
+                api_key=user_key_in.strip(),
+                custom_url=cust_url_active,
+                force_refresh=False
+            )
+            model_choices = list(base_models) + ["✏️ Personalizado..."]
+
+            prov_state_key = f"wms_chosen_model_{effective_prov}"
+            prev_m = st.session_state.get(prov_state_key, base_models[0])
+
+            sb_model_key = f"sb_wms_model_choice_{effective_prov}"
+            if effective_prov == "gemini":
+                cur_sb = st.session_state.get(sb_model_key)
+                if cur_sb and (cur_sb not in model_choices or any(old in str(cur_sb).lower() for old in ["2.5", "2.0", "1.5", "1.0"])):
+                    st.session_state.pop(sb_model_key, None)
+                if prev_m and any(old in str(prev_m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
+                    prev_m = base_models[0]
+                    st.session_state[prov_state_key] = prev_m
+
+            if prev_m in base_models:
+                m_idx = base_models.index(prev_m)
+            elif prev_m == "custom_input":
+                m_idx = len(model_choices) - 1
+            else:
+                m_idx = 0
+
+            sel_m_choice = st.selectbox(
+                "Modelo:",
+                options=model_choices,
+                index=m_idx,
+                key=f"sb_wms_model_choice_{effective_prov}"
+            )
+
+            if sel_m_choice == "✏️ Personalizado...":
+                st.session_state[prov_state_key] = "custom_input"
+                custom_m_in = st.text_input(
+                    "Nombre exacto:",
+                    value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
+                    placeholder="Ej: gemini-3.8-flash, gpt-4o"
+                )
+                active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
+                st.session_state[f"wms_custom_name_{effective_prov}"] = active_model_name
+            else:
+                active_model_name = sel_m_choice
+                st.session_state[prov_state_key] = active_model_name
+
+            st.session_state["wms_active_selected_model"] = active_model_name
+
+        if st.button("🔄 Actualizar lista de modelos en vivo", key=f"btn_ref_m_{effective_prov}", use_container_width=True):
+            for k in list(st.session_state.keys()):
+                if k.startswith("_cached_"):
+                    st.session_state.pop(k, None)
+            st.rerun()
+
+        if effective_prov == "custom":
+            cust_url_in = st.text_input(
+                "URL Base Servidor Local:",
+                value=st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1"),
+                placeholder="http://localhost:11434/v1"
+            )
+            st.session_state["wms_custom_ai_url"] = cust_url_in.strip()
+        else:
+            with st.expander("🔌 Conectar Servidor Local (Ollama / LM Studio)", expanded=False):
+                if st.button("Activar Ollama (localhost:11434)", key="btn_activate_local_ollama", use_container_width=True):
+                    st.session_state["wms_selected_ai_provider"] = "custom"
+                    st.rerun()
+
 
 # --------------------------------------------------------------------------------------
 # 6. DIÁLOGO MODAL NATIVO (@st.dialog) Y BOTÓN FLOTANTE EN ESQUINA INFERIOR DERECHA
@@ -2948,7 +2873,7 @@ def _on_wms_dialog_dismiss():
 
 if hasattr(st, "dialog"):
     try:
-        @st.dialog("🤖 GeoBot WMS - Asistente Cartográfico Oficial e Inteligente", width="large", on_dismiss=_on_wms_dialog_dismiss)
+        @st.dialog("🤖 GeoBot WMS", on_dismiss=_on_wms_dialog_dismiss)
         def _wms_assistant_dialog_view(active_epsg=None, current_service_name=None, uploaded_filename=None):
             render_wms_assistant_content(
                 active_epsg=active_epsg,
@@ -2956,7 +2881,7 @@ if hasattr(st, "dialog"):
                 uploaded_filename=uploaded_filename
             )
     except TypeError:
-        @st.dialog("🤖 GeoBot WMS - Asistente Cartográfico Oficial e Inteligente", width="large")
+        @st.dialog("🤖 GeoBot WMS")
         def _wms_assistant_dialog_view(active_epsg=None, current_service_name=None, uploaded_filename=None):
             render_wms_assistant_content(
                 active_epsg=active_epsg,
@@ -2964,7 +2889,7 @@ if hasattr(st, "dialog"):
                 uploaded_filename=uploaded_filename
             )
 elif hasattr(st, "experimental_dialog"):
-    @st.experimental_dialog("🤖 GeoBot WMS - Asistente Cartográfico Oficial e Inteligente", width="large")
+    @st.experimental_dialog("🤖 GeoBot WMS")
     def _wms_assistant_dialog_view(active_epsg=None, current_service_name=None, uploaded_filename=None):
         render_wms_assistant_content(
             active_epsg=active_epsg,
@@ -3006,8 +2931,9 @@ def render_floating_assistant_button(
     detected_zone: Optional[Dict[str, Any]] = None
 ):
     """
-    Renderiza un Botón Flotante con el personaje animado en la esquina inferior derecha.
-    Al hacer clic, despliega la ventana modal del Asistente WMS sobre lo que el usuario está viendo.
+    Renderiza un Botón Flotante interactivo en la esquina inferior derecha.
+    Al abrirse, despliega una ventana emergente compacta estilo widget (tipo Esri Colombia / Intercom)
+    que NO bloquea la pantalla y permite interactuar con el visor de mapas y planos CAD.
     """
     if "wms_dialog_is_open" not in st.session_state:
         st.session_state["wms_dialog_is_open"] = False
@@ -3021,82 +2947,132 @@ def render_floating_assistant_button(
     if detected_zone is not None:
         st.session_state["wms_detected_zone"] = detected_zone
 
+    is_open = st.session_state.get("wms_dialog_is_open", False)
     b64_avatar = get_bot_avatar_b64()
     img_css = f"background-image: url('data:image/png;base64,{b64_avatar}') !important;" if b64_avatar else ""
+
+    if is_open:
+        btn_label = "✕"
+        bubble_html = ""
+        btn_state_css = """
+        div.st-key-btn_floating_assistant button {
+            width: 58px !important;
+            height: 58px !important;
+            border-radius: 50% !important;
+            padding: 0 !important;
+            background-color: #0284c7 !important;
+            background-image: none !important;
+            border: 2px solid #ffffff !important;
+            box-shadow: 0 8px 24px rgba(2, 132, 199, 0.6), 0 0 16px rgba(56, 189, 248, 0.4) !important;
+            animation: none !important;
+            color: #ffffff !important;
+            font-size: 26px !important;
+            font-weight: 700 !important;
+            line-height: 54px !important;
+            text-align: center !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+        div.st-key-btn_floating_assistant button:hover {
+            transform: scale(1.08) rotate(90deg) !important;
+            background-color: #0369a1 !important;
+            box-shadow: 0 10px 28px rgba(2, 132, 199, 0.8) !important;
+        }
+        """
+    else:
+        btn_label = " "
+        bubble_html = """
+        <div class="bot-speech-bubble">
+            <span>✨ GeoBot WMS</span>
+        </div>
+        """
+        btn_state_css = f"""
+        div.st-key-btn_floating_assistant button {{
+            width: 66px !important;
+            height: 66px !important;
+            border-radius: 50% !important;
+            padding: 0 !important;
+            background-color: #0b1329 !important;
+            background-repeat: no-repeat !important;
+            background-position: center !important;
+            background-size: 88% !important;
+            {img_css}
+            border: 2.5px solid #38bdf8 !important;
+            animation: epicBotFloat 3.8s ease-in-out infinite, epicCosmicGlow 2.8s infinite !important;
+            color: transparent !important;
+            font-size: 0px !important;
+        }}
+        div.st-key-btn_floating_assistant button:hover {{
+            transform: scale(1.15) translateY(-5px) !important;
+            border-color: #67e8f9 !important;
+            box-shadow: 0 0 32px rgba(56, 189, 248, 0.95), 0 14px 35px rgba(0, 0, 0, 0.75) !important;
+            filter: drop-shadow(0 0 16px #38bdf8) !important;
+        }}
+        """
 
     st.markdown(f"""
     <style>
     @keyframes epicBotFloat {{
         0% {{ transform: translateY(0px) rotate(0deg); }}
-        50% {{ transform: translateY(-10px) rotate(2deg); }}
+        50% {{ transform: translateY(-8px) rotate(1.5deg); }}
         100% {{ transform: translateY(0px) rotate(0deg); }}
     }}
 
     @keyframes epicCosmicGlow {{
         0% {{
-            box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.8), 0 8px 24px rgba(2, 132, 199, 0.6);
+            box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.75), 0 8px 20px rgba(2, 132, 199, 0.5);
         }}
         70% {{
-            box-shadow: 0 0 0 18px rgba(56, 189, 248, 0), 0 12px 35px rgba(14, 165, 233, 0.85);
+            box-shadow: 0 0 0 16px rgba(56, 189, 248, 0), 0 10px 28px rgba(14, 165, 233, 0.75);
         }}
         100% {{
-            box-shadow: 0 0 0 0 rgba(56, 189, 248, 0), 0 8px 24px rgba(2, 132, 199, 0.6);
+            box-shadow: 0 0 0 0 rgba(56, 189, 248, 0), 0 8px 20px rgba(2, 132, 199, 0.5);
         }}
     }}
 
     @keyframes bubbleFloat {{
         0% {{ transform: translateY(0px); opacity: 0.95; }}
-        50% {{ transform: translateY(-5px); opacity: 1; }}
+        50% {{ transform: translateY(-4px); opacity: 1; }}
         100% {{ transform: translateY(0px); opacity: 0.95; }}
     }}
 
-    /* Estilo del botón flotante con avatar animado */
+    @keyframes slideUpWidget {{
+        from {{
+            opacity: 0;
+            transform: translateY(24px) scale(0.96);
+        }}
+        to {{
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }}
+    }}
+
+    /* Botón flotante base */
     div.st-key-btn_floating_assistant button {{
         position: fixed !important;
         bottom: 24px !important;
         right: 24px !important;
         z-index: 999999 !important;
-        width: 84px !important;
-        height: 84px !important;
-        border-radius: 50% !important;
-        padding: 0 !important;
-        background-color: #0b1329 !important;
-        background-repeat: no-repeat !important;
-        background-position: center !important;
-        background-size: 88% !important;
-        {img_css}
-        border: 2.8px solid #38bdf8 !important;
-        animation: epicBotFloat 3.8s ease-in-out infinite, epicCosmicGlow 2.8s infinite !important;
         cursor: pointer !important;
-        transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
-        color: transparent !important;
-        font-size: 0px !important;
+        transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
     }}
 
-    div.st-key-btn_floating_assistant button:hover {{
-        transform: scale(1.18) translateY(-6px) rotate(-3deg) !important;
-        border-color: #67e8f9 !important;
-        box-shadow: 0 0 35px rgba(56, 189, 248, 0.95), 0 14px 35px rgba(0, 0, 0, 0.75) !important;
-        filter: drop-shadow(0 0 16px #38bdf8) !important;
-    }}
-
-    div.st-key-btn_floating_assistant button:active {{
-        transform: scale(0.95) !important;
-    }}
+    {btn_state_css}
 
     /* Bocadillo animado flotante sobre el botón */
     .bot-speech-bubble {{
         position: fixed;
-        bottom: 118px;
+        bottom: 100px;
         right: 24px;
         z-index: 999998;
         background: rgba(15, 23, 42, 0.92);
         backdrop-filter: blur(10px);
         border: 1px solid rgba(56, 189, 248, 0.5);
         border-radius: 16px 16px 4px 16px;
-        padding: 7px 14px;
+        padding: 6px 12px;
         color: #f0f9ff;
-        font-size: 12.5px;
+        font-size: 12px;
         font-weight: 700;
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 16px rgba(56, 189, 248, 0.3);
         animation: bubbleFloat 3.8s ease-in-out infinite;
@@ -3109,7 +3085,7 @@ def render_floating_assistant_button(
         content: '';
         position: absolute;
         bottom: -7px;
-        right: 36px;
+        right: 28px;
         width: 0;
         height: 0;
         border-left: 7px solid transparent;
@@ -3117,22 +3093,140 @@ def render_floating_assistant_button(
         border-top: 7px solid rgba(15, 23, 42, 0.92);
     }}
 
-    /* Diálogo modal estilizado */
-    div[data-testid="stDialog"] div[role="dialog"] {{
-        max-width: 960px !important;
-        width: 92vw !important;
-        border-radius: 14px !important;
-        border: 1px solid rgba(56, 189, 248, 0.25) !important;
-        background-color: #0f172a !important;
+    /* ------------------------------------------------------------------------- */
+    /* VENTANA EMERGENTE TIPO WIDGET (TIPO ESRI COLOMBIA / INTERCOM)            */
+    /* ------------------------------------------------------------------------- */
+    
+    /* 1. Backdrop transparente: NO oscurece la pantalla ni bloquea el visor */
+    div[data-testid="stDialog"],
+    div[data-testid="stModal"] {{
+        background: transparent !important;
+        background-color: transparent !important;
+        backdrop-filter: none !important;
+        pointer-events: none !important;
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 999990 !important;
+    }}
+
+    div[data-testid="stDialog"] > div,
+    div[data-testid="stModal"] > div {{
+        background: transparent !important;
+        background-color: transparent !important;
+        pointer-events: none !important;
+        display: flex !important;
+        justify-content: flex-end !important;
+        align-items: flex-end !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }}
+
+    /* 2. Ventana emergente estilo Widget flotante en esquina inferior derecha */
+    div[data-testid="stDialog"] div[role="dialog"],
+    div[data-testid="stModal"] div[role="dialog"] {{
+        position: fixed !important;
+        bottom: 94px !important;
+        right: 24px !important;
+        top: auto !important;
+        left: auto !important;
+        transform: none !important;
+        width: 410px !important;
+        max-width: calc(100vw - 32px) !important;
+        height: 610px !important;
+        max-height: calc(100vh - 120px) !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border-radius: 18px !important;
+        border: 1.5px solid rgba(56, 189, 248, 0.35) !important;
+        background: #0b1329 !important;
+        box-shadow: 0 16px 45px rgba(0, 0, 0, 0.75), 0 0 25px rgba(56, 189, 248, 0.25) !important;
+        pointer-events: auto !important;
+        overflow: hidden !important;
+        display: flex !important;
+        flex-direction: column !important;
+        z-index: 999995 !important;
+        animation: slideUpWidget 0.28s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    }}
+
+    /* Cabecera azul estilo Esri Colombia */
+    div[data-testid="stDialogHeader"] {{
+        background: linear-gradient(135deg, #0284c7 0%, #1e40af 100%) !important;
+        padding: 10px 14px !important;
+        margin: 0 !important;
+        border-top-left-radius: 16px !important;
+        border-top-right-radius: 16px !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+    }}
+
+    div[data-testid="stDialogHeader"] h2,
+    div[data-testid="stDialogHeader"] div {{
+        color: #ffffff !important;
+        font-size: 14.5px !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.2px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+
+    div[data-testid="stDialogHeader"] button {{
+        color: #ffffff !important;
+        background: rgba(255, 255, 255, 0.15) !important;
+        border-radius: 50% !important;
+        width: 26px !important;
+        height: 26px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        transition: background 0.2s ease !important;
+    }}
+
+    div[data-testid="stDialogHeader"] button:hover {{
+        background: rgba(255, 255, 255, 0.35) !important;
+    }}
+
+    /* Scroll interior del cuerpo del widget */
+    div[data-testid="stDialog"] div[role="dialog"] > div[data-testid="stVerticalBlock"] {{
+        overflow-y: auto !important;
+        padding: 10px 12px !important;
+        height: 100% !important;
+    }}
+
+    /* Estilo de pestañas compacto para el widget */
+    div[data-testid="stDialog"] div[data-testid="stTabs"] [data-baseweb="tab-list"] {{
+        gap: 3px !important;
+        margin-bottom: 6px !important;
+    }}
+
+    div[data-testid="stDialog"] div[data-testid="stTabs"] [data-baseweb="tab"] {{
+        padding: 4px 7px !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+    }}
+
+    /* Adaptación a dispositivos móviles */
+    @media (max-width: 640px) {{
+        div[data-testid="stDialog"] div[role="dialog"],
+        div[data-testid="stModal"] div[role="dialog"] {{
+            right: 12px !important;
+            bottom: 80px !important;
+            width: calc(100vw - 24px) !important;
+            height: calc(100vh - 96px) !important;
+        }}
+        div.st-key-btn_floating_assistant button {{
+            right: 14px !important;
+            bottom: 14px !important;
+        }}
     }}
     </style>
-    <div class="bot-speech-bubble">
-        <span>✨ GeoBot WMS</span>
-    </div>
+    {bubble_html}
     """, unsafe_allow_html=True)
 
-    if st.button(" ", key="btn_floating_assistant", help="Haz clic para abrir GeoBot: tu Asistente Cartográfico WMS"):
-        st.session_state["wms_dialog_is_open"] = not st.session_state.get("wms_dialog_is_open", False)
+    if st.button(btn_label, key="btn_floating_assistant", help="Haz clic para abrir/cerrar GeoBot WMS"):
+        st.session_state["wms_dialog_is_open"] = not is_open
+        st.rerun()
 
     if st.session_state.get("wms_dialog_is_open", False):
         _wms_assistant_dialog_view(
