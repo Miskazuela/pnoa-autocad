@@ -2500,46 +2500,40 @@ def render_wms_assistant_content(
     """
     if "wms_bot_api_key" not in st.session_state:
         st.session_state["wms_bot_api_key"] = os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
-    if "wms_chat_history" not in st.session_state:
+    # Mensaje inicial amigable, limpio y directo
+    if "wms_chat_history" not in st.session_state or not st.session_state["wms_chat_history"] or (
+        len(st.session_state["wms_chat_history"]) == 1 and any(
+            old_kw in st.session_state["wms_chat_history"][0].get("content", "")
+            for old_kw in [
+                "Catastro y Parcelas",
+                "Asistente Experto en Servicios WMS",
+                "América y Global",
+                "Catálogo WMS disponible",
+                "PNOA Máxima Actualidad",
+                "Zonas Inundables SNCZI",
+                "Red Natura 2000"
+            ]
+        )
+    ):
         st.session_state["wms_chat_history"] = [
             {
                 "role": "model",
-                "content": (
-                    "👋 **¡Hola! Soy tu Asistente Cartográfico y de Servicios WMS (Mundial y España).**\n\n"
-                    "Puedo ayudarte a encontrar cualquier capa oficial para tus proyectos en AutoCAD o Civil 3D:\n"
-                    "- 🏛️ **Catastro y Parcelas** (España DGC, Navarra, País Vasco, INSPIRE)\n"
-                    "- 🌊 **Aguas y Zonas Inundables** (SNCZI MITECO, DPH, Cuencas)\n"
-                    "- 🗺️ **Topografía y Relieve** (Curvas de nivel MTN25, Sombreado LiDAR, Pendientes)\n"
-                    "- 🌲 **Medio Ambiente** (Red Natura 2000, Montes MUP, Espacios Protegidos ENP)\n"
-                    "- 🌎 **América y Global** (Colombia IGAC/SGC, México INEGI, Chile, Argentina, EE.UU. USGS, Copernicus, OpenStreetMap)\n\n"
-                    "Escríbeme lo que necesitas o selecciona uno de los accesos rápidos a continuación."
-                )
+                "content": "👋 **¡Hola! Soy GeoBot.**\n\n¿Qué capa cartográfica oficial u ortofoto necesitas para tu proyecto en AutoCAD o visor?"
             }
         ]
 
-    # Barra informativa de contexto actual (lo que el usuario está viendo en su plano)
+    # Datos contextuales del plano actual
     epsg_disp = str(active_epsg or st.session_state.get("wms_active_epsg", "25830"))
     file_disp = uploaded_filename or st.session_state.get("wms_uploaded_filename", "Ninguno (Dibujando en visor)")
     serv_disp = current_service_name or st.session_state.get("wms_current_service_name", "Ortofoto PNOA (IGN)")
     zone_info = detected_zone or st.session_state.get("wms_detected_zone") or st.session_state.get("detected_zone_country")
     zone_disp = f"{zone_info.get('flag', '📍')} {zone_info.get('name', '')}" if (zone_info and isinstance(zone_info, dict)) else None
 
-    # Deducir ámbito geográfico del proyecto para resolver preguntas como 'capa de hidrologia del archivo cargado'
     project_geo_keys = infer_project_geo_keys(
         active_epsg=epsg_disp,
         detected_zone=zone_info,
         uploaded_filename=file_disp
     )
-
-    zone_badge = f'<div>🌍 <span style="color: #f59e0b; font-weight: 600;">{zone_disp}</span></div>' if zone_disp else ''
-    st.markdown(f"""
-    <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 5px 8px; margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11px; color: #cbd5e1;">
-        <div>📍 <code style="color: #38bdf8; font-weight: 600;">EPSG:{epsg_disp}</code></div>
-        <div>📁 <span style="color: #94a3b8;">{file_disp[:20]}</span></div>
-        {zone_badge}
-        <div>🛰️ <span style="color: #34d399; font-weight: 500;">{serv_disp[:24]}</span></div>
-    </div>
-    """, unsafe_allow_html=True)
 
     user_key = st.session_state.get("wms_bot_api_key", "").strip()
     has_key = bool(user_key)
@@ -2547,321 +2541,268 @@ def render_wms_assistant_content(
     effective_prov = detect_ai_provider(user_key, user_selected=cur_p_setting)
     disp_m = st.session_state.get("wms_active_selected_model", "gemini-3.8-flash")
 
-    # Pestañas compactas del Asistente en ventana flotante
-    tab_chat, tab_catalog, tab_inspect, tab_config = st.tabs([
-        "💬 Chat",
-        "📚 Directorio",
-        "🔍 Inspeccionar",
-        "⚙️ Ajustes"
-    ])
+    # Cabecera ultra-limpia de 1 sola línea: Zona, CRS y estado de IA
+    zone_label = f"{zone_disp}" if zone_disp else "Global"
+    ai_status = f"✨ IA: {effective_prov.capitalize()} ({disp_m})" if (has_key or cur_p_setting == "custom") else "🟢 Catálogo Offline"
+    st.markdown(f"""
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 4px 6px 4px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid rgba(56, 189, 248, 0.15); margin-bottom: 6px;">
+        <span>📍 <b>{zone_label}</b> · <code style="color: #38bdf8;">EPSG:{epsg_disp}</code></span>
+        <span style="color: #34d399; font-weight: 600;">{ai_status}</span>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # ------------------------------------------------------------------------------
-    # PESTAÑA 1: CHAT CON EL ASISTENTE
-    # ------------------------------------------------------------------------------
-    with tab_chat:
-        col_st_lbl, col_st_clear = st.columns([5, 1])
-        with col_st_lbl:
-            if has_key or cur_p_setting == "custom":
-                eff_name = effective_prov.capitalize()
-                st.markdown(f"<div style='font-size: 11.5px; color: #34d399; font-weight: 600;'>✨ Modo IA: <span style='color: #f8fafc;'>{eff_name} ({disp_m})</span></div>", unsafe_allow_html=True)
-            else:
-                st.markdown("<div style='font-size: 11.5px; color: #38bdf8; font-weight: 600;'>🟢 Modo Catálogo Local (Offline y Gratis)</div>", unsafe_allow_html=True)
-        with col_st_clear:
-            if st.button("🗑️", key="btn_clear_chat_modal", help="Reiniciar conversación"):
-                st.session_state["wms_chat_history"] = []
-                st.rerun(scope="fragment")
-
-        col_q1, col_q2 = st.columns(2)
-        selected_prompt = None
-        with col_q1:
-            if st.button("🏛️ Catastro / Parcelas", key="chip_modal_btn_0", use_container_width=True):
-                selected_prompt = "Necesito la cartografía del Catastro para ver parcelas y linderos"
-            if st.button("⛰️ Curvas de Nivel MTN", key="chip_modal_btn_2", use_container_width=True):
-                selected_prompt = "Necesito curvas de nivel y mapa topográfico ráster MTN"
-        with col_q2:
-            if st.button("🌊 Zonas Inundables", key="chip_modal_btn_1", use_container_width=True):
-                selected_prompt = "Busco las zonas inundables de periodo de retorno 100 y 500 años de MITECO"
-            if st.button("🌐 Calles / OpenStreetMap", key="chip_modal_btn_4", use_container_width=True):
-                selected_prompt = "Necesito una capa base mundial de calles y carreteras con OpenStreetMap"
-
-        chat_box = st.container(height=310)
-        bot_avatar_img = get_bot_avatar_path()
-        with chat_box:
-            for msg in st.session_state["wms_chat_history"]:
-                role = msg["role"]
-                av = bot_avatar_img if role == "model" else None
-                with st.chat_message(role, avatar=av):
-                    if role == "model":
-                        _parse_and_render_wms_actions(msg["content"])
-                    else:
-                        st.markdown(msg["content"])
-
-            new_turn_container = st.container()
-
-        user_input = st.chat_input("Escribe tu pregunta sobre capas WMS o tu plano...")
-
-        query_to_run = selected_prompt or user_input
-        if query_to_run:
-            with new_turn_container:
-                with st.chat_message("user"):
-                    st.markdown(query_to_run)
-                st.session_state["wms_chat_history"].append({"role": "user", "content": query_to_run})
-
-                with st.chat_message("model", avatar=bot_avatar_img):
-                    current_key = st.session_state.get("wms_bot_api_key", "").strip()
-                    active_p_setting = st.session_state.get("wms_selected_ai_provider", "auto")
-                    if current_key or active_p_setting == "custom":
-                        eff_prov = detect_ai_provider(current_key, user_selected=active_p_setting)
-                        prov_name = eff_prov.capitalize()
-                        with st.spinner(f"Consultando a {prov_name}..."):
-                            context_dict = {
-                                "active_epsg": epsg_disp,
-                                "current_service": serv_disp,
-                                "uploaded_filename": file_disp,
-                                "detected_zone": zone_disp or "No especificado"
-                            }
-                            res = query_universal_ai_wms(
-                                prompt=query_to_run,
-                                api_key=current_key,
-                                chat_history=st.session_state["wms_chat_history"][:-1],
-                                context_info=context_dict,
-                                provider_override=active_p_setting,
-                                custom_url=st.session_state.get("wms_custom_ai_url"),
-                                custom_model=st.session_state.get("wms_active_selected_model") or st.session_state.get("wms_custom_ai_model")
-                            )
-                            bot_response = res["text"]
-
-                            # Si hubo algún problema con la API de IA, anexamos automáticamente
-                            # las recomendaciones del catálogo local para no dejar la consulta sin respuesta.
-                            if not res.get("success", False):
-                                local_matches = search_wms_catalog(query_to_run, project_geo_fallback=project_geo_keys)
-                                if local_matches:
-                                    top = local_matches[:3]
-                                    lines = [
-                                        bot_response,
-                                        "\n\n---\n🔍 **Recomendaciones automáticas del Catálogo Oficial Local:**\n"
-                                    ]
-                                    for m in top:
-                                        lines.append(f"### {m['name']}")
-                                        lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
-                                        lines.append(f"- **Descripción:** {m['description']}")
-                                        lines.append(f"- **URL Base:** `{m['url']}`")
-                                        lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
-                                        lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
-                                    bot_response = "\n".join(lines)
-
-                            _parse_and_render_wms_actions(bot_response)
-                    else:
-                        matches = search_wms_catalog(query_to_run, project_geo_fallback=project_geo_keys)
-                        clean_run_q = _normalize_text(query_to_run)
-                        is_context_q = bool(set(clean_run_q.split()).intersection(CONTEXT_PROJECT_TRIGGERS))
-
-                        if matches:
-                            top = matches[:3]
-                            if is_context_q and zone_disp:
-                                header_lbl = f"🔍 **Encontré {len(matches)} servicios oficiales para la ubicación de tu plano ({zone_disp}):**\n"
-                            else:
-                                header_lbl = f"🔍 **Encontré {len(matches)} servicios oficiales para tu consulta:**\n"
-                            lines = [header_lbl]
-                            for m in top:
-                                lines.append(f"### {m['name']}")
-                                lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
-                                lines.append(f"- **Descripción:** {m['description']}")
-                                lines.append(f"- **URL Base:** `{m['url']}`")
-                                lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
-                                lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
-                            if len(matches) > 3:
-                                lines.append(f"*Y {len(matches) - 3} servicios adicionales disponibles en la pestaña '📚 Directorio Mundial'.*")
-                            bot_response = "\n".join(lines)
-                        else:
-                            detected_geos = _detect_query_geo(query_to_run)
-                            bot_response = build_smart_offline_response(
-                                query=query_to_run,
-                                detected_geos=detected_geos,
-                                zone_disp=zone_disp,
-                                is_context_q=is_context_q
-                            )
-                        _parse_and_render_wms_actions(bot_response)
-
-                st.session_state["wms_chat_history"].append({"role": "model", "content": bot_response})
-
-    # ------------------------------------------------------------------------------
-    # PESTAÑA 2: DIRECTORIO MUNDIAL DE SERVICIOS
-    # ------------------------------------------------------------------------------
-    with tab_catalog:
-        col_f1, col_f2 = st.columns(2)
-        categories = ["Todas las categorías"] + sorted(list({item["category"] for item in WMS_DATABASE}))
-        with col_f1:
-            sel_cat = st.selectbox("Categoría:", options=categories, key="dir_modal_cat_filter")
-        with col_f2:
-            regions = [
-                "Todas las regiones", "Global", "España", "América", "Colombia", "Bogotá", "Medellín", "Cali", "México", "Chile", "Argentina", "Perú",
-                "Estados Unidos", "Canadá", "Europa", "Francia", "Alemania", "Portugal", "Australia"
-            ]
-            sel_reg = st.selectbox("Región / País:", options=regions, key="dir_modal_reg_filter")
-        search_txt = st.text_input("Buscar por palabra clave:", placeholder="Ej: parcelas, lidar, rio, usgs...", key="dir_modal_search_txt")
-
-        dir_results = search_wms_catalog(search_txt, category_filter=sel_cat, region_filter=sel_reg)
-        st.caption(f"Mostrando **{len(dir_results)}** servicios cartográficos oficiales verificados:")
-
-        for srv in dir_results:
-            with st.container():
-                c_info, c_action = st.columns([3.5, 1.2])
-                with c_info:
-                    st.markdown(f"**{srv['name']}** — <span style='color: #38bdf8; font-size: 11px;'>{srv['category']} ({srv['region']})</span>", unsafe_allow_html=True)
-                    st.caption(srv["description"])
-                    st.code(f"URL: {srv['url']}\nCapa: {srv['default_layer']}", language="text")
-                with c_action:
-                    btn_id = f"dir_modal_apply_{srv['id']}"
-                    if st.button("🚀 Cargar", key=btn_id, use_container_width=True, type="primary"):
-                        apply_wms_to_application(srv["url"], srv["default_layer"], srv["name"])
-                st.divider()
-
-    # ------------------------------------------------------------------------------
-    # PESTAÑA 3: INSPECTOR DE URL EXTERNA (GETCAPABILITIES EN VIVO)
-    # ------------------------------------------------------------------------------
-    with tab_inspect:
-        st.markdown("<p style='font-size: 12px; color: #cbd5e1;'>Pega la URL de cualquier servidor WMS externo para inspeccionar capas y EPSG soportados:</p>", unsafe_allow_html=True)
-        inspect_url = st.text_input(
-            "URL del servidor WMS a inspeccionar:",
-            placeholder="https://servidor-geoportal.com/.../wms",
-            key="inspector_modal_wms_input"
-        )
-        if st.button("🔍 Inspeccionar Servidor en Vivo", key="btn_modal_run_inspector", type="primary", use_container_width=True):
-            if inspect_url:
-                with st.spinner("Consultando GetCapabilities al servidor..."):
-                    report = inspect_wms_live(inspect_url)
-                    if report["success"]:
-                        st.success(f"✅ Conexión exitosa con: **{report['title']}**")
-                        if report["abstract"]:
-                            st.info(report["abstract"])
-
-                        st.write(f"📋 **Capas publicadas detectadas ({len(report['layers'])}):**")
-                        for lyr in report["layers"][:25]:
-                            col_l_name, col_l_btn = st.columns([3.5, 1.2])
-                            with col_l_name:
-                                st.markdown(f"• **`{lyr['name']}`** : {lyr['title']}")
-                            with col_l_btn:
-                                if st.button("Usar", key=f"use_modal_insp_lyr_{abs(hash(lyr['name']))}", use_container_width=True):
-                                    apply_wms_to_application(report["url"], lyr["name"], f"{report['title']} - {lyr['name']}")
-
-                        if len(report["layers"]) > 25:
-                            st.caption(f"*(Mostrando las primeras 25 de {len(report['layers'])} capas)*")
-
-                        if report["supported_crs"]:
-                            with st.expander("🌐 Ver sistemas de coordenadas (CRS / EPSG) soportados"):
-                                st.write(", ".join(report["supported_crs"]))
-                    else:
-                        st.error(f"❌ Error al inspeccionar el servicio: {report['error']}")
-            else:
-                st.warning("Por favor, introduce una URL para inspeccionar.")
-
-    # ------------------------------------------------------------------------------
-    # PESTAÑA 4: AJUSTES Y CONFIGURACIÓN DE IA
-    # ------------------------------------------------------------------------------
-    with tab_config:
-        st.markdown("<p style='font-size: 13px; font-weight: 700; color: #f8fafc; margin-bottom: 2px;'>⚙️ Configuración del Motor de IA</p>", unsafe_allow_html=True)
-        user_key_in = st.text_input(
-            "🔑 API Key de tu servicio de IA:",
-            value=st.session_state.get("wms_bot_api_key", ""),
-            type="password",
-            placeholder="AIzaSy... (Gemini), sk-... (OpenAI), gsk_... (Groq)",
-            help="Soporta cualquier servicio de IA del mundo. Si la dejas vacía, el bot opera en Modo Local Verificado 100% gratis y offline."
-        )
-        st.session_state["wms_bot_api_key"] = user_key_in.strip()
-
-        c_prov, c_model = st.columns([1, 1.4])
-        with c_prov:
-            provider_options = [
-                ("auto", f"🔍 Auto ({effective_prov.capitalize() if effective_prov != 'none' else 'Por clave'})"),
-                ("gemini", "Google Gemini"),
-                ("openai", "OpenAI (ChatGPT)"),
-                ("anthropic", "Anthropic Claude"),
-                ("groq", "Groq (Ultra-rápido)"),
-                ("deepseek", "DeepSeek"),
-                ("openrouter", "OpenRouter"),
-                ("mistral", "Mistral AI"),
-                ("perplexity", "Perplexity AI"),
-                ("custom", "⚙️ Servidor Local (Ollama)")
-            ]
-            prov_keys = [p[0] for p in provider_options]
-            prov_labels = [p[1] for p in provider_options]
-            cur_p_idx = prov_keys.index(cur_p_setting) if cur_p_setting in prov_keys else 0
-            sel_label = st.selectbox("Proveedor:", options=prov_labels, index=cur_p_idx, key="sb_wms_prov_selector")
-            chosen_prov = prov_keys[prov_labels.index(sel_label)]
-            st.session_state["wms_selected_ai_provider"] = chosen_prov
-            if chosen_prov != "auto":
-                effective_prov = chosen_prov
-
-        with c_model:
-            cust_url_active = st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1")
-            base_models = discover_provider_models(
-                provider=effective_prov,
-                api_key=user_key_in.strip(),
-                custom_url=cust_url_active,
-                force_refresh=False
+    # Menú colapsable para Ajustes, Directorio e Inspección (por defecto cerrado para no saturar el chat)
+    with st.expander("⚙️ Ajustes de IA & Herramientas WMS", expanded=False):
+        sub_tab_ai, sub_tab_dir, sub_tab_insp = st.tabs(["🔑 Clave IA & Modelo", "📚 Directorio WMS", "🔍 Inspeccionar URL"])
+        with sub_tab_ai:
+            user_key_in = st.text_input(
+                "API Key de IA:",
+                value=st.session_state.get("wms_bot_api_key", ""),
+                type="password",
+                placeholder="AIzaSy... (Gemini), sk-... (OpenAI), gsk_... (Groq)",
+                help="Soporta cualquier servicio de IA. Vacío opera en Modo Local Verificado 100% gratis.",
+                key="in_exp_api_key"
             )
-            model_choices = list(base_models) + ["✏️ Personalizado..."]
+            st.session_state["wms_bot_api_key"] = user_key_in.strip()
 
-            prov_state_key = f"wms_chosen_model_{effective_prov}"
-            prev_m = st.session_state.get(prov_state_key, base_models[0])
+            c_prov, c_model = st.columns([1, 1.4])
+            with c_prov:
+                provider_options = [
+                    ("auto", f"🔍 Auto ({effective_prov.capitalize() if effective_prov != 'none' else 'Por clave'})"),
+                    ("gemini", "Google Gemini"),
+                    ("openai", "OpenAI (ChatGPT)"),
+                    ("anthropic", "Anthropic Claude"),
+                    ("groq", "Groq"),
+                    ("deepseek", "DeepSeek"),
+                    ("openrouter", "OpenRouter"),
+                    ("mistral", "Mistral AI"),
+                    ("perplexity", "Perplexity AI"),
+                    ("custom", "⚙️ Servidor Ollama")
+                ]
+                prov_keys = [p[0] for p in provider_options]
+                prov_labels = [p[1] for p in provider_options]
+                cur_p_idx = prov_keys.index(cur_p_setting) if cur_p_setting in prov_keys else 0
+                sel_label = st.selectbox("Proveedor:", options=prov_labels, index=cur_p_idx, key="sb_wms_prov_selector")
+                chosen_prov = prov_keys[prov_labels.index(sel_label)]
+                st.session_state["wms_selected_ai_provider"] = chosen_prov
+                if chosen_prov != "auto":
+                    effective_prov = chosen_prov
 
-            sb_model_key = f"sb_wms_model_choice_{effective_prov}"
-            if effective_prov == "gemini":
-                cur_sb = st.session_state.get(sb_model_key)
-                if cur_sb and (cur_sb not in model_choices or any(old in str(cur_sb).lower() for old in ["2.5", "2.0", "1.5", "1.0"])):
-                    st.session_state.pop(sb_model_key, None)
-                if prev_m and any(old in str(prev_m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
-                    prev_m = base_models[0]
-                    st.session_state[prov_state_key] = prev_m
-
-            if prev_m in base_models:
-                m_idx = base_models.index(prev_m)
-            elif prev_m == "custom_input":
-                m_idx = len(model_choices) - 1
-            else:
-                m_idx = 0
-
-            sel_m_choice = st.selectbox(
-                "Modelo:",
-                options=model_choices,
-                index=m_idx,
-                key=f"sb_wms_model_choice_{effective_prov}"
-            )
-
-            if sel_m_choice == "✏️ Personalizado...":
-                st.session_state[prov_state_key] = "custom_input"
-                custom_m_in = st.text_input(
-                    "Nombre exacto:",
-                    value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
-                    placeholder="Ej: gemini-3.8-flash, gpt-4o"
+            with c_model:
+                cust_url_active = st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1")
+                base_models = discover_provider_models(
+                    provider=effective_prov,
+                    api_key=user_key_in.strip(),
+                    custom_url=cust_url_active,
+                    force_refresh=False
                 )
-                active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
-                st.session_state[f"wms_custom_name_{effective_prov}"] = active_model_name
-            else:
-                active_model_name = sel_m_choice
-                st.session_state[prov_state_key] = active_model_name
+                model_choices = list(base_models) + ["✏️ Personalizado..."]
 
-            st.session_state["wms_active_selected_model"] = active_model_name
+                prov_state_key = f"wms_chosen_model_{effective_prov}"
+                prev_m = st.session_state.get(prov_state_key, base_models[0])
 
-        if st.button("🔄 Actualizar lista de modelos en vivo", key=f"btn_ref_m_{effective_prov}", use_container_width=True):
-            for k in list(st.session_state.keys()):
-                if k.startswith("_cached_"):
-                    st.session_state.pop(k, None)
-            st.rerun()
+                sb_model_key = f"sb_wms_model_choice_{effective_prov}"
+                if effective_prov == "gemini":
+                    cur_sb = st.session_state.get(sb_model_key)
+                    if cur_sb and (cur_sb not in model_choices or any(old in str(cur_sb).lower() for old in ["2.5", "2.0", "1.5", "1.0"])):
+                        st.session_state.pop(sb_model_key, None)
+                    if prev_m and any(old in str(prev_m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
+                        prev_m = base_models[0]
+                        st.session_state[prov_state_key] = prev_m
 
-        if effective_prov == "custom":
-            cust_url_in = st.text_input(
-                "URL Base Servidor Local:",
-                value=st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1"),
-                placeholder="http://localhost:11434/v1"
-            )
-            st.session_state["wms_custom_ai_url"] = cust_url_in.strip()
-        else:
-            with st.expander("🔌 Conectar Servidor Local (Ollama / LM Studio)", expanded=False):
-                if st.button("Activar Ollama (localhost:11434)", key="btn_activate_local_ollama", use_container_width=True):
-                    st.session_state["wms_selected_ai_provider"] = "custom"
-                    st.rerun()
+                if prev_m in base_models:
+                    m_idx = base_models.index(prev_m)
+                elif prev_m == "custom_input":
+                    m_idx = len(model_choices) - 1
+                else:
+                    m_idx = 0
+
+                sel_m_choice = st.selectbox(
+                    "Modelo:",
+                    options=model_choices,
+                    index=m_idx,
+                    key=f"sb_wms_model_choice_{effective_prov}"
+                )
+
+                if sel_m_choice == "✏️ Personalizado...":
+                    st.session_state[prov_state_key] = "custom_input"
+                    custom_m_in = st.text_input(
+                        "Nombre exacto:",
+                        value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
+                        placeholder="Ej: gemini-3.8-flash, gpt-4o"
+                    )
+                    active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
+                    st.session_state[f"wms_custom_name_{effective_prov}"] = active_model_name
+                else:
+                    active_model_name = sel_m_choice
+                    st.session_state[prov_state_key] = active_model_name
+
+                st.session_state["wms_active_selected_model"] = active_model_name
+
+            if st.button("🔄 Actualizar modelos", key=f"btn_ref_m_{effective_prov}", use_container_width=True):
+                for k in list(st.session_state.keys()):
+                    if k.startswith("_cached_"):
+                        st.session_state.pop(k, None)
+                st.rerun()
+
+        with sub_tab_dir:
+            col_f1, col_f2 = st.columns(2)
+            categories = ["Todas"] + sorted(list({item["category"] for item in WMS_DATABASE}))
+            regions = ["Todas", "Global", "España", "América", "Colombia", "México", "Chile", "Argentina", "Estados Unidos", "Europa", "Australia"]
+            with col_f1:
+                sel_cat = st.selectbox("Categoría:", options=categories, key="dir_modal_cat_filter")
+            with col_f2:
+                sel_reg = st.selectbox("Región:", options=regions, key="dir_modal_reg_filter")
+            search_txt = st.text_input("Palabra clave:", placeholder="Ej: parcelas, lidar, rio...", key="dir_modal_search_txt")
+            dir_results = search_wms_catalog(search_txt, category_filter=None if sel_cat == "Todas" else sel_cat, region_filter=None if sel_reg == "Todas" else sel_reg)
+            st.caption(f"**{len(dir_results)}** servicios encontrados:")
+            for srv in dir_results[:10]:
+                c_inf, c_act = st.columns([3.5, 1.2])
+                with c_inf:
+                    st.markdown(f"**{srv['name']}** <span style='color:#38bdf8;font-size:11px;'>({srv['region']})</span>", unsafe_allow_html=True)
+                with c_act:
+                    if st.button("Cargar", key=f"dir_apply_{srv['id']}", use_container_width=True):
+                        apply_wms_to_application(srv["url"], srv["default_layer"], srv["name"])
+
+        with sub_tab_insp:
+            inspect_url = st.text_input("URL WMS a inspeccionar:", placeholder="https://servidor.com/.../wms", key="inspector_modal_wms_input")
+            if st.button("🔍 Inspeccionar en Vivo", key="btn_modal_run_inspector", use_container_width=True):
+                if inspect_url:
+                    with st.spinner("Consultando GetCapabilities..."):
+                        report = inspect_wms_live(inspect_url)
+                        if report["success"]:
+                            st.success(f"✅ **{report['title']}** ({len(report['layers'])} capas)")
+                            for lyr in report["layers"][:15]:
+                                col_l_name, col_l_btn = st.columns([3.5, 1.2])
+                                with col_l_name:
+                                    st.markdown(f"• **`{lyr['name']}`** : {lyr['title']}")
+                                with col_l_btn:
+                                    if st.button("Usar", key=f"use_modal_insp_lyr_{abs(hash(lyr['name']))}", use_container_width=True):
+                                        apply_wms_to_application(report["url"], lyr["name"], f"{report['title']} - {lyr['name']}")
+                        else:
+                            st.error(f"❌ Error: {report['error']}")
+
+    # Botones de accesos rápidos amigables y botón de limpiar chat
+    c_p1, c_p2, c_p3, c_p4, c_clr = st.columns([1.2, 1.2, 1.2, 1.2, 0.6])
+    selected_prompt = None
+    with c_p1:
+        if st.button("🏛️ Catastro", key="chip_catastro", use_container_width=True):
+            selected_prompt = "Necesito la cartografía del Catastro para ver parcelas y linderos"
+    with c_p2:
+        if st.button("🌊 Aguas", key="chip_aguas", use_container_width=True):
+            selected_prompt = "Busco las zonas inundables de periodo de retorno 100 y 500 años de MITECO"
+    with c_p3:
+        if st.button("⛰️ Curvas", key="chip_curvas", use_container_width=True):
+            selected_prompt = "Necesito curvas de nivel y mapa topográfico ráster MTN"
+    with c_p4:
+        if st.button("🛰️ Satélite", key="chip_sat", use_container_width=True):
+            selected_prompt = "Necesito una capa base satelital o de calles y carreteras con OpenStreetMap"
+    with c_clr:
+        if st.button("🗑️", key="btn_clear_chat_modal", help="Reiniciar conversación"):
+            st.session_state["wms_chat_history"] = []
+            st.rerun(scope="fragment")
+
+    # Contenedor principal de conversación amplio y cómodo
+    chat_box = st.container(height=340)
+    bot_avatar_img = get_bot_avatar_path()
+    with chat_box:
+        for msg in st.session_state["wms_chat_history"]:
+            role = msg["role"]
+            av = bot_avatar_img if role == "model" else None
+            with st.chat_message(role, avatar=av):
+                if role == "model":
+                    _parse_and_render_wms_actions(msg["content"])
+                else:
+                    st.markdown(msg["content"])
+
+        new_turn_container = st.container()
+
+    user_input = st.chat_input("Escribe tu pregunta sobre capas WMS o tu plano...")
+
+    query_to_run = selected_prompt or user_input
+    if query_to_run:
+        with new_turn_container:
+            with st.chat_message("user"):
+                st.markdown(query_to_run)
+            st.session_state["wms_chat_history"].append({"role": "user", "content": query_to_run})
+
+            with st.chat_message("model", avatar=bot_avatar_img):
+                current_key = st.session_state.get("wms_bot_api_key", "").strip()
+                active_p_setting = st.session_state.get("wms_selected_ai_provider", "auto")
+                if current_key or active_p_setting == "custom":
+                    eff_prov = detect_ai_provider(current_key, user_selected=active_p_setting)
+                    prov_name = eff_prov.capitalize()
+                    with st.spinner(f"Consultando a {prov_name}..."):
+                        context_dict = {
+                            "active_epsg": epsg_disp,
+                            "current_service": serv_disp,
+                            "uploaded_filename": file_disp,
+                            "detected_zone": zone_disp or "No especificado"
+                        }
+                        res = query_universal_ai_wms(
+                            prompt=query_to_run,
+                            api_key=current_key,
+                            chat_history=st.session_state["wms_chat_history"][:-1],
+                            context_info=context_dict,
+                            provider_override=active_p_setting,
+                            custom_url=st.session_state.get("wms_custom_ai_url"),
+                            custom_model=st.session_state.get("wms_active_selected_model") or st.session_state.get("wms_custom_ai_model")
+                        )
+                        bot_response = res["text"]
+
+                        # Si hubo algún problema con la API de IA, anexamos automáticamente
+                        # las recomendaciones del catálogo local para no dejar la consulta sin respuesta.
+                        if not res.get("success", False):
+                            local_matches = search_wms_catalog(query_to_run, project_geo_fallback=project_geo_keys)
+                            if local_matches:
+                                top = local_matches[:3]
+                                lines = [
+                                    bot_response,
+                                    "\n\n---\n🔍 **Recomendaciones automáticas del Catálogo Oficial Local:**\n"
+                                ]
+                                for m in top:
+                                    lines.append(f"### {m['name']}")
+                                    lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
+                                    lines.append(f"- **Descripción:** {m['description']}")
+                                    lines.append(f"- **URL Base:** `{m['url']}`")
+                                    lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
+                                    lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
+                                bot_response = "\n".join(lines)
+
+                        _parse_and_render_wms_actions(bot_response)
+                else:
+                    matches = search_wms_catalog(query_to_run, project_geo_fallback=project_geo_keys)
+                    clean_run_q = _normalize_text(query_to_run)
+                    is_context_q = bool(set(clean_run_q.split()).intersection(CONTEXT_PROJECT_TRIGGERS))
+
+                    if matches:
+                        top = matches[:3]
+                        if is_context_q and zone_disp:
+                            header_lbl = f"🔍 **Encontré {len(matches)} servicios oficiales para la ubicación de tu plano ({zone_disp}):**\n"
+                        else:
+                            header_lbl = f"🔍 **Encontré {len(matches)} servicios oficiales para tu consulta:**\n"
+                        lines = [header_lbl]
+                        for m in top:
+                            lines.append(f"### {m['name']}")
+                            lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
+                            lines.append(f"- **Descripción:** {m['description']}")
+                            lines.append(f"- **URL Base:** `{m['url']}`")
+                            lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
+                            lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
+                        if len(matches) > 3:
+                            lines.append(f"*Y {len(matches) - 3} servicios adicionales disponibles en '⚙️ Ajustes & Herramientas WMS'.*")
+                        bot_response = "\n".join(lines)
+                    else:
+                        detected_geos = _detect_query_geo(query_to_run)
+                        bot_response = build_smart_offline_response(
+                            query=query_to_run,
+                            detected_geos=detected_geos,
+                            zone_disp=zone_disp,
+                            is_context_q=is_context_q
+                        )
+                    _parse_and_render_wms_actions(bot_response)
+
+            st.session_state["wms_chat_history"].append({"role": "model", "content": bot_response})
 
 
 # --------------------------------------------------------------------------------------
@@ -3109,17 +3050,18 @@ def render_floating_assistant_button(
         display: flex !important;
         align-items: flex-end !important;
         justify-content: flex-end !important;
-        padding: 0 24px 92px 0 !important;
+        padding: 0 20px 88px 0 !important;
         margin: 0 !important;
+        pointer-events: none !important;
     }}
 
     /* 2. Tarjeta del widget flotante (opaco, 100% interactivo, fondo sólido #0b1329) */
     div[data-testid="stDialog"] > div,
     div.stDialog > div {{
-        width: 410px !important;
-        max-width: calc(100vw - 32px) !important;
-        height: 600px !important;
-        max-height: calc(100vh - 120px) !important;
+        width: 395px !important;
+        max-width: calc(100vw - 28px) !important;
+        height: 570px !important;
+        max-height: calc(100vh - 105px) !important;
         margin: 0 !important;
         padding: 0 !important;
         background-color: #0b1329 !important;
@@ -3135,10 +3077,9 @@ def render_floating_assistant_button(
         animation: slideUpWidget 0.28s cubic-bezier(0.16, 1, 0.3, 1) !important;
     }}
 
-    /* Forzar fondo sólido en todos los contenedores hijos del widget para que nada transparente traspase */
+    /* Forzar fondo sólido en la ventana modal sin afectar bloques internos */
     div[data-testid="stDialog"] [role="dialog"],
-    div[data-testid="stDialog"] div[data-testid="stVerticalBlock"],
-    div[data-testid="stDialog"] div[data-testid="stTabs"] {{
+    div[data-testid="stDialog"] > div > div {{
         background-color: #0b1329 !important;
         background: #0b1329 !important;
     }}
@@ -3178,14 +3119,7 @@ def render_floating_assistant_button(
         background: rgba(255, 255, 255, 0.35) !important;
     }}
 
-    /* Scroll interior del cuerpo del widget */
-    div[data-testid="stDialog"] div[data-testid="stVerticalBlock"] {{
-        overflow-y: auto !important;
-        padding: 10px 14px !important;
-        height: 100% !important;
-    }}
-
-    /* Estilo de pestañas compacto para el widget */
+    /* Estilo de pestañas compacto para el menú de ajustes */
     div[data-testid="stDialog"] div[data-testid="stTabs"] [data-baseweb="tab-list"] {{
         gap: 3px !important;
         margin-bottom: 6px !important;
@@ -3198,25 +3132,83 @@ def render_floating_assistant_button(
         font-weight: 600 !important;
     }}
 
-    /* Burbujas de chat estilo widget */
+    /* Burbujas de chat estilo widget: ancho completo, limpias y legibles */
     div[data-testid="stDialog"] div[data-testid="stChatMessage"] {{
-        background-color: rgba(30, 41, 59, 0.9) !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+        background-color: rgba(15, 23, 42, 0.92) !important;
         border: 1px solid rgba(56, 189, 248, 0.25) !important;
         border-radius: 12px !important;
-        padding: 8px 12px !important;
+        padding: 10px 14px !important;
         margin-bottom: 8px !important;
+        display: flex !important;
+        gap: 10px !important;
+    }}
+
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] {{
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-wrap: break-word !important;
+        word-break: break-word !important;
+        font-size: 13px !important;
+        line-height: 1.45 !important;
+        color: #f1f5f9 !important;
+    }}
+
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] p {{
+        margin: 0 0 6px 0 !important;
+        font-size: 13px !important;
+        line-height: 1.45 !important;
+    }}
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] p:last-child {{
+        margin-bottom: 0 !important;
+    }}
+
+    /* Botones de accesos rápidos compactos */
+    div[data-testid="stDialog"] button[kind="secondary"] {{
+        border-radius: 8px !important;
+        padding: 4px 6px !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        background: rgba(30, 41, 59, 0.8) !important;
+        border: 1px solid rgba(56, 189, 248, 0.25) !important;
+        color: #e2e8f0 !important;
+        transition: all 0.15s ease !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }}
+    div[data-testid="stDialog"] button[kind="secondary"]:hover {{
+        background: rgba(56, 189, 248, 0.2) !important;
+        border-color: #38bdf8 !important;
+        color: #ffffff !important;
+    }}
+
+    /* Acordeón de ajustes discreto */
+    div[data-testid="stDialog"] details {{
+        border: 1px solid rgba(56, 189, 248, 0.2) !important;
+        border-radius: 8px !important;
+        background: rgba(15, 23, 42, 0.6) !important;
+        margin-bottom: 6px !important;
+    }}
+    div[data-testid="stDialog"] details summary {{
+        font-size: 11.5px !important;
+        font-weight: 600 !important;
+        padding: 6px 10px !important;
+        color: #94a3b8 !important;
     }}
 
     /* Adaptación a dispositivos móviles */
     @media (max-width: 640px) {{
         div[data-testid="stDialog"],
         div.stDialog {{
-            padding: 0 12px 80px 0 !important;
+            padding: 0 10px 75px 0 !important;
         }}
         div[data-testid="stDialog"] > div,
         div.stDialog > div {{
-            width: calc(100vw - 24px) !important;
-            height: calc(100vh - 96px) !important;
+            width: calc(100vw - 20px) !important;
+            height: calc(100vh - 90px) !important;
         }}
         div.st-key-btn_floating_assistant button {{
             right: 14px !important;
