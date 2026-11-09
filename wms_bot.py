@@ -2503,7 +2503,7 @@ def _parse_and_render_wms_actions(text: str):
         """, unsafe_allow_html=True)
 
         btn_key = f"apply_wms_ai_{abs(hash(w_url + w_layer))}"
-        if st.button(f"⚡ Cargar en AutoCAD / Visor", key=btn_key, type="primary", use_container_width=True):
+        if st.button("Agregar WMS al visor", key=btn_key, type="primary", use_container_width=True):
             apply_wms_to_application(w_url, w_layer, w_name)
 
     last_bracket = text.rfind("]")
