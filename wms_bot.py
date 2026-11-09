@@ -3097,83 +3097,74 @@ def render_floating_assistant_button(
     /* VENTANA EMERGENTE TIPO WIDGET (TIPO ESRI COLOMBIA / INTERCOM)            */
     /* ------------------------------------------------------------------------- */
     
-    /* 1. Backdrop transparente: NO oscurece la pantalla ni bloquea el visor */
+    /* 1. Backdrop contenedor transparente posicionado abajo a la derecha */
     div[data-testid="stDialog"],
-    div[data-testid="stModal"] {{
-        background: transparent !important;
-        background-color: transparent !important;
-        backdrop-filter: none !important;
-        pointer-events: none !important;
+    div.stDialog {{
         position: fixed !important;
         inset: 0 !important;
         z-index: 999990 !important;
-    }}
-
-    div[data-testid="stDialog"] > div,
-    div[data-testid="stModal"] > div {{
-        background: transparent !important;
         background-color: transparent !important;
-        pointer-events: none !important;
+        background: transparent !important;
+        backdrop-filter: none !important;
         display: flex !important;
-        justify-content: flex-end !important;
         align-items: flex-end !important;
-        padding: 0 !important;
+        justify-content: flex-end !important;
+        padding: 0 24px 92px 0 !important;
         margin: 0 !important;
     }}
 
-    /* 2. Ventana emergente estilo Widget flotante en esquina inferior derecha */
-    div[data-testid="stDialog"] div[role="dialog"],
-    div[data-testid="stModal"] div[role="dialog"] {{
-        position: fixed !important;
-        bottom: 94px !important;
-        right: 24px !important;
-        top: auto !important;
-        left: auto !important;
-        transform: none !important;
+    /* 2. Tarjeta del widget flotante (opaco, 100% interactivo, fondo sólido #0b1329) */
+    div[data-testid="stDialog"] > div,
+    div.stDialog > div {{
         width: 410px !important;
         max-width: calc(100vw - 32px) !important;
-        height: 610px !important;
+        height: 600px !important;
         max-height: calc(100vh - 120px) !important;
         margin: 0 !important;
         padding: 0 !important;
-        border-radius: 18px !important;
-        border: 1.5px solid rgba(56, 189, 248, 0.35) !important;
+        background-color: #0b1329 !important;
         background: #0b1329 !important;
-        box-shadow: 0 16px 45px rgba(0, 0, 0, 0.75), 0 0 25px rgba(56, 189, 248, 0.25) !important;
+        opacity: 1 !important;
         pointer-events: auto !important;
+        border: 1.5px solid rgba(56, 189, 248, 0.45) !important;
+        border-radius: 18px !important;
+        box-shadow: 0 16px 45px rgba(0, 0, 0, 0.9), 0 0 25px rgba(56, 189, 248, 0.3) !important;
         overflow: hidden !important;
         display: flex !important;
         flex-direction: column !important;
-        z-index: 999995 !important;
         animation: slideUpWidget 0.28s cubic-bezier(0.16, 1, 0.3, 1) !important;
     }}
 
-    /* Cabecera azul estilo Esri Colombia */
+    /* Forzar fondo sólido en todos los contenedores hijos del widget para que nada transparente traspase */
+    div[data-testid="stDialog"] [role="dialog"],
+    div[data-testid="stDialog"] div[data-testid="stVerticalBlock"],
+    div[data-testid="stDialog"] div[data-testid="stTabs"] {{
+        background-color: #0b1329 !important;
+        background: #0b1329 !important;
+    }}
+
+    /* 3. Cabecera azul estilo Esri Colombia */
+    div[data-testid="stDialog"] h2,
     div[data-testid="stDialogHeader"] {{
         background: linear-gradient(135deg, #0284c7 0%, #1e40af 100%) !important;
-        padding: 10px 14px !important;
+        padding: 12px 16px !important;
         margin: 0 !important;
         border-top-left-radius: 16px !important;
         border-top-right-radius: 16px !important;
         border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: space-between !important;
-    }}
-
-    div[data-testid="stDialogHeader"] h2,
-    div[data-testid="stDialogHeader"] div {{
         color: #ffffff !important;
-        font-size: 14.5px !important;
+        font-size: 15px !important;
         font-weight: 700 !important;
         letter-spacing: -0.2px !important;
-        margin: 0 !important;
-        padding: 0 !important;
     }}
 
+    /* Botón de cerrar 'X' en la cabecera */
+    div[data-testid="stDialog"] button[aria-label="Close"],
     div[data-testid="stDialogHeader"] button {{
+        top: 10px !important;
+        right: 14px !important;
         color: #ffffff !important;
-        background: rgba(255, 255, 255, 0.15) !important;
+        background: rgba(255, 255, 255, 0.2) !important;
         border-radius: 50% !important;
         width: 26px !important;
         height: 26px !important;
@@ -3182,15 +3173,15 @@ def render_floating_assistant_button(
         justify-content: center !important;
         transition: background 0.2s ease !important;
     }}
-
+    div[data-testid="stDialog"] button[aria-label="Close"]:hover,
     div[data-testid="stDialogHeader"] button:hover {{
         background: rgba(255, 255, 255, 0.35) !important;
     }}
 
     /* Scroll interior del cuerpo del widget */
-    div[data-testid="stDialog"] div[role="dialog"] > div[data-testid="stVerticalBlock"] {{
+    div[data-testid="stDialog"] div[data-testid="stVerticalBlock"] {{
         overflow-y: auto !important;
-        padding: 10px 12px !important;
+        padding: 10px 14px !important;
         height: 100% !important;
     }}
 
@@ -3198,20 +3189,32 @@ def render_floating_assistant_button(
     div[data-testid="stDialog"] div[data-testid="stTabs"] [data-baseweb="tab-list"] {{
         gap: 3px !important;
         margin-bottom: 6px !important;
+        background: transparent !important;
     }}
 
     div[data-testid="stDialog"] div[data-testid="stTabs"] [data-baseweb="tab"] {{
-        padding: 4px 7px !important;
-        font-size: 11px !important;
+        padding: 4px 8px !important;
+        font-size: 11.5px !important;
         font-weight: 600 !important;
+    }}
+
+    /* Burbujas de chat estilo widget */
+    div[data-testid="stDialog"] div[data-testid="stChatMessage"] {{
+        background-color: rgba(30, 41, 59, 0.9) !important;
+        border: 1px solid rgba(56, 189, 248, 0.25) !important;
+        border-radius: 12px !important;
+        padding: 8px 12px !important;
+        margin-bottom: 8px !important;
     }}
 
     /* Adaptación a dispositivos móviles */
     @media (max-width: 640px) {{
-        div[data-testid="stDialog"] div[role="dialog"],
-        div[data-testid="stModal"] div[role="dialog"] {{
-            right: 12px !important;
-            bottom: 80px !important;
+        div[data-testid="stDialog"],
+        div.stDialog {{
+            padding: 0 12px 80px 0 !important;
+        }}
+        div[data-testid="stDialog"] > div,
+        div.stDialog > div {{
             width: calc(100vw - 24px) !important;
             height: calc(100vh - 96px) !important;
         }}
