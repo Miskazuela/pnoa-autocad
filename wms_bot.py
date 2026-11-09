@@ -2460,23 +2460,57 @@ query_openai_wms = lambda p, k, h, c=None: query_universal_ai_wms(p, k, h, c, pr
 # 5. PARSEO DE ACCIONES WMS Y COMPONENTE MODAL / FLOTANTE
 # --------------------------------------------------------------------------------------
 def _parse_and_render_wms_actions(text: str):
-    """Detecta bloques [APPLY_WMS: {...}] y renderiza un botón de aplicación directa."""
+    """Detecta bloques [APPLY_WMS: {...}] y renderiza tarjetas visuales compactas e interactivas."""
     pattern = r"\[APPLY_WMS:\s*(\{.*?\})\s*\]"
-    clean_text = re.sub(pattern, "", text).strip()
-    st.markdown(clean_text)
-
     matches = re.findall(pattern, text)
+    if not matches:
+        st.markdown(text)
+        return
+
+    # Si hay bloques [APPLY_WMS:], conservamos el texto introductorio y reemplazamos
+    # las listas gigantes de texto '###' por tarjetas visuales estilizadas y ultra-compactas.
+    no_tags = re.sub(pattern, "", text)
+    intro_text = no_tags.split("###")[0].strip() if "###" in no_tags else no_tags.strip()
+    if intro_text:
+        st.markdown(intro_text)
+
     for m in matches:
         try:
             data = json.loads(m)
             w_name = data.get("name", "Servicio WMS")
             w_url = data.get("url", "")
             w_layer = data.get("layer", "")
-            btn_key = f"apply_wms_ai_{abs(hash(w_url + w_layer))}"
-            if st.button(f"🚀 Cargar en la aplicación: {w_name}", key=btn_key, type="primary"):
-                apply_wms_to_application(w_url, w_layer, w_name)
+            w_region = data.get("region", "")
+            w_desc = data.get("description", "")
+            w_cat = data.get("category", "")
         except Exception:
-            pass
+            continue
+
+        tag_parts = [p for p in [w_region, w_cat] if p]
+        tag_str = " · ".join(tag_parts) if tag_parts else "Oficial"
+        desc_short = f"{w_desc[:95]}..." if len(w_desc) > 95 else w_desc
+        layer_disp = f"Capa: <code>{w_layer}</code>" if w_layer else ""
+
+        st.markdown(f"""
+        <div class="wms-compact-card">
+            <div class="wms-card-top">
+                <span class="wms-card-title">🏛️ {w_name}</span>
+                <span class="wms-card-tag">{tag_str}</span>
+            </div>
+            {f'<div class="wms-card-desc">{desc_short}</div>' if desc_short else ''}
+            <div class="wms-card-meta">{layer_disp}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        btn_key = f"apply_wms_ai_{abs(hash(w_url + w_layer))}"
+        if st.button(f"⚡ Cargar en AutoCAD / Visor", key=btn_key, type="primary", use_container_width=True):
+            apply_wms_to_application(w_url, w_layer, w_name)
+
+    last_bracket = text.rfind("]")
+    if last_bracket != -1 and last_bracket < len(text) - 1:
+        trailing = text[last_bracket+1:].strip()
+        if trailing and not trailing.startswith("###") and not trailing.startswith("-"):
+            st.caption(trailing)
 
 
 def apply_wms_to_application(url: str, layer: str, name: str):
@@ -2518,7 +2552,7 @@ def render_wms_assistant_content(
         st.session_state["wms_chat_history"] = [
             {
                 "role": "model",
-                "content": "👋 **¡Hola! Soy GeoBot.**\n\n¿Qué capa cartográfica oficial u ortofoto necesitas para tu proyecto en AutoCAD o visor?"
+                "content": "👋 **¡Hola!** ¿Qué capa cartográfica u ortofoto buscas para tu plano?"
             }
         ]
 
@@ -2688,8 +2722,8 @@ def render_wms_assistant_content(
                         else:
                             st.error(f"❌ Error: {report['error']}")
 
-    # Contenedor principal de conversación amplio, cómodo y scrolleable
-    chat_box = st.container(height=380)
+    # Contenedor principal de conversación amplio, cómodo y sin marcos redundantes
+    chat_box = st.container(height=340, border=False)
     bot_avatar_img = get_bot_avatar_path()
     with chat_box:
         for msg in st.session_state["wms_chat_history"]:
@@ -2703,8 +2737,8 @@ def render_wms_assistant_content(
 
         new_turn_container = st.container()
 
-    # Campo de entrada de texto interactivo siempre visible y destacado
-    user_input = st.chat_input("Escribe tu pregunta sobre capas WMS o tu plano...", key="wms_chat_interactive_input")
+    # Campo de entrada de texto interactivo, conciso y de 1 sola línea
+    user_input = st.chat_input("Buscar capa WMS (ej: Catastro, Ortofoto)...", key="wms_chat_interactive_input")
 
     query_to_run = user_input
     if query_to_run:
@@ -2745,15 +2779,18 @@ def render_wms_assistant_content(
                                 top = local_matches[:3]
                                 lines = [
                                     bot_response,
-                                    "\n\n---\n🔍 **Recomendaciones automáticas del Catálogo Oficial Local:**\n"
+                                    "\n\n🔍 **Capas oficiales recomendadas:**\n"
                                 ]
                                 for m in top:
-                                    lines.append(f"### {m['name']}")
-                                    lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
-                                    lines.append(f"- **Descripción:** {m['description']}")
-                                    lines.append(f"- **URL Base:** `{m['url']}`")
-                                    lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
-                                    lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
+                                    payload = {
+                                        "name": m["name"],
+                                        "url": m["url"],
+                                        "layer": m["default_layer"],
+                                        "region": m.get("region", ""),
+                                        "category": m.get("category", ""),
+                                        "description": m.get("description", "")
+                                    }
+                                    lines.append(f"[APPLY_WMS: {json.dumps(payload)}]")
                                 bot_response = "\n".join(lines)
 
                         _parse_and_render_wms_actions(bot_response)
@@ -2765,19 +2802,22 @@ def render_wms_assistant_content(
                     if matches:
                         top = matches[:3]
                         if is_context_q and zone_disp:
-                            header_lbl = f"🔍 **Encontré {len(matches)} servicios oficiales para la ubicación de tu plano ({zone_disp}):**\n"
+                            header_lbl = f"🔍 **{len(matches)} capas oficiales para {zone_disp}:**\n"
                         else:
-                            header_lbl = f"🔍 **Encontré {len(matches)} servicios oficiales para tu consulta:**\n"
+                            header_lbl = f"🔍 **{len(matches)} capas encontradas:**\n"
                         lines = [header_lbl]
                         for m in top:
-                            lines.append(f"### {m['name']}")
-                            lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
-                            lines.append(f"- **Descripción:** {m['description']}")
-                            lines.append(f"- **URL Base:** `{m['url']}`")
-                            lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
-                            lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
+                            payload = {
+                                "name": m["name"],
+                                "url": m["url"],
+                                "layer": m["default_layer"],
+                                "region": m.get("region", ""),
+                                "category": m.get("category", ""),
+                                "description": m.get("description", "")
+                            }
+                            lines.append(f"[APPLY_WMS: {json.dumps(payload)}]")
                         if len(matches) > 3:
-                            lines.append(f"*Y {len(matches) - 3} servicios adicionales disponibles en '⚙️ Ajustes & Herramientas WMS'.*")
+                            lines.append(f"\n*💡 +{len(matches) - 3} capas más en Ajustes.*")
                         bot_response = "\n".join(lines)
                     else:
                         detected_geos = _detect_query_geo(query_to_run)
@@ -3042,13 +3082,13 @@ def render_floating_assistant_button(
         pointer-events: none !important;
     }}
 
-    /* 2. Tarjeta del widget flotante (opaco, 100% interactivo, fondo sólido #0b1329) */
+    /* 2. Tarjeta del widget flotante (compacta, ultra-visual, fondo sólido #0b1329) */
     div[data-testid="stDialog"] > div,
     div.stDialog > div {{
-        width: 410px !important;
-        max-width: calc(100vw - 24px) !important;
-        height: 610px !important;
-        max-height: calc(100vh - 100px) !important;
+        width: 385px !important;
+        max-width: calc(100vw - 20px) !important;
+        height: 535px !important;
+        max-height: calc(100vh - 85px) !important;
         margin: 0 !important;
         padding: 0 !important;
         background-color: #0b1329 !important;
@@ -3056,8 +3096,8 @@ def render_floating_assistant_button(
         opacity: 1 !important;
         pointer-events: auto !important;
         border: 1.5px solid rgba(56, 189, 248, 0.45) !important;
-        border-radius: 18px !important;
-        box-shadow: 0 16px 45px rgba(0, 0, 0, 0.9), 0 0 25px rgba(56, 189, 248, 0.3) !important;
+        border-radius: 16px !important;
+        box-shadow: 0 16px 45px rgba(0, 0, 0, 0.9), 0 0 25px rgba(56, 189, 248, 0.25) !important;
         overflow: hidden !important;
         display: flex !important;
         flex-direction: column !important;
@@ -3069,38 +3109,46 @@ def render_floating_assistant_button(
     div[data-testid="stDialog"] > div > div:not([data-testid="stDialogHeader"]) {{
         background-color: #0b1329 !important;
         background: #0b1329 !important;
-        padding: 6px 12px 10px 12px !important;
+        padding: 4px 10px 8px 10px !important;
         overflow-y: auto !important;
         display: flex !important;
         flex-direction: column !important;
         flex: 1 1 auto !important;
     }}
 
+    /* Eliminar bordes redundantes de contenedores internos */
+    div[data-testid="stDialog"] div[data-testid="stVerticalBlockBorderWrapper"] {{
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+    }}
+
     /* 3. Cabecera azul estilo Esri Colombia */
     div[data-testid="stDialog"] h2,
     div[data-testid="stDialogHeader"] {{
         background: linear-gradient(135deg, #0284c7 0%, #1e40af 100%) !important;
-        padding: 12px 16px !important;
+        padding: 8px 14px !important;
         margin: 0 !important;
-        border-top-left-radius: 16px !important;
-        border-top-right-radius: 16px !important;
+        border-top-left-radius: 14px !important;
+        border-top-right-radius: 14px !important;
         border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
         color: #ffffff !important;
-        font-size: 15px !important;
+        font-size: 14px !important;
         font-weight: 700 !important;
         letter-spacing: -0.2px !important;
+        min-height: 38px !important;
     }}
 
     /* Botón de cerrar 'X' en la cabecera */
     div[data-testid="stDialog"] button[aria-label="Close"],
     div[data-testid="stDialogHeader"] button {{
-        top: 10px !important;
-        right: 14px !important;
+        top: 7px !important;
+        right: 12px !important;
         color: #ffffff !important;
         background: rgba(255, 255, 255, 0.2) !important;
         border-radius: 50% !important;
-        width: 26px !important;
-        height: 26px !important;
+        width: 24px !important;
+        height: 24px !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
@@ -3114,28 +3162,45 @@ def render_floating_assistant_button(
     /* Estilo de pestañas compacto para el menú de ajustes */
     div[data-testid="stDialog"] div[data-testid="stTabs"] [data-baseweb="tab-list"] {{
         gap: 3px !important;
-        margin-bottom: 6px !important;
+        margin-bottom: 4px !important;
         background: transparent !important;
     }}
 
     div[data-testid="stDialog"] div[data-testid="stTabs"] [data-baseweb="tab"] {{
-        padding: 4px 8px !important;
-        font-size: 11.5px !important;
+        padding: 3px 6px !important;
+        font-size: 11px !important;
         font-weight: 600 !important;
     }}
 
-    /* Burbujas de chat estilo widget: ancho completo, limpias y legibles */
+    /* Burbujas de chat estilo widget: compactas, limpias y sin desperdicio de espacio */
     div[data-testid="stDialog"] div[data-testid="stChatMessage"] {{
         width: 100% !important;
         max-width: 100% !important;
         box-sizing: border-box !important;
-        background-color: rgba(15, 23, 42, 0.92) !important;
-        border: 1px solid rgba(56, 189, 248, 0.25) !important;
-        border-radius: 12px !important;
-        padding: 10px 14px !important;
-        margin-bottom: 8px !important;
+        background-color: rgba(15, 23, 42, 0.85) !important;
+        border: 1px solid rgba(56, 189, 248, 0.2) !important;
+        border-radius: 9px !important;
+        padding: 6px 10px !important;
+        margin-bottom: 5px !important;
         display: flex !important;
-        gap: 10px !important;
+        align-items: flex-start !important;
+        gap: 8px !important;
+    }}
+
+    /* Mensajes del usuario con tono azul marino sutil */
+    div[data-testid="stDialog"] div[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {{
+        background: linear-gradient(135deg, rgba(30, 58, 138, 0.3) 0%, rgba(15, 23, 42, 0.85) 100%) !important;
+        border-color: rgba(56, 189, 248, 0.35) !important;
+    }}
+
+    /* Avatares compactos de 22px */
+    div[data-testid="stDialog"] div[data-testid="stChatMessage"] [data-testid="chatAvatarIcon-user"],
+    div[data-testid="stDialog"] div[data-testid="stChatMessage"] [data-testid="chatAvatarIcon-assistant"],
+    div[data-testid="stDialog"] div[data-testid="stChatMessage"] img {{
+        width: 22px !important;
+        min-width: 22px !important;
+        height: 22px !important;
+        border-radius: 6px !important;
     }}
 
     div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] {{
@@ -3143,24 +3208,97 @@ def render_floating_assistant_button(
         max-width: 100% !important;
         overflow-wrap: break-word !important;
         word-break: break-word !important;
-        font-size: 13px !important;
-        line-height: 1.45 !important;
+        font-size: 12px !important;
+        line-height: 1.35 !important;
         color: #f1f5f9 !important;
+        padding-top: 1px !important;
     }}
 
     div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] p {{
-        margin: 0 0 6px 0 !important;
-        font-size: 13px !important;
-        line-height: 1.45 !important;
+        margin: 0 0 3px 0 !important;
+        font-size: 12px !important;
+        line-height: 1.35 !important;
     }}
     div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] p:last-child {{
         margin-bottom: 0 !important;
     }}
 
-    /* Campo de entrada de texto interactivo destacado y 100% visible */
+    /* Tarjetas visuales interactivas para capas WMS recomendadas */
+    .wms-compact-card {{
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(56, 189, 248, 0.32);
+        border-radius: 8px;
+        padding: 5px 8px;
+        margin-top: 4px;
+        margin-bottom: 2px;
+    }}
+    .wms-card-top {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 2px;
+    }}
+    .wms-card-title {{
+        font-weight: 700;
+        color: #38bdf8;
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }}
+    .wms-card-tag {{
+        font-size: 9.5px;
+        background: rgba(56, 189, 248, 0.18);
+        color: #7dd3fc;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-weight: 600;
+        white-space: nowrap;
+    }}
+    .wms-card-desc {{
+        font-size: 10.5px;
+        color: #cbd5e1;
+        line-height: 1.3;
+        margin-bottom: 2px;
+    }}
+    .wms-card-meta {{
+        font-size: 9.5px;
+        color: #94a3b8;
+        font-family: monospace;
+    }}
+    .wms-card-meta code {{
+        color: #34d399;
+        font-size: 9.5px;
+        background: rgba(15, 23, 42, 0.6);
+        padding: 1px 4px;
+        border-radius: 3px;
+    }}
+
+    /* Botón de cargar capa compacto y estilizado */
+    div[data-testid="stDialog"] button[kind="primary"] {{
+        height: 28px !important;
+        min-height: 28px !important;
+        font-size: 11.5px !important;
+        font-weight: 700 !important;
+        padding: 0 8px !important;
+        border-radius: 6px !important;
+        margin-bottom: 5px !important;
+        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
+        border: 1px solid #38bdf8 !important;
+        box-shadow: 0 2px 6px rgba(2, 132, 199, 0.3) !important;
+        transition: all 0.15s ease !important;
+    }}
+    div[data-testid="stDialog"] button[kind="primary"]:hover {{
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 10px rgba(56, 189, 248, 0.4) !important;
+    }}
+
+    /* Campo de entrada de texto interactivo destacado y ultra-compacto */
     div[data-testid="stDialog"] div[data-testid="stChatInput"] {{
-        margin-top: 8px !important;
-        margin-bottom: 2px !important;
+        margin-top: 6px !important;
+        margin-bottom: 0px !important;
         width: 100% !important;
         position: relative !important;
         z-index: 99 !important;
@@ -3171,30 +3309,39 @@ def render_floating_assistant_button(
     div[data-testid="stDialog"] div[data-testid="stChatInput"] > div {{
         background-color: #0f172a !important;
         border: 1.5px solid #38bdf8 !important;
-        border-radius: 12px !important;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4), 0 0 10px rgba(56, 189, 248, 0.25) !important;
+        border-radius: 10px !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), 0 0 8px rgba(56, 189, 248, 0.2) !important;
+        min-height: 38px !important;
+        height: 38px !important;
     }}
     div[data-testid="stDialog"] div[data-testid="stChatInput"] textarea {{
         color: #ffffff !important;
-        font-size: 13px !important;
-        line-height: 1.4 !important;
+        font-size: 12px !important;
+        line-height: 1.3 !important;
         background-color: transparent !important;
-        padding: 8px 10px !important;
+        padding: 7px 10px !important;
+        min-height: 36px !important;
+        height: 36px !important;
+        overflow-y: hidden !important;
     }}
     div[data-testid="stDialog"] div[data-testid="stChatInput"] textarea::placeholder {{
         color: #94a3b8 !important;
-        font-size: 12.5px !important;
+        font-size: 11.5px !important;
+        white-space: nowrap !important;
     }}
     div[data-testid="stDialog"] div[data-testid="stChatInput"] button {{
         background-color: #0284c7 !important;
         color: #ffffff !important;
-        border-radius: 8px !important;
+        border-radius: 7px !important;
         border: none !important;
+        width: 28px !important;
+        height: 28px !important;
+        min-height: 28px !important;
         transition: all 0.2s ease !important;
     }}
     div[data-testid="stDialog"] div[data-testid="stChatInput"] button:hover {{
         background-color: #38bdf8 !important;
-        transform: scale(1.08) !important;
+        transform: scale(1.06) !important;
     }}
 
     /* Acordeón de ajustes discreto */
