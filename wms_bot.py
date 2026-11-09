@@ -1423,40 +1423,27 @@ def build_smart_offline_response(
     global_alternatives = search_wms_catalog(thematic_str, project_geo_fallback=None) if thematic_str else []
 
     lines = [
-        f"### 🌐 Localizador Cartográfico Oficial: **{target_name}**\n",
-        f"Actualmente en la base de datos local no dispongo de la URL precargada para **'{query}'** en **{target_name}**, pero puedes obtener el servidor oficial en segundos con estos recursos directos:\n",
-        f"#### 1. 🔍 Búsqueda directa del servidor WMS en Google",
-        f"Haz clic en este enlace preparado técnicamente para localizar el endpoint WMS oficial en Google:",
-        f"👉 **[🔗 Buscar '{google_query_term}' en Google]({google_search_url})**\n"
+        f"🔍 No encontré WMS directo para **'{query}'** ({target_name}).",
+        f"👉 [Buscar '{google_query_term}' en Google]({google_search_url})"
     ]
 
     if portal:
-        lines.append(f"#### 2. 🏛️ Geoportal Nacional Oficial ({portal['portal_name']})")
-        lines.append(f"- **Web:** [{portal['portal_url']}]({portal['portal_url']})")
-        lines.append(f"- **Ámbito:** {portal['description']}")
-        lines.append(f"- 💡 **Tip para AutoCAD:** {portal['search_tips']}\n")
+        lines.append(f"🏛️ **Geoportal ({portal['portal_name']}):** [{portal['portal_url']}]({portal['portal_url']})")
 
-    lines.append("#### 3. ⚡ ¿Cómo insertarlo en tu plano CAD?")
-    lines.append("1. Copia la URL del servicio WMS que encuentres en Google o en el Geoportal (la que contiene `.../wms` o `.../WMSServer`).")
-    lines.append("2. Dirígete a la pestaña de arriba: **'🔍 Inspeccionar URL Externa (GetCapabilities)'**.")
-    lines.append("3. Pega la URL y pulsa **'Inspeccionar Servidor en Vivo'**: el sistema leerá automáticamente todas las capas publicadas por la entidad y te creará el botón interactivo para descargarlo e insertarlo en AutoCAD con archivo `.tfw` georreferenciado.\n")
-
-    lines.append("---")
-    lines.append("💡 **Sobre el uso de IA (¡Es 100% GRATIS, no necesitas cuenta de pago!):**")
-    lines.append("No requieres ninguna cuenta de pago ni tarjeta bancaria para usar IA en este asistente:")
-    lines.append("- **Google Gemini:** Es **100% gratuito** con tu cuenta de Gmail en [Google AI Studio](https://aistudio.google.com/) (generas tu API Key en 30 segundos sin tarjeta bancaria).")
-    lines.append("- **Groq Cloud:** Es **100% gratuito** y ultra-rápido en [console.groq.com](https://console.groq.com/) (modelos Llama-3 de código abierto sin tarjeta).")
-    lines.append("Con cualquiera de las dos, el asistente busca e inserta los WMS mundiales automáticamente sin coste alguno.")
+    lines.append("💡 *Tip: Puedes activar IA gratis (Gemini o Groq) en ⚙️ para buscar cualquier WMS del mundo.*")
 
     if global_alternatives:
-        lines.append("\n---\n📚 **Capas oficiales verificadas de esta temática disponibles en otros ámbitos como referencia:**\n")
+        lines.append("\n📚 **Capas oficiales de referencia:**")
         for m in global_alternatives[:3]:
-            lines.append(f"### {m['name']}")
-            lines.append(f"- **Ámbito:** {m['region']} | **Categoría:** {m['category']}")
-            lines.append(f"- **Descripción:** {m['description']}")
-            lines.append(f"- **URL Base:** `{m['url']}`")
-            lines.append(f"- **Capa recomendada:** `{m['default_layer']}`")
-            lines.append(f"[APPLY_WMS: {json.dumps({'name': m['name'], 'url': m['url'], 'layer': m['default_layer']})}]\n")
+            payload = {
+                "name": m["name"],
+                "url": m["url"],
+                "layer": m["default_layer"],
+                "region": m.get("region", ""),
+                "category": m.get("category", ""),
+                "description": m.get("description", "")
+            }
+            lines.append(f"[APPLY_WMS: {json.dumps(payload)}]")
 
     return "\n".join(lines)
 
@@ -2545,7 +2532,8 @@ def render_wms_assistant_content(
                 "Catálogo WMS disponible",
                 "PNOA Máxima Actualidad",
                 "Zonas Inundables SNCZI",
-                "Red Natura 2000"
+                "Red Natura 2000",
+                "Sobre el uso de IA"
             ]
         )
     ):
@@ -3245,24 +3233,98 @@ def render_floating_assistant_button(
         border-radius: 6px !important;
     }}
 
+    /* Unificación tipográfica del diálogo y chat: TODO el texto a tamaño pequeño consistente (11.5px) */
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"],
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] *,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"],
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] *,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] span,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] div {{
+        font-size: 11.5px !important;
+        line-height: 1.4 !important;
+        box-sizing: border-box !important;
+    }}
+
     div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] {{
         width: 100% !important;
         max-width: 100% !important;
         overflow-wrap: break-word !important;
         word-break: break-word !important;
-        font-size: 12px !important;
-        line-height: 1.35 !important;
         color: #f1f5f9 !important;
         padding-top: 1px !important;
     }}
 
-    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] p {{
-        margin: 0 0 3px 0 !important;
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] h1,
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] h2,
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] h3,
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] h4,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] h1,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] h2,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] h3,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] h4 {{
         font-size: 12px !important;
-        line-height: 1.35 !important;
+        font-weight: 700 !important;
+        margin: 4px 0 2px 0 !important;
+        color: #38bdf8 !important;
+        line-height: 1.3 !important;
+    }}
+
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] p,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p {{
+        margin: 0 0 3px 0 !important;
+        font-size: 11.5px !important;
+        line-height: 1.4 !important;
     }}
     div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] p:last-child {{
         margin-bottom: 0 !important;
+    }}
+
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] ul,
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] ol,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] ul,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] ol {{
+        margin: 2px 0 4px 0 !important;
+        padding-left: 14px !important;
+    }}
+
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] li,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] li {{
+        margin: 0 0 2px 0 !important;
+        font-size: 11.5px !important;
+        line-height: 1.35 !important;
+        color: #f1f5f9 !important;
+    }}
+
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] strong,
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] b,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] strong,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] b {{
+        font-weight: 700 !important;
+        font-size: 11.5px !important;
+        color: #f8fafc !important;
+    }}
+
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] a,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] a {{
+        color: #38bdf8 !important;
+        font-size: 11.5px !important;
+        text-decoration: underline !important;
+    }}
+
+    div[data-testid="stDialog"] div[data-testid="stChatMessageContent"] code,
+    div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] code {{
+        font-size: 10.5px !important;
+        background: rgba(15, 23, 42, 0.7) !important;
+        color: #34d399 !important;
+        padding: 1px 4px !important;
+        border-radius: 3px !important;
+    }}
+
+    div[data-testid="stDialog"] hr {{
+        margin: 4px 0 !important;
+        border: none !important;
+        border-top: 1px solid rgba(56, 189, 248, 0.2) !important;
     }}
 
     /* Tarjetas visuales interactivas para capas WMS recomendadas */
