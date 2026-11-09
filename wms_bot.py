@@ -2722,8 +2722,8 @@ def render_wms_assistant_content(
                         else:
                             st.error(f"❌ Error: {report['error']}")
 
-    # Contenedor principal de conversación amplio, cómodo y sin marcos redundantes
-    chat_box = st.container(height=340, border=False)
+    # Contenedor principal de conversación más alto para que quepan las tarjetas sin scroll
+    chat_box = st.container(height=460, border=False)
     bot_avatar_img = get_bot_avatar_path()
     with chat_box:
         for msg in st.session_state["wms_chat_history"]:
@@ -3082,13 +3082,13 @@ def render_floating_assistant_button(
         pointer-events: none !important;
     }}
 
-    /* 2. Tarjeta del widget flotante (compacta, ultra-visual, fondo sólido #0b1329) */
+    /* 2. Tarjeta del widget flotante (más alta para eliminar la barra de scroll y dar holgura) */
     div[data-testid="stDialog"] > div,
     div.stDialog > div {{
-        width: 385px !important;
+        width: 390px !important;
         max-width: calc(100vw - 20px) !important;
-        height: 535px !important;
-        max-height: calc(100vh - 85px) !important;
+        height: 645px !important;
+        max-height: calc(100vh - 45px) !important;
         margin: 0 !important;
         padding: 0 !important;
         background-color: #0b1329 !important;
@@ -3111,9 +3111,30 @@ def render_floating_assistant_button(
         background: #0b1329 !important;
         padding: 4px 10px 8px 10px !important;
         overflow-y: auto !important;
+        overflow-x: hidden !important;
+        scrollbar-width: none !important;
         display: flex !important;
         flex-direction: column !important;
         flex: 1 1 auto !important;
+    }}
+    div[data-testid="stDialog"] > div > div:not([data-testid="stDialogHeader"])::-webkit-scrollbar {{
+        display: none !important;
+    }}
+
+    /* Scrollbars elegantes y ultra-discretos de 4px dentro del chat */
+    div[data-testid="stDialog"] ::-webkit-scrollbar {{
+        width: 4px !important;
+        height: 4px !important;
+    }}
+    div[data-testid="stDialog"] ::-webkit-scrollbar-track {{
+        background: transparent !important;
+    }}
+    div[data-testid="stDialog"] ::-webkit-scrollbar-thumb {{
+        background: rgba(56, 189, 248, 0.25) !important;
+        border-radius: 4px !important;
+    }}
+    div[data-testid="stDialog"] ::-webkit-scrollbar-thumb:hover {{
+        background: rgba(56, 189, 248, 0.55) !important;
     }}
 
     /* Eliminar bordes redundantes de contenedores internos */
