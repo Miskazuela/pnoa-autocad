@@ -2575,155 +2575,154 @@ def render_wms_assistant_content(
     effective_prov = detect_ai_provider(user_key, user_selected=cur_p_setting)
     disp_m = st.session_state.get("wms_active_selected_model", "gemini-3.8-flash")
 
-    # Cabecera ultra-limpia de 1 sola línea: Zona, CRS, estado de IA y botón de limpiar chat
+    # Cabecera ultra-limpia de 1 sola línea: Zona, CRS, estado de IA, Popover de Ajustes y Botón de Limpiar
     zone_label = f"{zone_disp}" if zone_disp else "Global"
-    ai_status = f"✨ IA: {effective_prov.capitalize()} ({disp_m})" if (has_key or cur_p_setting == "custom") else "🟢 Catálogo Offline"
-    c_top_info, c_top_clear = st.columns([5.5, 0.7])
+    ai_status = f"✨ {effective_prov.capitalize()}" if (has_key or cur_p_setting == "custom") else "🟢 Offline"
+    c_top_info, c_top_gear, c_top_clear = st.columns([5.2, 0.8, 0.8])
     with c_top_info:
         st.markdown(f"""
-        <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 4px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid rgba(56, 189, 248, 0.15); margin-bottom: 4px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 2px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid rgba(56, 189, 248, 0.15);">
             <span>📍 <b>{zone_label}</b> · <code style="color: #38bdf8;">EPSG:{epsg_disp}</code></span>
             <span style="color: #34d399; font-weight: 600;">{ai_status}</span>
         </div>
         """, unsafe_allow_html=True)
+    with c_top_gear:
+        with st.popover("⚙️", help="Ajustes de IA, Directorio WMS e Inspector"):
+            sub_tab_ai, sub_tab_dir, sub_tab_insp = st.tabs(["🔑 Clave IA", "📚 Directorio", "🔍 Inspector"])
+            with sub_tab_ai:
+                user_key_in = st.text_input(
+                    "API Key de IA:",
+                    value=st.session_state.get("wms_bot_api_key", ""),
+                    type="password",
+                    placeholder="AIzaSy... (Gemini), sk-... (OpenAI), gsk_... (Groq)",
+                    key="in_exp_api_key"
+                )
+                st.session_state["wms_bot_api_key"] = user_key_in.strip()
+
+                c_prov, c_model = st.columns([1, 1.4])
+                with c_prov:
+                    provider_options = [
+                        ("auto", f"🔍 Auto ({effective_prov.capitalize() if effective_prov != 'none' else 'Por clave'})"),
+                        ("gemini", "Google Gemini"),
+                        ("openai", "OpenAI (ChatGPT)"),
+                        ("anthropic", "Anthropic Claude"),
+                        ("groq", "Groq"),
+                        ("deepseek", "DeepSeek"),
+                        ("openrouter", "OpenRouter"),
+                        ("mistral", "Mistral AI"),
+                        ("perplexity", "Perplexity AI"),
+                        ("custom", "⚙️ Servidor Ollama")
+                    ]
+                    prov_keys = [p[0] for p in provider_options]
+                    prov_labels = [p[1] for p in provider_options]
+                    cur_p_idx = prov_keys.index(cur_p_setting) if cur_p_setting in prov_keys else 0
+                    sel_label = st.selectbox("Proveedor:", options=prov_labels, index=cur_p_idx, key="sb_wms_prov_selector")
+                    chosen_prov = prov_keys[prov_labels.index(sel_label)]
+                    st.session_state["wms_selected_ai_provider"] = chosen_prov
+                    if chosen_prov != "auto":
+                        effective_prov = chosen_prov
+
+                with c_model:
+                    cust_url_active = st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1")
+                    base_models = discover_provider_models(
+                        provider=effective_prov,
+                        api_key=user_key_in.strip(),
+                        custom_url=cust_url_active,
+                        force_refresh=False
+                    )
+                    model_choices = list(base_models) + ["✏️ Personalizado..."]
+
+                    prov_state_key = f"wms_chosen_model_{effective_prov}"
+                    prev_m = st.session_state.get(prov_state_key, base_models[0])
+
+                    sb_model_key = f"sb_wms_model_choice_{effective_prov}"
+                    if effective_prov == "gemini":
+                        cur_sb = st.session_state.get(sb_model_key)
+                        if cur_sb and (cur_sb not in model_choices or any(old in str(cur_sb).lower() for old in ["2.5", "2.0", "1.5", "1.0"])):
+                            st.session_state.pop(sb_model_key, None)
+                        if prev_m and any(old in str(prev_m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
+                            prev_m = base_models[0]
+                            st.session_state[prov_state_key] = prev_m
+
+                    if prev_m in base_models:
+                        m_idx = base_models.index(prev_m)
+                    elif prev_m == "custom_input":
+                        m_idx = len(model_choices) - 1
+                    else:
+                        m_idx = 0
+
+                    sel_m_choice = st.selectbox(
+                        "Modelo:",
+                        options=model_choices,
+                        index=m_idx,
+                        key=f"sb_wms_model_choice_{effective_prov}"
+                    )
+
+                    if sel_m_choice == "✏️ Personalizado...":
+                        st.session_state[prov_state_key] = "custom_input"
+                        custom_m_in = st.text_input(
+                            "Nombre exacto:",
+                            value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
+                            placeholder="Ej: gemini-3.8-flash, gpt-4o"
+                        )
+                        active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
+                        st.session_state[f"wms_custom_name_{effective_prov}"] = active_model_name
+                    else:
+                        active_model_name = sel_m_choice
+                        st.session_state[prov_state_key] = active_model_name
+
+                    st.session_state["wms_active_selected_model"] = active_model_name
+
+                if st.button("🔄 Actualizar modelos", key=f"btn_ref_m_{effective_prov}", use_container_width=True):
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("_cached_"):
+                            st.session_state.pop(k, None)
+                    st.rerun()
+
+            with sub_tab_dir:
+                col_f1, col_f2 = st.columns(2)
+                categories = ["Todas"] + sorted(list({item["category"] for item in WMS_DATABASE}))
+                regions = ["Todas", "Global", "España", "América", "Colombia", "México", "Chile", "Argentina", "Estados Unidos", "Europa", "Australia"]
+                with col_f1:
+                    sel_cat = st.selectbox("Categoría:", options=categories, key="dir_modal_cat_filter")
+                with col_f2:
+                    sel_reg = st.selectbox("Región:", options=regions, key="dir_modal_reg_filter")
+                search_txt = st.text_input("Palabra clave:", placeholder="Ej: parcelas, lidar, rio...", key="dir_modal_search_txt")
+                dir_results = search_wms_catalog(search_txt, category_filter=None if sel_cat == "Todas" else sel_cat, region_filter=None if sel_reg == "Todas" else sel_reg)
+                st.caption(f"**{len(dir_results)}** servicios encontrados:")
+                for srv in dir_results[:10]:
+                    c_inf, c_act = st.columns([3.5, 1.2])
+                    with c_inf:
+                        st.markdown(f"**{srv['name']}** <span style='color:#38bdf8;font-size:11px;'>({srv['region']})</span>", unsafe_allow_html=True)
+                    with c_act:
+                        if st.button("Cargar", key=f"dir_apply_{srv['id']}", use_container_width=True):
+                            apply_wms_to_application(srv["url"], srv["default_layer"], srv["name"])
+
+            with sub_tab_insp:
+                inspect_url = st.text_input("URL WMS a inspeccionar:", placeholder="https://servidor.com/.../wms", key="inspector_modal_wms_input")
+                if st.button("🔍 Inspeccionar en Vivo", key="btn_modal_run_inspector", use_container_width=True):
+                    if inspect_url:
+                        with st.spinner("Consultando GetCapabilities..."):
+                            report = inspect_wms_live(inspect_url)
+                            if report["success"]:
+                                st.success(f"✅ **{report['title']}** ({len(report['layers'])} capas)")
+                                for lyr in report["layers"][:15]:
+                                    col_l_name, col_l_btn = st.columns([3.5, 1.2])
+                                    with col_l_name:
+                                        st.markdown(f"• **`{lyr['name']}`** : {lyr['title']}")
+                                    with col_l_btn:
+                                        if st.button("Usar", key=f"use_modal_insp_lyr_{abs(hash(lyr['name']))}", use_container_width=True):
+                                            apply_wms_to_application(report["url"], lyr["name"], f"{report['title']} - {lyr['name']}")
+                            else:
+                                st.error(f"❌ Error: {report['error']}")
+
     with c_top_clear:
         if st.button("🗑️", key="btn_clear_chat_top", help="Reiniciar conversación"):
             st.session_state["wms_chat_history"] = []
             st.rerun()
 
-    # Menú colapsable para Ajustes, Directorio e Inspección (por defecto cerrado para no saturar el chat)
-    with st.expander("⚙️ Ajustes de IA & Herramientas WMS", expanded=False):
-        sub_tab_ai, sub_tab_dir, sub_tab_insp = st.tabs(["🔑 Clave IA & Modelo", "📚 Directorio WMS", "🔍 Inspeccionar URL"])
-        with sub_tab_ai:
-            user_key_in = st.text_input(
-                "API Key de IA:",
-                value=st.session_state.get("wms_bot_api_key", ""),
-                type="password",
-                placeholder="AIzaSy... (Gemini), sk-... (OpenAI), gsk_... (Groq)",
-                help="Soporta cualquier servicio de IA. Vacío opera en Modo Local Verificado 100% gratis.",
-                key="in_exp_api_key"
-            )
-            st.session_state["wms_bot_api_key"] = user_key_in.strip()
-
-            c_prov, c_model = st.columns([1, 1.4])
-            with c_prov:
-                provider_options = [
-                    ("auto", f"🔍 Auto ({effective_prov.capitalize() if effective_prov != 'none' else 'Por clave'})"),
-                    ("gemini", "Google Gemini"),
-                    ("openai", "OpenAI (ChatGPT)"),
-                    ("anthropic", "Anthropic Claude"),
-                    ("groq", "Groq"),
-                    ("deepseek", "DeepSeek"),
-                    ("openrouter", "OpenRouter"),
-                    ("mistral", "Mistral AI"),
-                    ("perplexity", "Perplexity AI"),
-                    ("custom", "⚙️ Servidor Ollama")
-                ]
-                prov_keys = [p[0] for p in provider_options]
-                prov_labels = [p[1] for p in provider_options]
-                cur_p_idx = prov_keys.index(cur_p_setting) if cur_p_setting in prov_keys else 0
-                sel_label = st.selectbox("Proveedor:", options=prov_labels, index=cur_p_idx, key="sb_wms_prov_selector")
-                chosen_prov = prov_keys[prov_labels.index(sel_label)]
-                st.session_state["wms_selected_ai_provider"] = chosen_prov
-                if chosen_prov != "auto":
-                    effective_prov = chosen_prov
-
-            with c_model:
-                cust_url_active = st.session_state.get("wms_custom_ai_url", "http://localhost:11434/v1")
-                base_models = discover_provider_models(
-                    provider=effective_prov,
-                    api_key=user_key_in.strip(),
-                    custom_url=cust_url_active,
-                    force_refresh=False
-                )
-                model_choices = list(base_models) + ["✏️ Personalizado..."]
-
-                prov_state_key = f"wms_chosen_model_{effective_prov}"
-                prev_m = st.session_state.get(prov_state_key, base_models[0])
-
-                sb_model_key = f"sb_wms_model_choice_{effective_prov}"
-                if effective_prov == "gemini":
-                    cur_sb = st.session_state.get(sb_model_key)
-                    if cur_sb and (cur_sb not in model_choices or any(old in str(cur_sb).lower() for old in ["2.5", "2.0", "1.5", "1.0"])):
-                        st.session_state.pop(sb_model_key, None)
-                    if prev_m and any(old in str(prev_m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
-                        prev_m = base_models[0]
-                        st.session_state[prov_state_key] = prev_m
-
-                if prev_m in base_models:
-                    m_idx = base_models.index(prev_m)
-                elif prev_m == "custom_input":
-                    m_idx = len(model_choices) - 1
-                else:
-                    m_idx = 0
-
-                sel_m_choice = st.selectbox(
-                    "Modelo:",
-                    options=model_choices,
-                    index=m_idx,
-                    key=f"sb_wms_model_choice_{effective_prov}"
-                )
-
-                if sel_m_choice == "✏️ Personalizado...":
-                    st.session_state[prov_state_key] = "custom_input"
-                    custom_m_in = st.text_input(
-                        "Nombre exacto:",
-                        value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
-                        placeholder="Ej: gemini-3.8-flash, gpt-4o"
-                    )
-                    active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
-                    st.session_state[f"wms_custom_name_{effective_prov}"] = active_model_name
-                else:
-                    active_model_name = sel_m_choice
-                    st.session_state[prov_state_key] = active_model_name
-
-                st.session_state["wms_active_selected_model"] = active_model_name
-
-            if st.button("🔄 Actualizar modelos", key=f"btn_ref_m_{effective_prov}", use_container_width=True):
-                for k in list(st.session_state.keys()):
-                    if k.startswith("_cached_"):
-                        st.session_state.pop(k, None)
-                st.rerun()
-
-        with sub_tab_dir:
-            col_f1, col_f2 = st.columns(2)
-            categories = ["Todas"] + sorted(list({item["category"] for item in WMS_DATABASE}))
-            regions = ["Todas", "Global", "España", "América", "Colombia", "México", "Chile", "Argentina", "Estados Unidos", "Europa", "Australia"]
-            with col_f1:
-                sel_cat = st.selectbox("Categoría:", options=categories, key="dir_modal_cat_filter")
-            with col_f2:
-                sel_reg = st.selectbox("Región:", options=regions, key="dir_modal_reg_filter")
-            search_txt = st.text_input("Palabra clave:", placeholder="Ej: parcelas, lidar, rio...", key="dir_modal_search_txt")
-            dir_results = search_wms_catalog(search_txt, category_filter=None if sel_cat == "Todas" else sel_cat, region_filter=None if sel_reg == "Todas" else sel_reg)
-            st.caption(f"**{len(dir_results)}** servicios encontrados:")
-            for srv in dir_results[:10]:
-                c_inf, c_act = st.columns([3.5, 1.2])
-                with c_inf:
-                    st.markdown(f"**{srv['name']}** <span style='color:#38bdf8;font-size:11px;'>({srv['region']})</span>", unsafe_allow_html=True)
-                with c_act:
-                    if st.button("Cargar", key=f"dir_apply_{srv['id']}", use_container_width=True):
-                        apply_wms_to_application(srv["url"], srv["default_layer"], srv["name"])
-
-        with sub_tab_insp:
-            inspect_url = st.text_input("URL WMS a inspeccionar:", placeholder="https://servidor.com/.../wms", key="inspector_modal_wms_input")
-            if st.button("🔍 Inspeccionar en Vivo", key="btn_modal_run_inspector", use_container_width=True):
-                if inspect_url:
-                    with st.spinner("Consultando GetCapabilities..."):
-                        report = inspect_wms_live(inspect_url)
-                        if report["success"]:
-                            st.success(f"✅ **{report['title']}** ({len(report['layers'])} capas)")
-                            for lyr in report["layers"][:15]:
-                                col_l_name, col_l_btn = st.columns([3.5, 1.2])
-                                with col_l_name:
-                                    st.markdown(f"• **`{lyr['name']}`** : {lyr['title']}")
-                                with col_l_btn:
-                                    if st.button("Usar", key=f"use_modal_insp_lyr_{abs(hash(lyr['name']))}", use_container_width=True):
-                                        apply_wms_to_application(report["url"], lyr["name"], f"{report['title']} - {lyr['name']}")
-                        else:
-                            st.error(f"❌ Error: {report['error']}")
-
-    # Contenedor principal de conversación más alto para que quepan las tarjetas sin scroll
-    chat_box = st.container(height=460, border=False)
+    # Contenedor principal de conversación: altura calculada para que TODO quepa siempre en pantalla
+    chat_box = st.container(height=330, border=False)
     bot_avatar_img = get_bot_avatar_path()
     with chat_box:
         for msg in st.session_state["wms_chat_history"]:
@@ -3082,13 +3081,13 @@ def render_floating_assistant_button(
         pointer-events: none !important;
     }}
 
-    /* 2. Tarjeta del widget flotante (más alta para eliminar la barra de scroll y dar holgura) */
+    /* 2. Tarjeta del widget: altura EXACTA para que TODO quede en pantalla y la barra de chat NUNCA se corte */
     div[data-testid="stDialog"] > div,
     div.stDialog > div {{
-        width: 390px !important;
+        width: 385px !important;
         max-width: calc(100vw - 20px) !important;
-        height: 645px !important;
-        max-height: calc(100vh - 45px) !important;
+        height: min(485px, calc(100vh - 95px)) !important;
+        max-height: calc(100vh - 95px) !important;
         margin: 0 !important;
         padding: 0 !important;
         background-color: #0b1329 !important;
@@ -3101,24 +3100,46 @@ def render_floating_assistant_button(
         overflow: hidden !important;
         display: flex !important;
         flex-direction: column !important;
+        justify-content: space-between !important;
         animation: slideUpWidget 0.28s cubic-bezier(0.16, 1, 0.3, 1) !important;
     }}
 
-    /* Forzar fondo sólido en la ventana modal sin afectar bloques internos */
+    /* Cuerpo del widget: sin scroll exterior para que la barra de chat permanezca SIEMPRE visible sin desplazarse */
     div[data-testid="stDialog"] [role="dialog"],
     div[data-testid="stDialog"] > div > div:not([data-testid="stDialogHeader"]) {{
         background-color: #0b1329 !important;
         background: #0b1329 !important;
-        padding: 4px 10px 8px 10px !important;
-        overflow-y: auto !important;
-        overflow-x: hidden !important;
-        scrollbar-width: none !important;
+        padding: 4px 10px 6px 10px !important;
+        overflow: hidden !important;
         display: flex !important;
         flex-direction: column !important;
+        justify-content: space-between !important;
         flex: 1 1 auto !important;
+        height: calc(100% - 38px) !important;
     }}
     div[data-testid="stDialog"] > div > div:not([data-testid="stDialogHeader"])::-webkit-scrollbar {{
         display: none !important;
+    }}
+
+    /* Botones de Popover de Ajustes y Papelera */
+    div[data-testid="stDialog"] div[data-testid="stPopover"] button,
+    div.st-key-btn_clear_chat_top button {{
+        height: 24px !important;
+        min-height: 24px !important;
+        padding: 0 4px !important;
+        border-radius: 6px !important;
+        font-size: 12px !important;
+        background: rgba(30, 41, 59, 0.8) !important;
+        border: 1px solid rgba(56, 189, 248, 0.25) !important;
+        color: #ffffff !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }}
+    div[data-testid="stDialog"] div[data-testid="stPopover"] button:hover,
+    div.st-key-btn_clear_chat_top button:hover {{
+        background: rgba(56, 189, 248, 0.25) !important;
+        border-color: #38bdf8 !important;
     }}
 
     /* Scrollbars elegantes y ultra-discretos de 4px dentro del chat */
