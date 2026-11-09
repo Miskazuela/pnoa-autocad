@@ -2541,15 +2541,21 @@ def render_wms_assistant_content(
     effective_prov = detect_ai_provider(user_key, user_selected=cur_p_setting)
     disp_m = st.session_state.get("wms_active_selected_model", "gemini-3.8-flash")
 
-    # Cabecera ultra-limpia de 1 sola línea: Zona, CRS y estado de IA
+    # Cabecera ultra-limpia de 1 sola línea: Zona, CRS, estado de IA y botón de limpiar chat
     zone_label = f"{zone_disp}" if zone_disp else "Global"
     ai_status = f"✨ IA: {effective_prov.capitalize()} ({disp_m})" if (has_key or cur_p_setting == "custom") else "🟢 Catálogo Offline"
-    st.markdown(f"""
-    <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 4px 6px 4px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid rgba(56, 189, 248, 0.15); margin-bottom: 6px;">
-        <span>📍 <b>{zone_label}</b> · <code style="color: #38bdf8;">EPSG:{epsg_disp}</code></span>
-        <span style="color: #34d399; font-weight: 600;">{ai_status}</span>
-    </div>
-    """, unsafe_allow_html=True)
+    c_top_info, c_top_clear = st.columns([5.5, 0.7])
+    with c_top_info:
+        st.markdown(f"""
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 4px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid rgba(56, 189, 248, 0.15); margin-bottom: 4px;">
+            <span>📍 <b>{zone_label}</b> · <code style="color: #38bdf8;">EPSG:{epsg_disp}</code></span>
+            <span style="color: #34d399; font-weight: 600;">{ai_status}</span>
+        </div>
+        """, unsafe_allow_html=True)
+    with c_top_clear:
+        if st.button("🗑️", key="btn_clear_chat_top", help="Reiniciar conversación"):
+            st.session_state["wms_chat_history"] = []
+            st.rerun()
 
     # Menú colapsable para Ajustes, Directorio e Inspección (por defecto cerrado para no saturar el chat)
     with st.expander("⚙️ Ajustes de IA & Herramientas WMS", expanded=False):
@@ -2682,28 +2688,8 @@ def render_wms_assistant_content(
                         else:
                             st.error(f"❌ Error: {report['error']}")
 
-    # Botones de accesos rápidos amigables y botón de limpiar chat
-    c_p1, c_p2, c_p3, c_p4, c_clr = st.columns([1.2, 1.2, 1.2, 1.2, 0.6])
-    selected_prompt = None
-    with c_p1:
-        if st.button("🏛️ Catastro", key="chip_catastro", use_container_width=True):
-            selected_prompt = "Necesito la cartografía del Catastro para ver parcelas y linderos"
-    with c_p2:
-        if st.button("🌊 Aguas", key="chip_aguas", use_container_width=True):
-            selected_prompt = "Busco las zonas inundables de periodo de retorno 100 y 500 años de MITECO"
-    with c_p3:
-        if st.button("⛰️ Curvas", key="chip_curvas", use_container_width=True):
-            selected_prompt = "Necesito curvas de nivel y mapa topográfico ráster MTN"
-    with c_p4:
-        if st.button("🛰️ Satélite", key="chip_sat", use_container_width=True):
-            selected_prompt = "Necesito una capa base satelital o de calles y carreteras con OpenStreetMap"
-    with c_clr:
-        if st.button("🗑️", key="btn_clear_chat_modal", help="Reiniciar conversación"):
-            st.session_state["wms_chat_history"] = []
-            st.rerun(scope="fragment")
-
-    # Contenedor principal de conversación amplio y cómodo
-    chat_box = st.container(height=340)
+    # Contenedor principal de conversación amplio, cómodo y scrolleable
+    chat_box = st.container(height=380)
     bot_avatar_img = get_bot_avatar_path()
     with chat_box:
         for msg in st.session_state["wms_chat_history"]:
@@ -2717,9 +2703,10 @@ def render_wms_assistant_content(
 
         new_turn_container = st.container()
 
-    user_input = st.chat_input("Escribe tu pregunta sobre capas WMS o tu plano...")
+    # Campo de entrada de texto interactivo siempre visible y destacado
+    user_input = st.chat_input("Escribe tu pregunta sobre capas WMS o tu plano...", key="wms_chat_interactive_input")
 
-    query_to_run = selected_prompt or user_input
+    query_to_run = user_input
     if query_to_run:
         with new_turn_container:
             with st.chat_message("user"):
@@ -3058,10 +3045,10 @@ def render_floating_assistant_button(
     /* 2. Tarjeta del widget flotante (opaco, 100% interactivo, fondo sólido #0b1329) */
     div[data-testid="stDialog"] > div,
     div.stDialog > div {{
-        width: 395px !important;
-        max-width: calc(100vw - 28px) !important;
-        height: 570px !important;
-        max-height: calc(100vh - 105px) !important;
+        width: 410px !important;
+        max-width: calc(100vw - 24px) !important;
+        height: 610px !important;
+        max-height: calc(100vh - 100px) !important;
         margin: 0 !important;
         padding: 0 !important;
         background-color: #0b1329 !important;
@@ -3079,9 +3066,14 @@ def render_floating_assistant_button(
 
     /* Forzar fondo sólido en la ventana modal sin afectar bloques internos */
     div[data-testid="stDialog"] [role="dialog"],
-    div[data-testid="stDialog"] > div > div {{
+    div[data-testid="stDialog"] > div > div:not([data-testid="stDialogHeader"]) {{
         background-color: #0b1329 !important;
         background: #0b1329 !important;
+        padding: 6px 12px 10px 12px !important;
+        overflow-y: auto !important;
+        display: flex !important;
+        flex-direction: column !important;
+        flex: 1 1 auto !important;
     }}
 
     /* 3. Cabecera azul estilo Esri Colombia */
@@ -3165,24 +3157,44 @@ def render_floating_assistant_button(
         margin-bottom: 0 !important;
     }}
 
-    /* Botones de accesos rápidos compactos */
-    div[data-testid="stDialog"] button[kind="secondary"] {{
-        border-radius: 8px !important;
-        padding: 4px 6px !important;
-        font-size: 11px !important;
-        font-weight: 600 !important;
-        background: rgba(30, 41, 59, 0.8) !important;
-        border: 1px solid rgba(56, 189, 248, 0.25) !important;
-        color: #e2e8f0 !important;
-        transition: all 0.15s ease !important;
-        white-space: nowrap !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
+    /* Campo de entrada de texto interactivo destacado y 100% visible */
+    div[data-testid="stDialog"] div[data-testid="stChatInput"] {{
+        margin-top: 8px !important;
+        margin-bottom: 2px !important;
+        width: 100% !important;
+        position: relative !important;
+        z-index: 99 !important;
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
     }}
-    div[data-testid="stDialog"] button[kind="secondary"]:hover {{
-        background: rgba(56, 189, 248, 0.2) !important;
-        border-color: #38bdf8 !important;
+    div[data-testid="stDialog"] div[data-testid="stChatInput"] > div {{
+        background-color: #0f172a !important;
+        border: 1.5px solid #38bdf8 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4), 0 0 10px rgba(56, 189, 248, 0.25) !important;
+    }}
+    div[data-testid="stDialog"] div[data-testid="stChatInput"] textarea {{
         color: #ffffff !important;
+        font-size: 13px !important;
+        line-height: 1.4 !important;
+        background-color: transparent !important;
+        padding: 8px 10px !important;
+    }}
+    div[data-testid="stDialog"] div[data-testid="stChatInput"] textarea::placeholder {{
+        color: #94a3b8 !important;
+        font-size: 12.5px !important;
+    }}
+    div[data-testid="stDialog"] div[data-testid="stChatInput"] button {{
+        background-color: #0284c7 !important;
+        color: #ffffff !important;
+        border-radius: 8px !important;
+        border: none !important;
+        transition: all 0.2s ease !important;
+    }}
+    div[data-testid="stDialog"] div[data-testid="stChatInput"] button:hover {{
+        background-color: #38bdf8 !important;
+        transform: scale(1.08) !important;
     }}
 
     /* Acordeón de ajustes discreto */
