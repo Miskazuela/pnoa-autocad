@@ -38,6 +38,7 @@ import urllib.request
 from urllib.parse import urlparse
 import traceback
 import concurrent.futures
+import unicodedata
 from typing import List, Dict, Any, Tuple, Optional
 
 import sys
@@ -1570,6 +1571,127 @@ def extract_epsg_code(item: Any) -> Any:
     return s
 
 
+def normalize_search_text(txt: str) -> str:
+    """Elimina acentos y normaliza a minúsculas para búsquedas insensibles a tildes."""
+    s = str(txt).lower().strip()
+    s = unicodedata.normalize('NFKD', s)
+    return ''.join(c for c in s if not unicodedata.combining(c))
+
+
+# Mapeo multilingüe de países a términos en español e inglés oficiales de PROJ/EPSG
+COUNTRY_SEARCH_SYNONYMS: Dict[str, List[str]] = {
+    # España
+    "espana": ["spain", "españa", "espana", "canary", "canarias", "balearic", "baleares", "peninsula", "madrid"],
+    "spain": ["spain", "españa", "espana", "canary", "canarias", "balearic", "baleares", "peninsula"],
+    # Colombia
+    "colombia": ["colombia", "magna-sirgas", "bogota", "bogotá"],
+    # México
+    "mexico": ["mexico", "méxico", "itrf", "inegi"],
+    # Argentina
+    "argentina": ["argentina", "posgar"],
+    # Chile
+    "chile": ["chile", "sirgas-chile", "santiago"],
+    # Perú
+    "peru": ["peru", "perú", "psad56", "lima"],
+    # Ecuador
+    "ecuador": ["ecuador", "quito"],
+    # Bolivia
+    "bolivia": ["bolivia", "psad56 / bolivia"],
+    # Venezuela
+    "venezuela": ["venezuela", "regven", "caracas"],
+    # Brasil
+    "brasil": ["brazil", "brasil", "sad69", "sirgas 2000"],
+    "brazil": ["brazil", "brasil", "sad69", "sirgas 2000"],
+    # Uruguay
+    "uruguay": ["uruguay", "montevideo"],
+    # Paraguay
+    "paraguay": ["paraguay", "asuncion"],
+    # Panamá
+    "panama": ["panama", "panamá"],
+    # Costa Rica
+    "costa rica": ["costa rica", "crtm05", "ocotepeque"],
+    # Guatemala
+    "guatemala": ["guatemala", "gtm"],
+    # Honduras
+    "honduras": ["honduras"],
+    # El Salvador
+    "el salvador": ["el salvador"],
+    # Nicaragua
+    "nicaragua": ["nicaragua"],
+    # Cuba
+    "cuba": ["cuba"],
+    # República Dominicana
+    "dominicana": ["dominican", "república dominicana", "republica dominicana"],
+    "republica dominicana": ["dominican", "república dominicana", "republica dominicana"],
+    # Puerto Rico
+    "puerto rico": ["puerto rico"],
+    # Estados Unidos
+    "estados unidos": ["united states", "usa", "nad83", "nad27"],
+    "eeuu": ["united states", "usa", "nad83", "nad27"],
+    "usa": ["united states", "usa", "nad83"],
+    # Canadá
+    "canada": ["canada", "canadá"],
+    # Bélgica
+    "belgica": ["belgium", "bélgica", "belgica", "bd72", "lambert 2008", "lambert 72"],
+    "belgium": ["belgium", "bélgica", "belgica", "bd72", "lambert 2008", "lambert 72"],
+    # Francia
+    "francia": ["france", "francia", "rgf93", "lambert"],
+    "france": ["france", "francia", "rgf93", "lambert"],
+    # Alemania
+    "alemania": ["germany", "alemania", "dhdn"],
+    "germany": ["germany", "alemania", "dhdn"],
+    # Portugal
+    "portugal": ["portugal", "ptra08", "lisbon"],
+    # Italia
+    "italia": ["italy", "italia", "monte mario", "rome"],
+    "italy": ["italy", "italia", "monte mario", "rome"],
+    # Reino Unido / Gran Bretaña
+    "reino unido": ["united kingdom", "uk", "great britain", "british national grid", "osgb"],
+    "inglaterra": ["united kingdom", "uk", "great britain", "british national grid", "osgb"],
+    "uk": ["united kingdom", "uk", "great britain", "osgb"],
+    # Suecia
+    "suecia": ["sweden", "suecia", "sweref99"],
+    "sweden": ["sweden", "suecia", "sweref99"],
+    # Noruega
+    "noruega": ["norway", "noruega"],
+    "norway": ["norway", "noruega"],
+    # Dinamarca
+    "dinamarca": ["denmark", "dinamarca"],
+    "denmark": ["denmark", "dinamarca"],
+    # Finlandia
+    "finlandia": ["finland", "finlandia"],
+    "finland": ["finland", "finlandia"],
+    # Suiza
+    "suiza": ["switzerland", "suiza", "ch1903"],
+    "switzerland": ["switzerland", "suiza", "ch1903"],
+    # Austria
+    "austria": ["austria", "mgi"],
+    # Países Bajos / Holanda
+    "paises bajos": ["netherlands", "países bajos", "amsterdam"],
+    "holanda": ["netherlands", "países bajos", "amsterdam"],
+    "netherlands": ["netherlands", "países bajos"],
+    # Polonia
+    "polonia": ["poland", "polonia"],
+    "poland": ["poland", "polonia"],
+    # Grecia
+    "grecia": ["greece", "grecia", "egsa87"],
+    "greece": ["greece", "grecia", "egsa87"],
+    # Marruecos
+    "marruecos": ["morocco", "marruecos", "merchich"],
+    "morocco": ["morocco", "marruecos", "merchich"],
+    # Australia
+    "australia": ["australia", "gda2020", "gda94", "mga"],
+    # Nueva Zelanda
+    "nueva zelanda": ["new zealand", "nztm2000"],
+    "new zealand": ["new zealand", "nztm2000"],
+    # Japón
+    "japon": ["japan", "japón"],
+    "japan": ["japan", "japón"],
+    # China
+    "china": ["china", "cgcs2000"]
+}
+
+
 def get_epsg_dropdown_options(
     filter_mode: str = "🌐 Todos (7.200+)",
     active_code: Any = 25830,
@@ -1579,7 +1701,7 @@ def get_epsg_dropdown_options(
 ) -> Tuple[List[str], int]:
     """
     Genera dinámicamente la lista de opciones para el desplegable de Streamlit según el
-    filtro seleccionado o la búsqueda activa por EPSG/texto.
+    filtro seleccionado o la búsqueda activa por EPSG o nombre de país.
     """
     if custom_list is None:
         custom_list = []
@@ -1591,12 +1713,11 @@ def get_epsg_dropdown_options(
 
     sq_clean = (search_query or "").strip().upper().replace("EPSG:", "").strip()
 
-    # Si hay una búsqueda activa por código EPSG o texto, filtramos estrictamente
+    # Si hay una búsqueda activa por código EPSG o nombre de país / texto, filtramos estrictamente
     if sq_clean:
-        sq_lower = sq_clean.lower()
         seen_codes: set = set()
 
-        # A) Coincidencia directa con CRS oficial de pyproj si el usuario escribió un número
+        # A) Coincidencia directa con CRS oficial si el usuario escribió un número EPSG
         if sq_clean.isdigit():
             num_code = int(sq_clean)
             try:
@@ -1608,47 +1729,79 @@ def get_epsg_dropdown_options(
             except Exception:
                 pass
 
-        # B) Buscar en sistemas personalizados / instalados
-        for itm in custom_list:
-            c_code = itm.get("code")
-            c_name = str(itm.get("name", ""))
-            c_alias = str(itm.get("alias", c_name))
-            if str(c_code) == sq_clean or sq_lower in c_name.lower() or sq_lower in c_alias.lower():
-                if c_code not in seen_codes:
+            # Buscar en sistemas personalizados / instalados
+            for itm in custom_list:
+                c_code = itm.get("code")
+                c_alias = str(itm.get("alias", itm.get("name", "")))
+                if str(c_code) == sq_clean and c_code not in seen_codes:
                     options.append(f"⭐ [Instalado] {c_alias} (EPSG:{c_code})")
                     seen_codes.add(c_code)
 
-        # C) Buscar en los preajustes populares
-        for lbl, code in POPULAR_EPSG_PRESETS:
-            if code not in seen_codes:
-                if str(code) == sq_clean or sq_lower in lbl.lower():
+            # Buscar en los preajustes populares
+            for lbl, code in POPULAR_EPSG_PRESETS:
+                if code not in seen_codes and str(code) == sq_clean:
                     options.append(lbl)
                     seen_codes.add(code)
 
-        # D) Buscar en la base de datos oficial PROJ (>7.200 sistemas)
-        all_crs = get_full_epsg_database()
-        for c in all_crs:
-            code_num = c["code"]
-            if code_num in seen_codes:
-                continue
-            code_str = str(code_num)
-            matches = False
-            if sq_clean.isdigit():
-                if code_str == sq_clean:
-                    matches = True
-                elif len(sq_clean) >= 3 and code_str.startswith(sq_clean) and len(options) < 30:
-                    matches = True
-            else:
-                if sq_lower in c["name"].lower() or sq_lower in c["area"].lower():
-                    matches = True
+            # Buscar en la base de datos oficial PROJ
+            all_crs = get_full_epsg_database()
+            for c in all_crs:
+                code_num = c["code"]
+                if code_num in seen_codes:
+                    continue
+                code_str = str(code_num)
+                if code_str == sq_clean or (len(sq_clean) >= 3 and code_str.startswith(sq_clean) and len(options) < 30):
+                    area_disp = (c["area"][:70] + "...") if len(c["area"]) > 70 else c["area"]
+                    options.append(f"EPSG:{code_num} — {c['name']}" + (f" [{area_disp}]" if area_disp else ""))
+                    seen_codes.add(code_num)
+                    if len(options) >= 50:
+                        break
 
-            if matches:
-                area_txt = c["area"]
-                area_disp = (area_txt[:70] + "...") if len(area_txt) > 70 else area_txt
-                options.append(f"EPSG:{code_num} — {c['name']}" + (f" [{area_disp}]" if area_disp else ""))
-                seen_codes.add(code_num)
-                if len(options) >= 50:
-                    break
+        else:
+            # B) Búsqueda por PAÍS o texto general (ej: España, Colombia, México, Bélgica, UTM 30N)
+            norm_q = normalize_search_text(sq_clean)
+            terms = COUNTRY_SEARCH_SYNONYMS.get(norm_q)
+            if not terms:
+                for c_key, c_terms in COUNTRY_SEARCH_SYNONYMS.items():
+                    if c_key in norm_q or norm_q in c_key:
+                        terms = c_terms
+                        break
+            if not terms:
+                terms = [sq_clean.lower(), norm_q]
+
+            # 1. Sistemas populares que coincidan con el país
+            for lbl, code in POPULAR_EPSG_PRESETS:
+                lbl_norm = normalize_search_text(lbl)
+                if any(t in lbl.lower() or t in lbl_norm for t in terms):
+                    options.append(lbl)
+                    seen_codes.add(code)
+
+            # 2. Sistemas instalados por el usuario
+            for itm in custom_list:
+                c_code = itm.get("code")
+                c_name = str(itm.get("name", ""))
+                c_alias = str(itm.get("alias", c_name))
+                all_txt = normalize_search_text(f"{c_name} {c_alias}")
+                if any(t in all_txt for t in terms) and c_code not in seen_codes:
+                    options.append(f"⭐ [Instalado] {c_alias} (EPSG:{c_code})")
+                    seen_codes.add(c_code)
+
+            # 3. Base de datos completa oficial PROJ (>7.200 sistemas)
+            all_crs = get_full_epsg_database()
+            for c in all_crs:
+                code_num = c["code"]
+                if code_num in seen_codes:
+                    continue
+                area_l = c["area"].lower()
+                name_l = c["name"].lower()
+                area_norm = normalize_search_text(area_l)
+                name_norm = normalize_search_text(name_l)
+                if any(t in area_l or t in name_l or t in area_norm or t in name_norm for t in terms):
+                    area_disp = (c["area"][:70] + "...") if len(c["area"]) > 70 else c["area"]
+                    options.append(f"EPSG:{code_num} — {c['name']}" + (f" [{area_disp}]" if area_disp else ""))
+                    seen_codes.add(code_num)
+                    if len(options) >= 80:
+                        break
 
         # Si no hubo ninguna coincidencia, avisar amigablemente
         if not options:
@@ -3362,32 +3515,16 @@ def render_ui():
 
     curr_active_code = st.session_state.get("active_epsg_code", 25830)
 
-    # Buscador directo por número o texto EPSG
+    # Buscador directo por código EPSG o nombre de país
     epsg_search_num = st.sidebar.text_input(
-        "🔍 Buscar por código EPSG (escribe el número):",
+        "🔍 Buscar por código EPSG o país (ej: España, 25830):",
         key="sidebar_epsg_num_search",
-        placeholder="Ej: 25830, 4484, 9377, 3006...",
-        help="Escribe directamente el número del código EPSG (ej: 4484, 25830) o texto para filtrar la lista desplegable.",
+        placeholder="Ej: España, Colombia, México, Bélgica, 25830...",
+        help="Escribe el nombre de un país (ej: España, Colombia, México, Bélgica, Francia) o un código numérico EPSG (ej: 25830, 4484) para filtrar la lista desplegable.",
         on_change=_on_sidebar_epsg_num_search_change
     )
 
     active_search_query = st.session_state.get("sidebar_epsg_num_search", "").strip()
-
-    if active_search_query:
-        col_badge, col_btn = st.sidebar.columns([3, 2])
-        with col_badge:
-            st.markdown(
-                f"<div style='color: #38bdf8; font-size: 11.5px; padding-top: 5px; font-weight: 600;'>"
-                f"🔎 Filtro activo: <code>{active_search_query}</code></div>",
-                unsafe_allow_html=True
-            )
-        with col_btn:
-            st.button(
-                "✖ Ver todos",
-                key="btn_clear_epsg_filter",
-                help="Quitar filtro y ver lista completa",
-                on_click=_on_clear_epsg_search
-            )
 
     if st.session_state.get("sidebar_epsg_search_error"):
         st.sidebar.warning(st.session_state["sidebar_epsg_search_error"])
@@ -3400,6 +3537,22 @@ def render_ui():
         detected_country=detected_zone,
         search_query=active_search_query
     )
+
+    if active_search_query:
+        col_badge, col_btn = st.sidebar.columns([3, 2])
+        with col_badge:
+            st.markdown(
+                f"<div style='color: #38bdf8; font-size: 11.5px; padding-top: 5px; font-weight: 600;'>"
+                f"🔎 Filtro: <code>{active_search_query}</code> ({len(epsg_options)})</div>",
+                unsafe_allow_html=True
+            )
+        with col_btn:
+            st.button(
+                "✖ Ver todos",
+                key="btn_clear_epsg_filter",
+                help="Quitar filtro y ver lista completa",
+                on_click=_on_clear_epsg_search
+            )
 
     if detected_zone and epsg_filter_view.startswith("🎯"):
         st.sidebar.markdown(f"""
