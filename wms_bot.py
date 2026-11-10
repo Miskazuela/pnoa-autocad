@@ -2659,7 +2659,7 @@ def _render_single_wms_card(data: Dict[str, Any], idx_suffix: str = ""):
         st.write("")
         btn_key = f"apply_wms_ai_{abs(hash(w_url + w_layer + idx_suffix))}"
         if st.button("➕ Usar", key=btn_key, type="primary", use_container_width=True, help=f"Cargar '{w_name}' directamente en el visor"):
-            apply_wms_to_application(w_url, w_layer, w_name)
+            apply_wms_to_application(w_url, w_layer, w_name, region=w_region)
     st.markdown('<div class="wms-row-divider"></div>', unsafe_allow_html=True)
 
 
@@ -2705,13 +2705,458 @@ def _parse_and_render_wms_actions(text: str):
             st.caption(trailing)
 
 
-def apply_wms_to_application(url: str, layer: str, name: str):
-    """Configura el servicio WMS en la sesión activa de Streamlit y fuerza la recarga."""
+# --------------------------------------------------------------------------------------
+# 6. LOCALIZACIÓN GEOGRÁFICA Y PROYECCIÓN AUTOMÁTICA PARA SERVICIOS WMS
+# --------------------------------------------------------------------------------------
+WMS_LOCATION_PRESETS: List[Dict[str, Any]] = [
+    # Colombia - Ciudades y Nacional
+    {
+        "keys": ["bogota", "catastrobogota", "ideca", "cundinamarca"],
+        "center": (4.6500, -74.0800, 12),
+        "epsg": 9377,
+        "country": {"name": "Colombia", "flag": "🇨🇴", "key": "colombia"},
+        "label": "Bogotá (Colombia)"
+    },
+    {
+        "keys": ["medellin", "antioquia"],
+        "center": (6.2500, -75.5700, 12),
+        "epsg": 9377,
+        "country": {"name": "Colombia", "flag": "🇨🇴", "key": "colombia"},
+        "label": "Medellín (Colombia)"
+    },
+    {
+        "keys": ["cali", "valle del cauca"],
+        "center": (3.4500, -76.5300, 12),
+        "epsg": 9377,
+        "country": {"name": "Colombia", "flag": "🇨🇴", "key": "colombia"},
+        "label": "Cali (Colombia)"
+    },
+    {
+        "keys": ["colombia", "igac", "sgc.gov.co", "magna-sirgas", "magna"],
+        "center": (4.6500, -74.1000, 6),
+        "epsg": 9377,
+        "country": {"name": "Colombia", "flag": "🇨🇴", "key": "colombia"},
+        "label": "Colombia"
+    },
+    # España - Comunidades Autónomas y Nacional
+    {
+        "keys": ["canarias", "canary", "grafcan"],
+        "center": (28.3000, -15.5000, 8),
+        "epsg": 32628,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "Islas Canarias (España)"
+    },
+    {
+        "keys": ["galicia", "itacyl"],
+        "center": (42.5000, -8.5000, 8),
+        "epsg": 25829,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "Galicia (España)"
+    },
+    {
+        "keys": ["catalunya", "cataluna", "icgc"],
+        "center": (41.6000, 1.8000, 8),
+        "epsg": 25831,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "Cataluña (España)"
+    },
+    {
+        "keys": ["andalucia", "juntadeandalucia", "rediam"],
+        "center": (37.4000, -4.5000, 7),
+        "epsg": 25830,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "Andalucía (España)"
+    },
+    {
+        "keys": ["pais vasco", "euskadi", "geo.euskadi"],
+        "center": (43.0000, -2.6000, 9),
+        "epsg": 25830,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "País Vasco (España)"
+    },
+    {
+        "keys": ["navarra", "idena"],
+        "center": (42.6000, -1.6000, 9),
+        "epsg": 25830,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "Navarra (España)"
+    },
+    {
+        "keys": ["baleares", "balearic", "ideib"],
+        "center": (39.6000, 2.9000, 9),
+        "epsg": 25831,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "Islas Baleares (España)"
+    },
+    {
+        "keys": ["valencia", "valenciana", "icv"],
+        "center": (39.4000, -0.4000, 8),
+        "epsg": 25830,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "Comunidad Valenciana (España)"
+    },
+    {
+        "keys": ["madrid"],
+        "center": (40.4168, -3.7038, 9),
+        "epsg": 25830,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "Madrid (España)"
+    },
+    {
+        "keys": ["espana", "spain", "ign.es", "catastro.meh.es", "pnoa", "snczi", "siose"],
+        "center": (40.4168, -3.7038, 6),
+        "epsg": 25830,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": "España"
+    },
+    # México
+    {
+        "keys": ["mexico", "mexic", "inegi", "itrf2008"],
+        "center": (19.4326, -99.1332, 7),
+        "epsg": 6369,
+        "country": {"name": "México", "flag": "🇲🇽", "key": "mexico"},
+        "label": "México"
+    },
+    # Panamá
+    {
+        "keys": ["panama", "panam", "anati", "canal de panama", "mici.gob.pa"],
+        "center": (8.9824, -79.5199, 9),
+        "epsg": 32618,
+        "country": {"name": "Panamá", "flag": "🇵🇦", "key": "panama"},
+        "label": "Panamá"
+    },
+    # Perú
+    {
+        "keys": ["peru", "ingemmet", "ign.gob.pe"],
+        "center": (-12.0464, -77.0428, 8),
+        "epsg": 32718,
+        "country": {"name": "Perú", "flag": "🇵🇪", "key": "peru"},
+        "label": "Perú"
+    },
+    # Chile
+    {
+        "keys": ["chile", "sirgas-chile", "ide.cl", "snit"],
+        "center": (-33.4489, -70.6693, 7),
+        "epsg": 5361,
+        "country": {"name": "Chile", "flag": "🇨🇱", "key": "chile"},
+        "label": "Chile"
+    },
+    # Argentina
+    {
+        "keys": ["argentina", "posgar", "ign.gob.ar", "idera"],
+        "center": (-34.6037, -58.3816, 6),
+        "epsg": 5347,
+        "country": {"name": "Argentina", "flag": "🇦🇷", "key": "argentina"},
+        "label": "Argentina"
+    },
+    # Bélgica
+    {
+        "keys": ["belgica", "belgique", "belgium", "wallonie", "vlaanderen", "geoportail.wallonie", "ngi.be"],
+        "center": (50.8503, 4.3517, 8),
+        "epsg": 31370,
+        "country": {"name": "Bélgica", "flag": "🇧🇪", "key": "belgium"},
+        "label": "Bélgica"
+    },
+    # Portugal
+    {
+        "keys": ["portugal", "dgterritorio", "snig"],
+        "center": (39.3999, -8.2245, 7),
+        "epsg": 3763,
+        "country": {"name": "Portugal", "flag": "🇵🇹", "key": "portugal"},
+        "label": "Portugal"
+    },
+    # Francia
+    {
+        "keys": ["francia", "france", "geoportail.gouv.fr", "ign.fr"],
+        "center": (46.2276, 2.2137, 6),
+        "epsg": 2154,
+        "country": {"name": "Francia", "flag": "🇫🇷", "key": "france"},
+        "label": "Francia"
+    },
+    # Alemania
+    {
+        "keys": ["alemania", "germany", "deutschland", "bkg.bund.de"],
+        "center": (51.1657, 10.4515, 6),
+        "epsg": 25832,
+        "country": {"name": "Alemania", "flag": "🇩🇪", "key": "germany"},
+        "label": "Alemania"
+    },
+    # Suecia
+    {
+        "keys": ["suecia", "sweden", "lantmateriet", "sweref"],
+        "center": (59.3293, 18.0686, 6),
+        "epsg": 3006,
+        "country": {"name": "Suecia", "flag": "🇸🇪", "key": "sweden"},
+        "label": "Suecia"
+    },
+    # Australia
+    {
+        "keys": ["australia", "ga.gov.au", "gda2020", "dea"],
+        "center": (-25.2744, 133.7751, 4),
+        "epsg": 7855,
+        "country": {"name": "Australia", "flag": "🇦🇺", "key": "australia"},
+        "label": "Australia"
+    },
+    # Estados Unidos
+    {
+        "keys": ["estados unidos", "usa", "usgs.gov", "noaa.gov"],
+        "center": (37.0902, -95.7129, 4),
+        "epsg": 3857,
+        "country": {"name": "Estados Unidos", "flag": "🇺🇸", "key": "united states"},
+        "label": "Estados Unidos"
+    },
+    # Canadá
+    {
+        "keys": ["canada", "canad"],
+        "center": (56.1304, -106.3468, 4),
+        "epsg": 3978,
+        "country": {"name": "Canadá", "flag": "🇨🇦", "key": "canada"},
+        "label": "Canadá"
+    }
+]
+
+
+def fetch_wms_geographic_extent(clean_url: str, layer_name: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Inspecciona el GetCapabilities del servidor WMS para extraer automáticamente
+    los límites geográficos (BoundingBox) de la capa o servicio y retornar centro y zoom.
+    """
+    clean_url = clean_url.split("?")[0].strip()
+    if not clean_url or not clean_url.startswith("http"):
+        return None
+    try:
+        resp = requests.get(clean_url, params={"SERVICE": "WMS", "REQUEST": "GetCapabilities"}, timeout=5, verify=False)
+        if resp.status_code != 200:
+            return None
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(resp.content)
+        
+        target_el = None
+        first_bbox_el = None
+        for el in root.iter():
+            if el.tag.endswith("Layer"):
+                name_el = el.find("{*}Name")
+                n = name_el.text.strip() if name_el is not None and name_el.text else ""
+                has_bbox = (
+                    el.find("{*}EX_GeographicBoundingBox") is not None or
+                    el.find("{*}LatLonBoundingBox") is not None or
+                    any(b.tag.endswith("BoundingBox") and b.get("CRS", b.get("SRS", "")).upper() in ("EPSG:4326", "CRS:84") for b in el)
+                )
+                if has_bbox and first_bbox_el is None:
+                    first_bbox_el = el
+                if layer_name and n == layer_name and has_bbox:
+                    target_el = el
+                    break
+
+        chosen = target_el if target_el is not None else first_bbox_el
+        if chosen is None:
+            for el in root.iter():
+                if el.tag.endswith("EX_GeographicBoundingBox") or el.tag.endswith("LatLonBoundingBox"):
+                    chosen = el
+                    break
+
+        if chosen is None:
+            return None
+
+        geo_box = chosen.find("{*}EX_GeographicBoundingBox") if chosen.tag.endswith("Layer") else (chosen if chosen.tag.endswith("EX_GeographicBoundingBox") else None)
+        if geo_box is not None:
+            w_el = geo_box.find("{*}westBoundLongitude")
+            e_el = geo_box.find("{*}eastBoundLongitude")
+            s_el = geo_box.find("{*}southBoundLatitude")
+            n_el = geo_box.find("{*}northBoundLatitude")
+            if w_el is not None and e_el is not None and s_el is not None and n_el is not None:
+                west = float(w_el.text)
+                east = float(e_el.text)
+                south = float(s_el.text)
+                north = float(n_el.text)
+            else:
+                return None
+        else:
+            ll_box = chosen.find("{*}LatLonBoundingBox") if chosen.tag.endswith("Layer") else (chosen if chosen.tag.endswith("LatLonBoundingBox") else None)
+            if ll_box is not None:
+                west = float(ll_box.get("minx"))
+                south = float(ll_box.get("miny"))
+                east = float(ll_box.get("maxx"))
+                north = float(ll_box.get("maxy"))
+            else:
+                bb_4326 = None
+                for b in chosen:
+                    if b.tag.endswith("BoundingBox") and b.get("CRS", b.get("SRS", "")).upper() in ("EPSG:4326", "CRS:84"):
+                        bb_4326 = b
+                        break
+                if bb_4326 is not None:
+                    west = float(bb_4326.get("minx"))
+                    south = float(bb_4326.get("miny"))
+                    east = float(bb_4326.get("maxx"))
+                    north = float(bb_4326.get("maxy"))
+                else:
+                    return None
+
+        if not (-180 <= west <= 180 and -180 <= east <= 180 and -90 <= south <= 90 and -90 <= north <= 90):
+            if -90 <= west <= 90 and -180 <= south <= 180:
+                west, south, east, north = south, west, north, east
+            else:
+                return None
+
+        center_lat = (south + north) / 2.0
+        center_lon = (west + east) / 2.0
+        span = max(abs(north - south), abs(east - west))
+        if span < 0.05:
+            zoom = 15
+        elif span < 0.2:
+            zoom = 13
+        elif span < 0.8:
+            zoom = 11
+        elif span < 2.5:
+            zoom = 9
+        elif span < 8.0:
+            zoom = 7
+        elif span < 25.0:
+            zoom = 6
+        else:
+            zoom = 5
+
+        return {
+            "center_lat": round(center_lat, 4),
+            "center_lon": round(center_lon, 4),
+            "zoom": zoom,
+            "bounds": [south, west, north, east]
+        }
+    except Exception:
+        return None
+
+
+def resolve_wms_geographic_info(
+    url: str = "",
+    layer: str = "",
+    service_name: str = "",
+    region: str = ""
+) -> Dict[str, Any]:
+    """
+    Determina la ubicación geográfica precisa (lat, lon, zoom), el país/zona y el código EPSG
+    recomendado para cualquier servicio WMS del mundo.
+    Prioriza la base de datos curada de WMS_DATABASE y palabras clave de región/URL,
+    permitiendo que el visor interactivo vuele automáticamente a cualquier país o ciudad
+    (ej: Bogotá, Colombia; Medellín; México; Bélgica; España; etc.).
+    """
+    def _norm(t: str) -> str:
+        return unicodedata.normalize("NFKD", str(t)).encode("ascii", "ignore").decode("utf-8").lower()
+
+    comb = _norm(f"{url} {service_name} {region} {layer}")
+
+    # 1. Búsqueda en base de datos de preajustes conocidos por palabras clave
+    for preset in WMS_LOCATION_PRESETS:
+        if any(k in comb for k in preset["keys"]):
+            return {
+                "center": preset["center"],
+                "epsg": preset.get("epsg"),
+                "country": preset.get("country"),
+                "label": preset.get("label", service_name)
+            }
+
+    # 2. Si no coincide con preajustes de texto, intentar inspección en vivo de BoundingBox
+    if url and url.startswith("http"):
+        try:
+            extent = fetch_wms_geographic_extent(url, layer)
+            if extent:
+                c_lat = extent["center_lat"]
+                c_lon = extent["center_lon"]
+                c_zoom = extent["zoom"]
+
+                country_match = None
+                if -4.5 <= c_lat <= 13.5 and -80.0 <= c_lon <= -66.0:
+                    country_match = {"name": "Colombia", "flag": "🇨🇴", "key": "colombia"}
+                    epsg_code = 9377
+                elif (35.0 <= c_lat <= 44.5 and -10.0 <= c_lon <= 5.0) or (27.0 <= c_lat <= 30.0 and -19.0 <= c_lon <= -13.0):
+                    country_match = {"name": "España", "flag": "🇪🇸", "key": "spain"}
+                    epsg_code = 25830
+                elif 14.0 <= c_lat <= 33.0 and -118.0 <= c_lon <= -86.0:
+                    country_match = {"name": "México", "flag": "🇲🇽", "key": "mexico"}
+                    epsg_code = 6369
+                elif 7.0 <= c_lat <= 10.0 and -83.1 <= c_lon <= -77.1:
+                    country_match = {"name": "Panamá", "flag": "🇵🇦", "key": "panama"}
+                    epsg_code = 32618
+                elif -18.5 <= c_lat <= 0.0 and -81.5 <= c_lon <= -68.5:
+                    country_match = {"name": "Perú", "flag": "🇵🇪", "key": "peru"}
+                    epsg_code = 32718
+                elif -56.0 <= c_lat <= -17.5 and -76.0 <= c_lon <= -66.0:
+                    country_match = {"name": "Chile", "flag": "🇨🇱", "key": "chile"}
+                    epsg_code = 5361
+                elif -55.5 <= c_lat <= -21.5 and -74.0 <= c_lon <= -53.0:
+                    country_match = {"name": "Argentina", "flag": "🇦🇷", "key": "argentina"}
+                    epsg_code = 5347
+                elif 49.4 <= c_lat <= 51.6 and 2.5 <= c_lon <= 6.5:
+                    country_match = {"name": "Bélgica", "flag": "🇧🇪", "key": "belgium"}
+                    epsg_code = 31370
+                elif 36.8 <= c_lat <= 42.2 and -9.6 <= c_lon <= -6.1:
+                    country_match = {"name": "Portugal", "flag": "🇵🇹", "key": "portugal"}
+                    epsg_code = 3763
+                elif 41.3 <= c_lat <= 51.1 and -5.5 <= c_lon <= 9.6:
+                    country_match = {"name": "Francia", "flag": "🇫🇷", "key": "france"}
+                    epsg_code = 2154
+                elif 47.2 <= c_lat <= 55.1 and 5.8 <= c_lon <= 15.1:
+                    country_match = {"name": "Alemania", "flag": "🇩🇪", "key": "germany"}
+                    epsg_code = 25832
+                elif 55.0 <= c_lat <= 69.5 and 10.5 <= c_lon <= 24.5:
+                    country_match = {"name": "Suecia", "flag": "🇸🇪", "key": "sweden"}
+                    epsg_code = 3006
+                elif -45.0 <= c_lat <= -9.0 and 110.0 <= c_lon <= 155.0:
+                    country_match = {"name": "Australia", "flag": "🇦🇺", "key": "australia"}
+                    epsg_code = 7855
+                elif 24.0 <= c_lat <= 50.0 and -125.0 <= c_lon <= -66.5:
+                    country_match = {"name": "Estados Unidos", "flag": "🇺🇸", "key": "united states"}
+                    epsg_code = 3857
+                elif 41.6 <= c_lat <= 83.2 and -141.0 <= c_lon <= -52.6:
+                    country_match = {"name": "Canadá", "flag": "🇨🇦", "key": "canada"}
+                    epsg_code = 3978
+                else:
+                    epsg_code = 3857
+
+                lbl = country_match["name"] if country_match else service_name or "Servicio WMS"
+                return {
+                    "center": (c_lat, c_lon, c_zoom),
+                    "epsg": epsg_code,
+                    "country": country_match,
+                    "label": lbl
+                }
+        except Exception:
+            pass
+
+    return {
+        "center": (40.4168, -3.7038, 6),
+        "epsg": 25830,
+        "country": {"name": "España", "flag": "🇪🇸", "key": "spain"},
+        "label": service_name or "España"
+    }
+
+
+def apply_wms_to_application(url: str, layer: str, name: str, region: str = ""):
+    """
+    Configura el servicio WMS en la sesión activa de Streamlit, centra automáticamente
+    el visor de mapa interactivo en la ubicación geográfica de dicha capa y ajusta
+    la proyección oficial (EPSG) del país correspondiente.
+    """
     st.session_state["wms_dialog_is_open"] = False
     st.session_state["pending_sidebar_service"] = "⚙️ Agregar WMS externo (Cualquier servidor WMS del mundo)"
     st.session_state["pending_custom_wms_url"] = url
     st.session_state["pending_custom_wms_layer"] = layer
-    st.toast(f"✅ ¡Servicio '{name}' configurado en la app!", icon="🌍")
+
+    # 1. Determinar centro geográfico y proyección recomendada
+    loc_info = resolve_wms_geographic_info(url=url, layer=layer, service_name=name, region=region)
+    if loc_info.get("center"):
+        st.session_state["pending_map_center"] = loc_info["center"]
+        st.session_state["active_map_center"] = loc_info["center"]
+        st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
+
+    if loc_info.get("epsg"):
+        st.session_state["pending_epsg_code"] = loc_info["epsg"]
+
+    if loc_info.get("country"):
+        st.session_state["pending_detected_zone"] = loc_info["country"]
+
+    loc_label = loc_info.get("label") or name
+    epsg_disp = f" y proyección a EPSG:{loc_info['epsg']}" if loc_info.get("epsg") else ""
+    st.session_state["wms_applied_toast"] = f"🎯 ¡Visor centrado automáticamente en {loc_label}{epsg_disp}!"
     st.rerun()
 
 
@@ -2893,7 +3338,7 @@ def render_wms_assistant_content(
                         st.markdown(f"**{srv['name']}** <span style='color:#38bdf8;font-size:11px;'>({srv['region']})</span>", unsafe_allow_html=True)
                     with c_act:
                         if st.button("Cargar", key=f"dir_apply_{srv['id']}", use_container_width=True):
-                            apply_wms_to_application(srv["url"], srv["default_layer"], srv["name"])
+                            apply_wms_to_application(srv["url"], srv["default_layer"], srv["name"], region=srv.get("region", ""))
 
             with sub_tab_insp:
                 inspect_url = st.text_input("URL WMS a inspeccionar:", placeholder="https://servidor.com/.../wms", key="inspector_modal_wms_input")

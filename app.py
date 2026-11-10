@@ -3236,6 +3236,8 @@ def generate_preview_map(
         center_lat = sum(all_lats) / len(all_lats)
         center_lon = sum(all_lons) / len(all_lons)
         zoom_start = 15
+    elif "active_map_center" in st.session_state and st.session_state["active_map_center"]:
+        center_lat, center_lon, zoom_start = st.session_state["active_map_center"]
     else:
         center_lat, center_lon, zoom_start = get_crs_default_center(crs_str)
 
@@ -3709,6 +3711,12 @@ def render_ui():
     """, height=0, width=0)
 
     # Sincronización segura de estados pendientes antes de instanciar widgets de Streamlit
+    if "pending_map_center" in st.session_state:
+        st.session_state["active_map_center"] = st.session_state.pop("pending_map_center")
+
+    if "wms_applied_toast" in st.session_state:
+        st.toast(st.session_state.pop("wms_applied_toast"), icon="🚀")
+
     if "pending_detected_zone" in st.session_state:
         zone_info = st.session_state.pop("pending_detected_zone")
         st.session_state["detected_zone_country"] = zone_info
@@ -3757,6 +3765,8 @@ def render_ui():
                 if "sidebar_epsg_select_widget" in st.session_state:
                     del st.session_state["sidebar_epsg_select_widget"]
                 st.session_state["sidebar_epsg_search_error"] = None
+                st.session_state["active_map_center"] = get_crs_default_center(f"EPSG:{num_code}")
+                st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
             except Exception:
                 st.session_state["sidebar_epsg_search_error"] = f"⚠️ El código EPSG:{num_code} no existe en la base de datos oficial."
         elif raw_val:
@@ -3778,6 +3788,8 @@ def render_ui():
                 spain_codes = {25828, 25829, 25830, 25831, 25832, 23028, 23029, 23030, 23031, 4258, 4230, 32628}
                 if isinstance(parsed_code, int) and parsed_code in spain_codes:
                     st.session_state["dismiss_pnoa_notice"] = False
+                st.session_state["active_map_center"] = get_crs_default_center(f"EPSG:{parsed_code}")
+                st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
 
     def _on_epsg_view_mode_change():
         if "sidebar_epsg_select_widget" in st.session_state:
@@ -4031,6 +4043,11 @@ def render_ui():
         chosen_lbl = st.session_state.get("sidebar_service_select")
         if chosen_lbl in service_labels:
             st.session_state["selected_service_idx"] = service_labels.index(chosen_lbl)
+            if any(k in chosen_lbl.lower() for k in ["pnoa", "ign", "mdt"]):
+                st.session_state["active_map_center"] = (40.4168, -3.7038, 6)
+                st.session_state["active_epsg_code"] = 25830
+                st.session_state["sidebar_epsg_input"] = "25830"
+                st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
 
     if "sidebar_service_select" not in st.session_state or st.session_state["sidebar_service_select"] not in service_labels:
         st.session_state["sidebar_service_select"] = service_labels[default_serv_idx]
@@ -4079,6 +4096,20 @@ def render_ui():
             st.session_state["last_custom_wms_url"] = wms_url
             if detected_layers:
                 st.session_state["custom_wms_layer_input"] = detected_layers[0][0]
+            # Autocentrador para URL personalizada
+            loc_info = wms_bot.resolve_wms_geographic_info(
+                url=wms_url,
+                layer=st.session_state.get("custom_wms_layer_input", "")
+            )
+            if loc_info.get("center"):
+                st.session_state["active_map_center"] = loc_info["center"]
+                st.session_state["draw_version"] = st.session_state.get("draw_version", 0) + 1
+            if loc_info.get("epsg"):
+                st.session_state["pending_epsg_code"] = loc_info["epsg"]
+            if loc_info.get("country"):
+                st.session_state["pending_detected_zone"] = loc_info["country"]
+            if loc_info.get("label"):
+                st.toast(f"🎯 Visor centrado automáticamente en {loc_info['label']}", icon="🚀")
 
         if detected_layers:
             layer_labels = [f"{n} ({t})" if n != t and t else n for n, t in detected_layers]
