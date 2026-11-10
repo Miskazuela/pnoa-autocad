@@ -838,6 +838,31 @@ WMS_DATABASE: List[Dict[str, Any]] = [
         "description": "Ocupación y usos del suelo de España (SIOSE / Corine Land Cover) del Instituto Geográfico Nacional (IGN): clases agrológicas y coberturas de suelo.",
         "tags": ["espana", "suelos", "suelo", "siose", "ocupacion", "corine", "edafologia", "ign", "medio ambiente"],
         "layers": [("LC.LandCoverSurfaces", "Ocupación y Usos del Suelo SIOSE")]
+    },
+    {
+        "id": "belgica_dov_suelos",
+        "name": "Bélgica / Flandes - Mapa de Suelos y Edafología (DOV / Bodemkaart)",
+        "category": "🌲 Medio Ambiente y Naturaleza",
+        "region": "Bélgica",
+        "url": "https://www.dov.vlaanderen.be/geoserver/wms",
+        "default_layer": "bodemkaart:bodemtypes",
+        "description": "Databank Ondergrond Vlaanderen (DOV): Cartografía edafológica oficial, tipos de suelo, sustratos y series de Bélgica / Flandes.",
+        "tags": ["belgica", "belgium", "flandes", "vlaanderen", "suelos", "suelo", "bodem", "bodemkaart", "dov", "edafologia", "tierra"],
+        "layers": [
+            ("bodemkaart:bodemtypes", "Tipos de Suelo (Bodemtypes)"),
+            ("dov-pub-bodem:Bodemassociatiekaart", "Asociaciones de Suelo")
+        ]
+    },
+    {
+        "id": "belgica_ngi_ortofoto",
+        "name": "Bélgica - Ortofoto Nacional Aérea Oficial (IGN / NGI)",
+        "category": "🛰️ Ortofotos Satelitales y Aéreas",
+        "region": "Bélgica",
+        "url": "https://wms.ngi.be/inspire/ortho/service",
+        "default_layer": "orthoimage_coverage",
+        "description": "Institut Géographique National (IGN / NGI Belgique): Ortofotografía aérea oficial de alta resolución de toda Bélgica.",
+        "tags": ["belgica", "belgium", "ortofoto", "satelite", "ngi", "ign", "bruselas", "flandes", "valonia"],
+        "layers": [("orthoimage_coverage", "Ortofoto Nacional de Bélgica")]
     }
 ]
 
@@ -920,6 +945,12 @@ GEO_LOCATIONS = {
     "australia": ["australia", "sydney", "melbourne", "australiano", "australiana"],
     "brasil": ["brasil", "brazil", "ibge", "rio", "sao paulo", "brasilia", "brasilero", "brasilera"],
     "japon": ["japon", "japan", "gsi", "tokio", "osaka", "japones", "japonesa"],
+    "belgica": [
+        "belgica", "belgium", "belgique", "belgie", "bruselas", "brussels", "bruxelles",
+        "flandes", "flanders", "vlaanderen", "valonia", "wallonie", "wallonia", "ngi", "ign belgica", "dov"
+    ],
+    "suiza": ["suiza", "switzerland", "suisse", "schweiz", "svizzera", "swisstopo", "zurich", "ginebra"],
+    "paises bajos": ["paises bajos", "holanda", "netherlands", "nederland", "amsterdam", "rotterdam", "pdok"],
     "euskadi": ["euskadi", "pais vasco", "bizkaia", "araba", "alava", "gipuzkoa", "geoeuskadi", "b5m", "donostia", "san sebastian", "bilbao", "vitoria", "vasco", "vasca"],
     "espana": [
         "espana", "spain", "madrid", "cataluna", "barcelona", "andalucia", "sevilla",
@@ -939,6 +970,9 @@ GEO_LOCATIONS = {
 GEO_CANONICAL_NAMES = {
     "espana": "España",
     "euskadi": "País Vasco",
+    "belgica": "Bélgica",
+    "suiza": "Suiza",
+    "paises bajos": "Países Bajos",
     "colombia": "Colombia",
     "suecia": "Suecia",
     "australia": "Australia",
@@ -972,6 +1006,13 @@ GEO_CANONICAL_NAMES = {
 }
 
 OFFICIAL_GEOPORTALS: Dict[str, Dict[str, str]] = {
+    "belgica": {
+        "name": "Bélgica",
+        "portal_name": "Geo.be (IGN / NGI) & Databank Ondergrond Vlaanderen (DOV)",
+        "portal_url": "https://www.geo.be",
+        "description": "Geoportal federal oficial de Bélgica (IGN/NGI), Geopunt Flandes y WalOnMap Valonia.",
+        "search_tips": "Para suelos en Flandes usa DOV (dov.vlaanderen.be, capa: bodemkaart:bodemtypes). Para ortofotos nacionales usa NGI (wms.ngi.be, capa: orthoimage_coverage). En Valonia consulta geoservices.wallonie.be."
+    },
     "australia": {
         "name": "Australia",
         "portal_name": "Geoscience Australia & NationalMap",
@@ -1217,6 +1258,9 @@ def infer_project_geo_keys(
             elif code_num in [5343, 5344, 5345, 5346, 5347, 5348, 5349, 22181, 22182, 22183, 22184, 22185]:
                 geos.add("argentina")
                 geos.update(GEO_LOCATIONS.get("argentina", []))
+            elif code_num in [31370, 3812]:
+                geos.add("belgica")
+                geos.update(GEO_LOCATIONS.get("belgica", []))
             elif (32610 <= code_num <= 32619) or (2225 <= code_num <= 2286):
                 geos.add("estados unidos")
                 geos.update(GEO_LOCATIONS.get("estados unidos", []))
@@ -1580,18 +1624,15 @@ def inspect_wms_live(url: str) -> Dict[str, Any]:
 # Catálogo base por defecto (se auto-actualiza dinámicamente en tiempo real con la API en vivo de cada proveedor)
 PROVIDER_MODELS_CATALOG = {
     "gemini": [
-        "gemini-3.8-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-pro-preview",
-        "gemini-4-argon",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash-lite",
     ],
     "openai": [
-        "gpt-5",
-        "gpt-4.5",
-        "gpt-4o",
         "gpt-4o-mini",
-        "o3",
+        "gpt-4o",
         "o3-mini",
         "o1",
     ],
@@ -1614,7 +1655,7 @@ PROVIDER_MODELS_CATALOG = {
     ],
     "openrouter": [
         "anthropic/claude-3.7-sonnet",
-        "google/gemini-3.8-flash",
+        "google/gemini-2.0-flash",
         "deepseek/deepseek-r1",
         "meta-llama/llama-3.3-70b-instruct",
     ],
@@ -1689,8 +1730,8 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
     cached_key = st.session_state.get("_cached_gemini_api_key")
     cached_models = st.session_state.get("_cached_gemini_models")
     if not force_refresh and cached_key == clean_key and cached_models:
-        # Invalidar caché si contenía modelos antiguos descontinuados (ej: 2.5, 1.5)
-        if not any(any(old in str(m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]) for m in cached_models):
+        # Invalidar caché si contenía modelos falsos o inventados (ej: 3.8, argon)
+        if not any(any(fake in str(m).lower() for fake in ["3.8", "3.6", "3.5", "4-argon"]) for m in cached_models):
             return cached_models, None
 
     try:
@@ -1711,21 +1752,8 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
                         models_found.append(clean_name)
 
             if models_found:
-                # Asegurar presencia del modelo insignia actual gemini-3.8-flash
-                if "gemini-3.8-flash" not in models_found:
-                    models_found.append("gemini-3.8-flash")
-
-                # Purgar modelos descontinuados de la API de Google AI Studio (2.5, 2.0, 1.5, 1.0)
-                modern_models = [m for m in models_found if not any(old in m.lower() for old in ["2.5", "2.0", "1.5", "1.0"])]
-                if modern_models:
-                    models_found = modern_models
-
                 def _version_score(name: str) -> float:
                     n = name.lower()
-                    if "gemini-3.8-flash" in n:
-                        return 100.0
-                    if any(old in n for old in ["2.5", "2.0", "1.5", "1.0"]):
-                        return -100.0
                     score = 0.0
                     match = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
                     if match:
@@ -1733,14 +1761,18 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
                             score = float(match.group(1)) * 10.0
                         except Exception:
                             score = 10.0
-                    if "flash" in n and "lite" not in n:
-                        score += 0.5
+                    if "2.0-flash" in n and "lite" not in n:
+                        score += 5.0
+                    elif "1.5-flash" in n and "8b" not in n:
+                        score += 4.0
+                    elif "2.5-flash" in n:
+                        score += 3.5
+                    elif "1.5-pro" in n:
+                        score += 3.0
                     elif "flash-lite" in n or "lite" in n:
-                        score += 0.4
-                    elif "pro" in n or "argon" in n:
-                        score += 0.2
+                        score += 2.0
                     if "exp" in n or "preview" in n:
-                        score -= 0.1
+                        score -= 1.0
                     return score
 
                 models_found.sort(key=_version_score, reverse=True)
@@ -1748,9 +1780,12 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
                 seen = set()
                 unique_models = []
                 for m in models_found:
-                    if m not in seen:
+                    if m not in seen and not any(fake in m.lower() for fake in ["3.8", "3.6", "3.5", "4-argon"]):
                         seen.add(m)
                         unique_models.append(m)
+
+                if not unique_models:
+                    unique_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
 
                 st.session_state["_cached_gemini_api_key"] = clean_key
                 st.session_state["_cached_gemini_models"] = unique_models
@@ -1766,11 +1801,10 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
         pass
 
     fallback = [
-        "gemini-3.8-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-pro-preview",
-        "gemini-4-argon",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-2.5-flash",
     ]
     return fallback, None
 
@@ -2278,18 +2312,23 @@ def query_gemini_wms(
 
     if custom_model and custom_model.strip():
         cm = custom_model.strip()
-        if any(old in cm.lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
-            models_to_try = [cm, "gemini-3.8-flash"]
-            is_single_choice = False
-        else:
-            models_to_try = [cm]
-            is_single_choice = True
+        if any(fake in cm.lower() for fake in ["3.8", "3.6", "3.5", "4-argon"]):
+            cm = "gemini-2.0-flash"
+        models_to_try = [cm]
+        for fallback_m in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
+            if fallback_m not in models_to_try:
+                models_to_try.append(fallback_m)
+        is_single_choice = False
         key_error = None
     else:
-        models_to_try, key_error = discover_available_gemini_models(clean_key)
-        if key_error and not models_to_try:
+        discovered, key_error = discover_available_gemini_models(clean_key)
+        if key_error and not discovered:
             return {"success": False, "text": key_error}
-        is_single_choice = len(models_to_try) == 1
+        models_to_try = [m for m in discovered if not any(fake in m.lower() for fake in ["3.8", "3.6", "3.5", "4-argon"])]
+        for fallback_m in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
+            if fallback_m not in models_to_try:
+                models_to_try.append(fallback_m)
+        is_single_choice = False
 
     last_error = ""
 
@@ -2301,12 +2340,12 @@ def query_gemini_wms(
             "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}
         }
         try:
-            resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json=payload, timeout=18)
+            resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json=payload, timeout=14)
             if resp.status_code == 400 and "systemInstruction" in resp.text:
                 fallback_contents = [
                     {"role": "user", "parts": [{"text": f"INSTRUCCIÓN DEL SISTEMA:\n{system_instruction}\n\nCONSULTA:\n{prompt}"}]}
                 ]
-                resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json={"contents": fallback_contents, "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}}, timeout=18)
+                resp = requests.post(endpoint, headers={"Content-Type": "application/json"}, json={"contents": fallback_contents, "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1000}}, timeout=14)
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -2324,14 +2363,12 @@ def query_gemini_wms(
                 last_error = err_json.get("message", "Petición no válida.")
                 if "API key not valid" in last_error:
                     return {"success": False, "text": "❌ La clave de API de Gemini introducida no es válida. Genera una en https://aistudio.google.com/app/apikey"}
-                if is_single_choice:
-                    break
+                continue
             elif resp.status_code == 403:
                 return {"success": False, "text": "❌ Clave de API de Gemini sin permisos. Verifica que la API 'Generative Language' esté habilitada en Google AI Studio."}
             elif resp.status_code == 429:
-                last_error = "Límite de cuota alcanzado temporalmente en Gemini."
-                if is_single_choice:
-                    break
+                last_error = f"Límite de cuota alcanzado temporalmente en Gemini ({model_name})."
+                continue
             elif resp.status_code == 404:
                 err_json = {}
                 try:
@@ -2340,18 +2377,20 @@ def query_gemini_wms(
                     pass
                 err_msg = err_json.get("message", "")
 
-                # Auto-recuperación si Google AI Studio responde que el modelo está descontinuado
+                # Auto-recuperación si Google AI Studio responde con modelo sugerido
                 suggested_m = None
                 sug_match = re.search(r"use models/([a-zA-Z0-9\.\-_]+)", err_msg)
                 if sug_match:
                     suggested_m = sug_match.group(1).strip()
-                elif model_name != "gemini-3.8-flash":
-                    suggested_m = "gemini-3.8-flash"
+                elif model_name != "gemini-2.0-flash":
+                    suggested_m = "gemini-2.0-flash"
+                elif model_name != "gemini-1.5-flash":
+                    suggested_m = "gemini-1.5-flash"
 
                 if suggested_m and suggested_m != model_name:
                     retry_ep = f"https://generativelanguage.googleapis.com/v1beta/models/{suggested_m}:generateContent?key={clean_key}"
                     try:
-                        r_retry = requests.post(retry_ep, headers={"Content-Type": "application/json"}, json=payload, timeout=18)
+                        r_retry = requests.post(retry_ep, headers={"Content-Type": "application/json"}, json=payload, timeout=14)
                         if r_retry.status_code == 200:
                             cand = r_retry.json().get("candidates", [{}])[0]
                             t_out = cand.get("content", {}).get("parts", [{}])[0].get("text", "")
@@ -2365,22 +2404,17 @@ def query_gemini_wms(
                     except Exception:
                         pass
 
-                last_error = f"El modelo '{model_name}' no existe o no está habilitado para esta clave en Google AI Studio ({err_msg or '404 Not Found'})."
-                if is_single_choice:
-                    break
+                last_error = f"El modelo '{model_name}' no existe o no está habilitado en Google AI Studio ({err_msg or '404 Not Found'})."
                 continue
             else:
                 last_error = f"Código HTTP {resp.status_code}: {resp.text}"
-                if is_single_choice:
-                    break
+                continue
         except requests.exceptions.Timeout:
-            last_error = "Tiempo de espera agotado al consultar a Gemini."
-            if is_single_choice:
-                break
+            last_error = f"Tiempo de espera agotado al consultar a Gemini ({model_name})."
             continue
         except Exception as ex:
             last_error = str(ex)
-            break
+            continue
 
     return {
         "success": False,
@@ -2563,7 +2597,10 @@ def render_wms_assistant_content(
     has_key = bool(user_key)
     cur_p_setting = st.session_state.get("wms_selected_ai_provider", "auto")
     effective_prov = detect_ai_provider(user_key, user_selected=cur_p_setting)
-    disp_m = st.session_state.get("wms_active_selected_model", "gemini-3.8-flash")
+    disp_m = st.session_state.get("wms_active_selected_model", "gemini-2.0-flash")
+    if any(fake in str(disp_m).lower() for fake in ["3.8", "3.6", "3.5", "4-argon"]):
+        disp_m = "gemini-2.0-flash"
+        st.session_state["wms_active_selected_model"] = "gemini-2.0-flash"
 
     # Cabecera ultra-limpia de 1 sola línea: Zona, CRS, estado de IA, Popover de Ajustes y Botón de Limpiar
     zone_label = f"{zone_disp}" if zone_disp else "Global"
@@ -2629,9 +2666,9 @@ def render_wms_assistant_content(
                     sb_model_key = f"sb_wms_model_choice_{effective_prov}"
                     if effective_prov == "gemini":
                         cur_sb = st.session_state.get(sb_model_key)
-                        if cur_sb and (cur_sb not in model_choices or any(old in str(cur_sb).lower() for old in ["2.5", "2.0", "1.5", "1.0"])):
+                        if cur_sb and (cur_sb not in model_choices or any(fake in str(cur_sb).lower() for fake in ["3.8", "3.6", "3.5", "4-argon"])):
                             st.session_state.pop(sb_model_key, None)
-                        if prev_m and any(old in str(prev_m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]):
+                        if prev_m and any(fake in str(prev_m).lower() for fake in ["3.8", "3.6", "3.5", "4-argon"]):
                             prev_m = base_models[0]
                             st.session_state[prov_state_key] = prev_m
 
@@ -2654,7 +2691,7 @@ def render_wms_assistant_content(
                         custom_m_in = st.text_input(
                             "Nombre exacto:",
                             value=st.session_state.get(f"wms_custom_name_{effective_prov}", ""),
-                            placeholder="Ej: gemini-3.8-flash, gpt-4o"
+                            placeholder="Ej: gemini-2.0-flash, gpt-4o"
                         )
                         active_model_name = custom_m_in.strip() if custom_m_in.strip() else base_models[0]
                         st.session_state[f"wms_custom_name_{effective_prov}"] = active_model_name
@@ -2764,7 +2801,9 @@ def render_wms_assistant_content(
                         # Si hubo algún problema con la API de IA, anexamos automáticamente
                         # las recomendaciones del catálogo local para no dejar la consulta sin respuesta.
                         if not res.get("success", False):
-                            local_matches = search_wms_catalog(query_to_run, project_geo_fallback=project_geo_keys)
+                            q_detected_geos = _detect_query_geo(query_to_run)
+                            effective_fallback = project_geo_keys if not q_detected_geos else None
+                            local_matches = search_wms_catalog(query_to_run, project_geo_fallback=effective_fallback)
                             if local_matches:
                                 top = local_matches[:3]
                                 lines = [
@@ -2782,12 +2821,22 @@ def render_wms_assistant_content(
                                     }
                                     lines.append(f"[APPLY_WMS: {json.dumps(payload)}]")
                                 bot_response = "\n".join(lines)
+                            else:
+                                offline_help = build_smart_offline_response(
+                                    query=query_to_run,
+                                    detected_geos=q_detected_geos,
+                                    zone_disp=zone_disp,
+                                    is_context_q=False
+                                )
+                                bot_response = f"{bot_response}\n\n{offline_help}"
 
                         _parse_and_render_wms_actions(bot_response)
                 else:
-                    matches = search_wms_catalog(query_to_run, project_geo_fallback=project_geo_keys)
                     clean_run_q = _normalize_text(query_to_run)
                     is_context_q = bool(set(clean_run_q.split()).intersection(CONTEXT_PROJECT_TRIGGERS))
+                    detected_geos = _detect_query_geo(query_to_run)
+                    effective_geo_fallback = project_geo_keys if (not detected_geos or is_context_q) else None
+                    matches = search_wms_catalog(query_to_run, project_geo_fallback=effective_geo_fallback)
 
                     if matches:
                         top = matches[:3]
@@ -2810,7 +2859,6 @@ def render_wms_assistant_content(
                             lines.append(f"\n*💡 +{len(matches) - 3} capas más en Ajustes.*")
                         bot_response = "\n".join(lines)
                     else:
-                        detected_geos = _detect_query_geo(query_to_run)
                         bot_response = build_smart_offline_response(
                             query=query_to_run,
                             detected_geos=detected_geos,
