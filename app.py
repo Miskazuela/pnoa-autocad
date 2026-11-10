@@ -1574,12 +1574,12 @@ def get_epsg_dropdown_options(
     filter_mode: str = "🌐 Todos (7.200+)",
     active_code: Any = 25830,
     custom_list: Optional[List[Dict[str, Any]]] = None,
-    detected_country: Optional[Dict[str, str]] = None
+    detected_country: Optional[Dict[str, str]] = None,
+    search_query: Optional[str] = None
 ) -> Tuple[List[str], int]:
     """
     Genera dinámicamente la lista de opciones para el desplegable de Streamlit según el
-    filtro seleccionado, garantizando que si se detectó un país específico (ej. Suecia, Colombia, España),
-    el desplegable muestre prioritariamente los sistemas de ese país.
+    filtro seleccionado o la búsqueda activa por EPSG/texto.
     """
     if custom_list is None:
         custom_list = []
@@ -1588,6 +1588,81 @@ def get_epsg_dropdown_options(
     installed_codes = {x["code"] for x in custom_list if "code" in x}
 
     options: List[str] = []
+
+    sq_clean = (search_query or "").strip().upper().replace("EPSG:", "").strip()
+
+    # Si hay una búsqueda activa por código EPSG o texto, filtramos estrictamente
+    if sq_clean:
+        sq_lower = sq_clean.lower()
+        seen_codes: set = set()
+
+        # A) Coincidencia directa con CRS oficial de pyproj si el usuario escribió un número
+        if sq_clean.isdigit():
+            num_code = int(sq_clean)
+            try:
+                c_direct = CRS.from_epsg(num_code)
+                area_txt = c_direct.area_of_use.name if c_direct.area_of_use else ""
+                area_disp = (area_txt[:70] + "...") if len(area_txt) > 70 else area_txt
+                options.append(f"EPSG:{num_code} — {c_direct.name}" + (f" [{area_disp}]" if area_disp else ""))
+                seen_codes.add(num_code)
+            except Exception:
+                pass
+
+        # B) Buscar en sistemas personalizados / instalados
+        for itm in custom_list:
+            c_code = itm.get("code")
+            c_name = str(itm.get("name", ""))
+            c_alias = str(itm.get("alias", c_name))
+            if str(c_code) == sq_clean or sq_lower in c_name.lower() or sq_lower in c_alias.lower():
+                if c_code not in seen_codes:
+                    options.append(f"⭐ [Instalado] {c_alias} (EPSG:{c_code})")
+                    seen_codes.add(c_code)
+
+        # C) Buscar en los preajustes populares
+        for lbl, code in POPULAR_EPSG_PRESETS:
+            if code not in seen_codes:
+                if str(code) == sq_clean or sq_lower in lbl.lower():
+                    options.append(lbl)
+                    seen_codes.add(code)
+
+        # D) Buscar en la base de datos oficial PROJ (>7.200 sistemas)
+        all_crs = get_full_epsg_database()
+        for c in all_crs:
+            code_num = c["code"]
+            if code_num in seen_codes:
+                continue
+            code_str = str(code_num)
+            matches = False
+            if sq_clean.isdigit():
+                if code_str == sq_clean:
+                    matches = True
+                elif len(sq_clean) >= 3 and code_str.startswith(sq_clean) and len(options) < 30:
+                    matches = True
+            else:
+                if sq_lower in c["name"].lower() or sq_lower in c["area"].lower():
+                    matches = True
+
+            if matches:
+                area_txt = c["area"]
+                area_disp = (area_txt[:70] + "...") if len(area_txt) > 70 else area_txt
+                options.append(f"EPSG:{code_num} — {c['name']}" + (f" [{area_disp}]" if area_disp else ""))
+                seen_codes.add(code_num)
+                if len(options) >= 50:
+                    break
+
+        # Si no hubo ninguna coincidencia, avisar amigablemente
+        if not options:
+            options = [f"⚠️ Ningún sistema coincide con '{search_query}'"]
+            return options, 0
+
+        # Localizar si el código activo actual está en los resultados de la búsqueda
+        selected_idx = 0
+        for idx, opt in enumerate(options):
+            if str(extract_epsg_code(opt)) == str(active_code):
+                selected_idx = idx
+                break
+
+        return options, selected_idx
 
     # 1. Proyecciones instaladas por el usuario (siempre destacadas al inicio si aplican)
     for itm in custom_list:
@@ -1617,7 +1692,7 @@ def get_epsg_dropdown_options(
             area_lower = c["area"].lower()
             name_lower = c["name"].lower()
             if country_key in area_lower or country_key in name_lower or country_name in area_lower or country_name in name_lower:
-                area_disp = c["area"][:35] + "..." if len(c["area"]) > 35 else c["area"]
+                area_disp = c["area"][:70] + "..." if len(c["area"]) > 70 else c["area"]
                 options.append(f"EPSG:{code_num} — {c['name']}" + (f" [{area_disp}]" if area_disp else ""))
 
     elif filter_mode == "🛠️ Instalados":
@@ -1636,7 +1711,7 @@ def get_epsg_dropdown_options(
                 continue
             area_lower = c["area"].lower()
             if any(k in area_lower for k in ["spain", "canary", "balearic"]):
-                area_disp = c["area"][:35] + "..." if len(c["area"]) > 35 else c["area"]
+                area_disp = c["area"][:70] + "..." if len(c["area"]) > 70 else c["area"]
                 options.append(f"EPSG:{code_num} — {c['name']} [{area_disp}]")
     elif filter_mode == "🌎 Latam":
         latam_keys = [
@@ -1655,7 +1730,7 @@ def get_epsg_dropdown_options(
                 continue
             area_lower = c["area"].lower()
             if any(k in area_lower for k in latam_keys):
-                area_disp = c["area"][:35] + "..." if len(c["area"]) > 35 else c["area"]
+                area_disp = c["area"][:70] + "..." if len(c["area"]) > 70 else c["area"]
                 options.append(f"EPSG:{code_num} — {c['name']} [{area_disp}]")
     else:  # "🌐 Todos (7.200+)"
         for lbl, _ in POPULAR_EPSG_PRESETS:
@@ -1665,7 +1740,7 @@ def get_epsg_dropdown_options(
             code_num = c["code"]
             if code_num in popular_codes or code_num in installed_codes:
                 continue
-            area_disp = c["area"][:35] + "..." if len(c["area"]) > 35 else c["area"]
+            area_disp = c["area"][:70] + "..." if len(c["area"]) > 70 else c["area"]
             options.append(f"EPSG:{code_num} — {c['name']}" + (f" [{area_disp}]" if area_disp else ""))
 
     # 3. Asegurar que el código activo actual esté siempre presente
@@ -1673,7 +1748,7 @@ def get_epsg_dropdown_options(
     if not active_in_options:
         try:
             c_temp = CRS.from_user_input(f"EPSG:{active_code}" if str(active_code).isdigit() else str(active_code))
-            area_str = (c_temp.area_of_use.name[:35] + "...") if c_temp.area_of_use else ""
+            area_str = (c_temp.area_of_use.name[:70] + "...") if c_temp.area_of_use and len(c_temp.area_of_use.name) > 70 else (c_temp.area_of_use.name if c_temp.area_of_use else "")
             custom_label = f"🎯 [Activo] EPSG:{active_code} — {c_temp.name}" + (f" [{area_str}]" if area_str else "")
         except Exception:
             custom_label = f"🎯 [Activo] EPSG:{active_code}"
@@ -3132,7 +3207,45 @@ def render_ui():
             font-weight: 600;
             font-size: 0.9em;
         }
+
+        /* Menú desplegable amplio y sin truncamiento para los sistemas EPSG */
+        div[data-baseweb="popover"]:has(li[role="option"]) {
+            min-width: 520px !important;
+            max-width: 780px !important;
+            width: max-content !important;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 20px rgba(56, 189, 248, 0.3) !important;
+            border: 1.5px solid rgba(56, 189, 248, 0.5) !important;
+            border-radius: 12px !important;
+            background-color: #0b1329 !important;
+        }
+        div[data-baseweb="popover"] ul[role="listbox"] {
+            min-width: 520px !important;
+            max-width: 780px !important;
+            max-height: 440px !important;
+        }
+        div[data-baseweb="popover"] li[role="option"] {
+            white-space: normal !important;
+            word-break: break-word !important;
+            overflow: visible !important;
+            padding: 10px 14px !important;
+            line-height: 1.4 !important;
+            font-size: 13px !important;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
+            cursor: pointer !important;
+        }
+        div[data-baseweb="popover"] li[role="option"] > div {
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: unset !important;
+        }
+        div[data-baseweb="popover"] li[role="option"]:hover {
+            background-color: rgba(56, 189, 248, 0.18) !important;
+            color: #38bdf8 !important;
+        }
     </style>
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+         onload="if(!window._epsg_hover_initialized){window._epsg_hover_initialized=true;document.addEventListener('mouseover',function(e){var t=e.target;if(!t)return;var o=t.closest('li[role=\'option\'], div[data-baseweb=\'select\']');if(o){var s=(o.innerText||o.textContent||'').trim();if(s&&o.getAttribute('title')!==s){o.setAttribute('title',s);}}},true);}"
+         style="display:none;" />
     """, unsafe_allow_html=True)
 
     # Sincronización segura de estados pendientes antes de instanciar widgets de Streamlit
@@ -3150,7 +3263,6 @@ def render_ui():
             val_code = str(new_code)
         st.session_state["active_epsg_code"] = val_code
         st.session_state["sidebar_epsg_input"] = str(val_code)
-        st.session_state["sidebar_epsg_num_search"] = str(val_code)
         if "sidebar_epsg_select_widget" in st.session_state:
             del st.session_state["sidebar_epsg_select_widget"]
         spain_codes = {25828, 25829, 25830, 25831, 25832, 23028, 23029, 23030, 23031, 4258, 4230, 32628}
@@ -3169,7 +3281,7 @@ def render_ui():
     if "sidebar_epsg_input" not in st.session_state:
         st.session_state["sidebar_epsg_input"] = str(st.session_state["active_epsg_code"])
     if "sidebar_epsg_num_search" not in st.session_state:
-        st.session_state["sidebar_epsg_num_search"] = str(st.session_state["active_epsg_code"])
+        st.session_state["sidebar_epsg_num_search"] = ""
 
     # Callbacks de sincronización bidireccional segura para los widgets de coordenadas
     def _on_sidebar_epsg_num_search_change():
@@ -3198,7 +3310,6 @@ def render_ui():
             parsed_code = extract_epsg_code(selected_item)
             if parsed_code is not None:
                 st.session_state["active_epsg_code"] = parsed_code
-                st.session_state["sidebar_epsg_num_search"] = str(parsed_code)
                 st.session_state["sidebar_epsg_search_error"] = None
                 spain_codes = {25828, 25829, 25830, 25831, 25832, 23028, 23029, 23030, 23031, 4258, 4230, 32628}
                 if isinstance(parsed_code, int) and parsed_code in spain_codes:
@@ -3245,14 +3356,31 @@ def render_ui():
 
     curr_active_code = st.session_state.get("active_epsg_code", 25830)
 
-    # Buscador directo por número EPSG
+    # Buscador directo por número o texto EPSG
     epsg_search_num = st.sidebar.text_input(
         "🔍 Buscar por código EPSG (escribe el número):",
         key="sidebar_epsg_num_search",
-        placeholder="Ej: 25830, 9377, 3006, 7855...",
-        help="Escribe directamente el número del código EPSG (ej: 25830, 9377, 3006, 7855) y pulsa Enter para buscarlo y activarlo al instante.",
+        placeholder="Ej: 25830, 4484, 9377, 3006...",
+        help="Escribe directamente el número del código EPSG (ej: 4484, 25830) o texto para filtrar la lista desplegable.",
         on_change=_on_sidebar_epsg_num_search_change
     )
+
+    active_search_query = st.session_state.get("sidebar_epsg_num_search", "").strip()
+
+    if active_search_query:
+        col_badge, col_btn = st.sidebar.columns([3, 2])
+        with col_badge:
+            st.markdown(
+                f"<div style='color: #38bdf8; font-size: 11.5px; padding-top: 5px; font-weight: 600;'>"
+                f"🔎 Filtro activo: <code>{active_search_query}</code></div>",
+                unsafe_allow_html=True
+            )
+        with col_btn:
+            if st.button("✖ Ver todos", key="btn_clear_epsg_filter", help="Quitar filtro y ver lista completa"):
+                st.session_state["sidebar_epsg_num_search"] = ""
+                if "sidebar_epsg_select_widget" in st.session_state:
+                    del st.session_state["sidebar_epsg_select_widget"]
+                st.rerun()
 
     if st.session_state.get("sidebar_epsg_search_error"):
         st.sidebar.warning(st.session_state["sidebar_epsg_search_error"])
@@ -3262,7 +3390,8 @@ def render_ui():
         filter_mode=epsg_filter_view,
         active_code=curr_active_code,
         custom_list=custom_epsgs,
-        detected_country=detected_zone
+        detected_country=detected_zone,
+        search_query=active_search_query
     )
 
     if detected_zone and epsg_filter_view.startswith("🎯"):
@@ -3284,7 +3413,7 @@ def render_ui():
         options=epsg_options,
         index=default_epsg_idx,
         key="sidebar_epsg_select_widget",
-        help="Desplegable con todos los sistemas EPSG oficiales. Puedes abrirlo para explorar o buscar por nombre.",
+        help="Pasa el mouse por encima de cualquier opción para ver su nombre completo y ámbito territorial.",
         on_change=_on_sidebar_epsg_select_change
     )
 
@@ -3300,8 +3429,8 @@ def render_ui():
         st.sidebar.markdown(f"""
         <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid #059669; border-radius: 8px; padding: 8px 12px; margin-top: 5px; margin-bottom: 10px;">
             <div style="font-weight: 700; color: #10b981; font-size: 13px;">✅ {crs_str} Activo</div>
-            <div style="color: #f1f5f9; font-size: 12px; font-weight: 600;">{crs_name}</div>
-            <div style="color: #94a3b8; font-size: 11px; margin-top: 2px;">📍 Ámbito: {area_name[:55]}...</div>
+            <div style="color: #f1f5f9; font-size: 12px; font-weight: 600;" title="{crs_name}">{crs_name}</div>
+            <div style="color: #94a3b8; font-size: 11px; margin-top: 2px;" title="{area_name}">📍 Ámbito: {area_name}</div>
             <div style="color: #64748b; font-size: 10px; margin-top: 2px;">📐 Tipo: {proj_type}</div>
         </div>
         """, unsafe_allow_html=True)
