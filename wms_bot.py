@@ -1626,8 +1626,6 @@ PROVIDER_MODELS_CATALOG = {
     "gemini": [
         "gemini-2.0-flash",
         "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-2.5-flash",
         "gemini-2.0-flash-lite",
     ],
     "openai": [
@@ -1765,10 +1763,6 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
                         score += 5.0
                     elif "1.5-flash" in n and "8b" not in n:
                         score += 4.0
-                    elif "2.5-flash" in n:
-                        score += 3.5
-                    elif "1.5-pro" in n:
-                        score += 3.0
                     elif "flash-lite" in n or "lite" in n:
                         score += 2.0
                     if "exp" in n or "preview" in n:
@@ -1780,12 +1774,13 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
                 seen = set()
                 unique_models = []
                 for m in models_found:
-                    if m not in seen and not any(fake in m.lower() for fake in ["3.8", "3.6", "3.5", "4-argon"]):
+                    m_low = m.lower()
+                    if m not in seen and not any(fake in m_low for fake in ["3.8", "3.6", "3.5", "4-argon", "1.5-pro", "2.5"]):
                         seen.add(m)
                         unique_models.append(m)
 
                 if not unique_models:
-                    unique_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+                    unique_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"]
 
                 st.session_state["_cached_gemini_api_key"] = clean_key
                 st.session_state["_cached_gemini_models"] = unique_models
@@ -1803,8 +1798,7 @@ def discover_available_gemini_models(api_key: str, force_refresh: bool = False) 
     fallback = [
         "gemini-2.0-flash",
         "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-2.5-flash",
+        "gemini-2.0-flash-lite",
     ]
     return fallback, None
 
@@ -2304,18 +2298,37 @@ def query_gemini_wms(
         return {"success": False, "text": "⚠️ Por favor, introduce tu Gemini API Key en el campo superior."}
 
     system_instruction = _build_wms_system_instruction(context_info)
+
+    # Formatear el historial respetando las reglas estrictas de Gemini:
+    # 1. El primer mensaje DEBE ser siempre de rol 'user'.
+    # 2. Los roles deben alternar estrictamente: user -> model -> user -> model.
+    # 3. Nunca dos roles iguales consecutivos (se fusionan).
     contents = []
-    for msg in chat_history[-6:]:
-        role = "user" if msg.get("role") == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
-    contents.append({"role": "user", "parts": [{"text": prompt}]})
+    raw_history = list(chat_history[-6:]) if chat_history else []
+    raw_history.append({"role": "user", "content": prompt})
+
+    for msg in raw_history:
+        r = "user" if msg.get("role") == "user" else "model"
+        txt = (msg.get("content") or "").strip()
+        if not txt:
+            continue
+        # Descartar saludos iniciales del bot para que el primer turno sea siempre del usuario
+        if not contents and r != "user":
+            continue
+        if contents and contents[-1]["role"] == r:
+            contents[-1]["parts"][0]["text"] += "\n" + txt
+        else:
+            contents.append({"role": r, "parts": [{"text": txt}]})
+
+    if not contents:
+        contents = [{"role": "user", "parts": [{"text": prompt}]}]
 
     if custom_model and custom_model.strip():
         cm = custom_model.strip()
-        if any(fake in cm.lower() for fake in ["3.8", "3.6", "3.5", "4-argon"]):
+        if any(fake in cm.lower() for fake in ["3.8", "3.6", "3.5", "4-argon", "1.5-pro", "2.5"]):
             cm = "gemini-2.0-flash"
         models_to_try = [cm]
-        for fallback_m in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
+        for fallback_m in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"]:
             if fallback_m not in models_to_try:
                 models_to_try.append(fallback_m)
         is_single_choice = False
@@ -2324,8 +2337,8 @@ def query_gemini_wms(
         discovered, key_error = discover_available_gemini_models(clean_key)
         if key_error and not discovered:
             return {"success": False, "text": key_error}
-        models_to_try = [m for m in discovered if not any(fake in m.lower() for fake in ["3.8", "3.6", "3.5", "4-argon"])]
-        for fallback_m in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
+        models_to_try = [m for m in discovered if not any(fake in m.lower() for fake in ["3.8", "3.6", "3.5", "4-argon", "1.5-pro", "2.5"])]
+        for fallback_m in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"]:
             if fallback_m not in models_to_try:
                 models_to_try.append(fallback_m)
         is_single_choice = False
@@ -2598,7 +2611,7 @@ def render_wms_assistant_content(
     cur_p_setting = st.session_state.get("wms_selected_ai_provider", "auto")
     effective_prov = detect_ai_provider(user_key, user_selected=cur_p_setting)
     disp_m = st.session_state.get("wms_active_selected_model", "gemini-2.0-flash")
-    if any(fake in str(disp_m).lower() for fake in ["3.8", "3.6", "3.5", "4-argon"]):
+    if any(fake in str(disp_m).lower() for fake in ["3.8", "3.6", "3.5", "4-argon", "1.5-pro", "2.5"]):
         disp_m = "gemini-2.0-flash"
         st.session_state["wms_active_selected_model"] = "gemini-2.0-flash"
 
@@ -2666,9 +2679,9 @@ def render_wms_assistant_content(
                     sb_model_key = f"sb_wms_model_choice_{effective_prov}"
                     if effective_prov == "gemini":
                         cur_sb = st.session_state.get(sb_model_key)
-                        if cur_sb and (cur_sb not in model_choices or any(fake in str(cur_sb).lower() for fake in ["3.8", "3.6", "3.5", "4-argon"])):
+                        if cur_sb and (cur_sb not in model_choices or any(fake in str(cur_sb).lower() for fake in ["3.8", "3.6", "3.5", "4-argon", "1.5-pro", "2.5"])):
                             st.session_state.pop(sb_model_key, None)
-                        if prev_m and any(fake in str(prev_m).lower() for fake in ["3.8", "3.6", "3.5", "4-argon"]):
+                        if prev_m and any(fake in str(prev_m).lower() for fake in ["3.8", "3.6", "3.5", "4-argon", "1.5-pro", "2.5"]):
                             prev_m = base_models[0]
                             st.session_state[prov_state_key] = prev_m
 
