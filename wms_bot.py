@@ -16,6 +16,7 @@ import re
 import json
 import base64
 from pathlib import Path
+from datetime import datetime
 import xml.etree.ElementTree as ET
 import unicodedata
 import urllib.parse
@@ -882,6 +883,39 @@ WMS_DATABASE: List[Dict[str, Any]] = [
 
 
 # --------------------------------------------------------------------------------------
+# 1.1. ALMACENAMIENTO DINÁMICO Y BASE DE DATOS APRENDIDA POR LA COMUNIDAD
+# --------------------------------------------------------------------------------------
+COMMUNITY_WMS_FILE = Path(__file__).resolve().parent / "community_wms.json"
+
+
+def load_community_wms_data() -> Dict[str, Any]:
+    """Carga el payload completo de community_wms.json (servicios aprendidos y analíticas)."""
+    if not COMMUNITY_WMS_FILE.exists():
+        return {"services": [], "search_stats": {}, "unmet_demands": {}}
+    try:
+        with open(COMMUNITY_WMS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"services": [], "search_stats": {}, "unmet_demands": {}}
+
+
+def load_community_wms() -> List[Dict[str, Any]]:
+    """Carga la lista de servicios WMS aprendidos e indexados por la comunidad."""
+    data = load_community_wms_data()
+    return data.get("services", [])
+
+
+def get_effective_wms_database() -> List[Dict[str, Any]]:
+    """Retorna la combinación de WMS_DATABASE oficial más los servicios aprendidos dinámicamente."""
+    comm = load_community_wms()
+    if not comm:
+        return WMS_DATABASE
+    seen_urls = {item["url"].split("?")[0].strip().lower() for item in comm}
+    base_filtered = [item for item in WMS_DATABASE if item["url"].split("?")[0].strip().lower() not in seen_urls]
+    return comm + base_filtered
+
+
+# --------------------------------------------------------------------------------------
 # 2. MOTOR DE BÚSQUEDA SEMÁNTICA LOCAL INTELIGENTE
 # --------------------------------------------------------------------------------------
 SPANISH_STOPWORDS = {
@@ -1347,7 +1381,7 @@ def search_wms_catalog(
         region_filter = None
 
     scored_results = []
-    for item in WMS_DATABASE:
+    for item in get_effective_wms_database():
         if category_filter and item["category"] != category_filter:
             continue
 
@@ -1434,8 +1468,11 @@ def search_wms_catalog(
         top_score = scored_results[0][0]
         min_threshold = max(top_score * 0.5, 30)
         filtered = [item for sc, item in scored_results if sc >= min_threshold]
-        return filtered[:10]
+        res = filtered[:10]
+        record_search_query(query, len(res))
+        return res
 
+    record_search_query(query, 0)
     return []
 
 
@@ -2110,7 +2147,7 @@ def _select_prompt_services(query: str, limit: int = 6) -> List[Dict[str, Any]]:
                 break
 
     if not selected:
-        selected = WMS_DATABASE[:limit]
+        selected = get_effective_wms_database()[:limit]
 
     return selected
 
@@ -3154,6 +3191,110 @@ def resolve_wms_geographic_info(
     }
 
 
+def record_search_query(query: str, results_count: int = 1):
+    """Registra anónimamente estadísticas de búsqueda y demandas no cubiertas para aprendizaje continuo."""
+    clean_q = _normalize_text(query).strip()
+    if len(clean_q) < 3 or clean_q in {"hola", "buenas", "ayuda", "ok", "gracias", "por favor"}:
+        return
+    try:
+        data = load_community_wms_data()
+        stats = data.get("search_stats", {})
+        stats[clean_q] = stats.get(clean_q, 0) + 1
+        data["search_stats"] = dict(sorted(stats.items(), key=lambda x: x[1], reverse=True)[:60])
+
+        if results_count == 0:
+            unmet = data.get("unmet_demands", {})
+            unmet[clean_q] = unmet.get(clean_q, 0) + 1
+            data["unmet_demands"] = dict(sorted(unmet.items(), key=lambda x: x[1], reverse=True)[:60])
+
+        data["last_updated"] = datetime.utcnow().isoformat() + "Z"
+        with open(COMMUNITY_WMS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def learn_and_save_wms_service(
+    url: str,
+    layer: str = "",
+    name: str = "",
+    region: str = "",
+    description: str = ""
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Inspecciona, valida y almacena persistentemente un servicio WMS nuevo en community_wms.json.
+    Verifica que sea un OGC WMS funcional y extrae sus metadatos automáticamente.
+    """
+    clean_url = url.split("?")[0].strip()
+    if not clean_url or not clean_url.startswith("http"):
+        return False, "URL no válida", {}
+
+    # Descartar URLs locales o de prueba
+    if any(k in clean_url.lower() for k in ["localhost", "127.0.0.1", "test.local"]):
+        return False, "URL local no admitida", {}
+
+    # Comprobar si ya existe en WMS_DATABASE oficial
+    for existing in WMS_DATABASE:
+        if existing["url"].split("?")[0].strip().lower() == clean_url.lower():
+            return False, "El servicio ya forma parte del catálogo oficial base.", existing
+
+    data = load_community_wms_data()
+    current_services = data.get("services", [])
+    for existing in current_services:
+        if existing["url"].split("?")[0].strip().lower() == clean_url.lower():
+            return False, "El servicio ya estaba registrado en la base comunitaria.", existing
+
+    # Inspección y validación OGC GetCapabilities en tiempo real
+    report = inspect_wms_live(clean_url)
+    if not report.get("success"):
+        return False, f"Servidor no válido: {report.get('error')}", {}
+
+    layers = report.get("layers", [])
+    if not layers:
+        return False, "El servidor no tiene capas disponibles para desplegar.", {}
+
+    raw_title = name.strip() if name.strip() else (report.get("title") or "Servicio WMS Externo")
+    srv_title = raw_title.replace("⭐ [Comunidad]", "").strip()
+    srv_desc = description.strip() if description.strip() else (report.get("abstract") or f"Servicio WMS verificado con {len(layers)} capas disponibles.")
+
+    loc_info = resolve_wms_geographic_info(url=clean_url, layer=layer, service_name=srv_title, region=region)
+    resolved_region = region.strip() if region.strip() else (loc_info.get("label") or "Global / Internacional")
+
+    default_l = layer if layer else layers[0]["name"]
+
+    # Generación de tags inteligentes
+    tags = set()
+    for word in (srv_title + " " + resolved_region + " " + srv_desc).lower().split():
+        clean_w = re.sub(r"[^\w]", "", word)
+        if len(clean_w) >= 3 and clean_w not in {"del", "las", "los", "con", "para", "por", "wms", "servidor", "servicio"}:
+            tags.add(clean_w)
+    tags.add("comunidad")
+
+    new_entry = {
+        "id": f"comm_{abs(hash(clean_url))}",
+        "name": f"⭐ [Comunidad] {srv_title}",
+        "category": "⭐ Aportado por la Comunidad",
+        "region": resolved_region,
+        "url": clean_url,
+        "default_layer": default_l,
+        "description": srv_desc,
+        "tags": sorted(list(tags))[:15],
+        "layers": [(lyr["name"], lyr["title"]) for lyr in layers[:20]],
+        "added_at": datetime.utcnow().isoformat() + "Z"
+    }
+
+    current_services.insert(0, new_entry)
+    data["services"] = current_services
+    data["last_updated"] = datetime.utcnow().isoformat() + "Z"
+
+    try:
+        with open(COMMUNITY_WMS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True, f"¡Servicio '{srv_title}' validado y guardado en la base comunitaria!", new_entry
+    except Exception as e:
+        return False, f"Error al guardar: {e}", {}
+
+
 def apply_wms_to_application(url: str, layer: str, name: str, region: str = ""):
     """
     Configura el servicio WMS en la sesión activa de Streamlit, centra automáticamente
@@ -3177,6 +3318,9 @@ def apply_wms_to_application(url: str, layer: str, name: str, region: str = ""):
 
     if loc_info.get("country"):
         st.session_state["pending_detected_zone"] = loc_info["country"]
+
+    # 2. Auto-aprendizaje: si es un servicio externo no presente en la base estática, aprenderlo automáticamente
+    learn_and_save_wms_service(url=url, layer=layer, name=name, region=region)
 
     loc_label = loc_info.get("label") or name
     epsg_disp = f" y proyección a EPSG:{loc_info['epsg']}" if loc_info.get("epsg") else ""
@@ -3253,8 +3397,8 @@ def render_wms_assistant_content(
         )
         st.markdown(top_info_html, unsafe_allow_html=True)
     with c_top_gear:
-        with st.popover("⚙️", help="Ajustes de IA, Directorio WMS e Inspector"):
-            sub_tab_ai, sub_tab_dir, sub_tab_insp = st.tabs(["🔑 Clave IA", "📚 Directorio", "🔍 Inspector"])
+        with st.popover("⚙️", help="Ajustes de IA, Directorio WMS, Inspector y Base Comunitaria"):
+            sub_tab_ai, sub_tab_dir, sub_tab_insp, sub_tab_comm = st.tabs(["🔑 Clave IA", "📚 Directorio", "🔍 Inspector", "⭐ Comunidad"])
             with sub_tab_ai:
                 user_key_in = st.text_input(
                     "API Key de IA:",
@@ -3347,7 +3491,7 @@ def render_wms_assistant_content(
 
             with sub_tab_dir:
                 col_f1, col_f2 = st.columns(2)
-                categories = ["Todas"] + sorted(list({item["category"] for item in WMS_DATABASE}))
+                categories = ["Todas"] + sorted(list({item["category"] for item in get_effective_wms_database()}))
                 regions = ["Todas", "Global", "España", "América", "Colombia", "México", "Chile", "Argentina", "Estados Unidos", "Europa", "Australia"]
                 with col_f1:
                     sel_cat = st.selectbox("Categoría:", options=categories, key="dir_modal_cat_filter")
@@ -3371,7 +3515,17 @@ def render_wms_assistant_content(
                         with st.spinner("Consultando GetCapabilities..."):
                             report = inspect_wms_live(inspect_url)
                             if report["success"]:
-                                st.success(f"✅ **{report['title']}** ({len(report['layers'])} capas)")
+                                col_insp_t, col_insp_s = st.columns([2.8, 1.4])
+                                with col_insp_t:
+                                    st.success(f"✅ **{report['title']}** ({len(report['layers'])} capas)")
+                                with col_insp_s:
+                                    if st.button("⭐ Guardar en base", key=f"btn_save_comm_insp_{abs(hash(inspect_url))}", use_container_width=True):
+                                        ok, msg, _ = learn_and_save_wms_service(url=inspect_url, name=report['title'], description=report.get('abstract', ''))
+                                        if ok:
+                                            st.toast(msg, icon="⭐")
+                                            st.rerun()
+                                        else:
+                                            st.info(msg)
                                 for lyr in report["layers"][:15]:
                                     col_l_name, col_l_btn = st.columns([3.5, 1.2])
                                     with col_l_name:
@@ -3381,6 +3535,60 @@ def render_wms_assistant_content(
                                             apply_wms_to_application(report["url"], lyr["name"], f"{report['title']} - {lyr['name']}")
                             else:
                                 st.error(f"❌ Error: {report['error']}")
+
+            with sub_tab_comm:
+                st.markdown("##### 🧠 Base de Datos Comunitaria")
+                st.caption("Cualquier servidor WMS nuevo que pruebes o cargues en el visor se valida y guarda aquí para que otros usuarios también puedan buscarlo y usarlo.")
+
+                comm_data = load_community_wms_data()
+                comm_services = comm_data.get("services", [])
+                search_stats = comm_data.get("search_stats", {})
+                unmet_stats = comm_data.get("unmet_demands", {})
+
+                c_m1, c_m2, c_m3 = st.columns(3)
+                c_m1.metric("Capas", len(comm_services))
+                c_m2.metric("Búsquedas", sum(search_stats.values()))
+                c_m3.metric("Demandas", len(unmet_stats))
+
+                with st.expander("➕ Aportar / Validar nuevo WMS", expanded=False):
+                    new_wms_url = st.text_input("URL base WMS a registrar:", placeholder="https://servidor.com/.../WMSServer", key="comm_new_wms_in")
+                    if st.button("Validar y Guardar", key="btn_comm_validate_add", use_container_width=True):
+                        if new_wms_url:
+                            with st.spinner("Inspeccionando y validando servicio..."):
+                                ok, msg, ent = learn_and_save_wms_service(url=new_wms_url)
+                                if ok:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.warning(msg)
+
+                if comm_services:
+                    st.markdown("**Capas aprendidas recientemente:**")
+                    for csrv in comm_services[:8]:
+                        col_cs_info, col_cs_btn = st.columns([3.5, 1.2])
+                        with col_cs_info:
+                            st.markdown(f"• **{csrv['name']}** <span style='color:#38bdf8;font-size:10px;'>({csrv['region']})</span>", unsafe_allow_html=True)
+                        with col_cs_btn:
+                            if st.button("Cargar", key=f"comm_load_{csrv['id']}", use_container_width=True):
+                                apply_wms_to_application(csrv["url"], csrv["default_layer"], csrv["name"], region=csrv.get("region", ""))
+                else:
+                    st.info("💡 Aún no se han registrado capas externas. ¡Cuando agregues un WMS en el visor, se aprenderá aquí automáticamente!")
+
+                if unmet_stats:
+                    with st.expander("📈 Capas más solicitadas (demanda)", expanded=False):
+                        st.caption("Términos buscados por usuarios que necesitan capas oficiales:")
+                        for term, cnt in list(unmet_stats.items())[:6]:
+                            st.markdown(f"- `🔍 {term}` ({cnt} consultas)")
+
+                json_str = json.dumps(comm_data, ensure_ascii=False, indent=2)
+                st.download_button(
+                    label="📥 Descargar community_wms.json",
+                    data=json_str,
+                    file_name="community_wms.json",
+                    mime="application/json",
+                    use_container_width=True,
+                    help="Descarga el archivo JSON con todas las capas aprendidas para sincronizarlo o guardarlo permanentemente."
+                )
 
     with c_top_clear:
         if st.button("🗑️", key="btn_clear_chat_top", help="Reiniciar conversación"):

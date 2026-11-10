@@ -4117,6 +4117,20 @@ def render_ui():
             if loc_info.get("label"):
                 st.toast(f"🎯 Visor centrado automáticamente en {loc_info['label']}", icon="🚀")
 
+            # Aprendizaje colaborativo: indexar WMS automáticamente en la base comunitaria si es válido
+            if detected_layers:
+                try:
+                    first_layer = detected_layers[0][0]
+                    learned, learn_msg, _ = wms_bot.learn_and_save_wms_service(
+                        url=wms_url,
+                        layer=first_layer,
+                        region=loc_info.get("country", "")
+                    )
+                    if learned:
+                        st.toast(f"⭐ WMS indexado en la comunidad: {learn_msg}", icon="🧠")
+                except Exception:
+                    pass
+
         if detected_layers:
             layer_labels = [f"{n} ({t})" if n != t and t else n for n, t in detected_layers]
             layer_names = [n for n, t in detected_layers]
