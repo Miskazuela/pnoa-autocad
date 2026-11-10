@@ -1641,10 +1641,9 @@ PROVIDER_MODELS_CATALOG = {
         "claude-3-opus-20240229",
     ],
     "groq": [
-        "llama-3.3-70b-versatile",
-        "deepseek-r1-distill-qwen-32b",
-        "qwen-2.5-32b",
-        "qwen-2.5-coder-32b",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
         "llama-3.1-8b-instant",
     ],
     "deepseek": [
@@ -1932,10 +1931,14 @@ def discover_provider_models(
                 for m in data.get("data", []):
                     m_id = m.get("id", "")
                     m_low = m_id.lower()
-                    if any(x in m_low for x in ["whisper", "audio", "guard", "embedding"]):
+                    if not m_id or m.get("active") is False:
                         continue
-                    if m_id:
-                        models_found.append(m_id)
+                    if any(x in m_low for x in ["whisper", "audio", "tts", "playai", "orpheus", "guard", "embedding", "embed"]):
+                        continue
+                    models_found.append(m_id)
+                # Priorizar modelos de chat/instruct frente a OCR u otros
+                _chat_hints = ["gpt-oss", "qwen", "llama", "kimi", "deepseek", "mixtral", "gemma", "minimax"]
+                models_found.sort(key=lambda x: 0 if any(h in x.lower() for h in _chat_hints) else 1)
         except Exception:
             pass
 
@@ -2040,12 +2043,125 @@ def discover_provider_models(
     return list(PROVIDER_MODELS_CATALOG.get(provider, ["default"]))
 
 
-def _build_wms_system_instruction(context_info: Optional[Dict[str, Any]] = None) -> str:
+# Servicios "ancla" que se incluyen siempre en el prompt como cobertura base de la app
+_PROMPT_ANCHOR_IDS = [
+    "pnoa_maxima_actualidad",
+    "catastro_nacional",
+    "mapa_raster_ign",
+    "osm_wms_mundo",
+]
+
+# Bloque de metadatos de UI que NO debe reenviarse al modelo (botones de carga rápida)
+_APPLY_WMS_RE = re.compile(r"\[APPLY_WMS:\s*\{.*?\}\s*\]", re.DOTALL)
+
+
+def _select_prompt_services(query: str, limit: int = 6) -> List[Dict[str, Any]]:
+    """
+    Selecciona únicamente los servicios WMS relevantes para la consulta actual.
+    Evita enviar el catálogo completo en cada llamada (ahorra ~80% de tokens de entrada)
+    y garantiza que PNOA/IGN/Catastro entren en el prompt aunque estén al final del catálogo.
+    """
+    selected: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+
+    try:
+        matches = search_wms_catalog(query) if query and query.strip() else []
+    except Exception:
+        matches = []
+
+    for item in matches:
+        key = item.get("id") or item.get("url") or item.get("name")
+        if key in seen:
+            continue
+        selected.append(item)
+        seen.add(key)
+        if len(selected) >= limit:
+            break
+
+    # Anclas de cobertura mínima (comparten el mismo presupuesto de `limit`)
+    for anchor_id in _PROMPT_ANCHOR_IDS:
+        if len(selected) >= limit:
+            break
+        if anchor_id in seen:
+            continue
+        for item in WMS_DATABASE:
+            if item.get("id") == anchor_id:
+                selected.append(item)
+                seen.add(anchor_id)
+                break
+
+    if not selected:
+        selected = WMS_DATABASE[:limit]
+
+    return selected
+
+
+def _clean_history_for_model(
+    chat_history: Optional[List[Dict[str, str]]],
+    max_msgs: int = 4,
+    max_chars: int = 1200
+) -> List[Dict[str, str]]:
+    """
+    Prepara el historial para reenviarlo a la IA:
+      - Solo los últimos `max_msgs` turnos.
+      - Elimina los bloques [APPLY_WMS: {...}] (metadatos de UI que no aportan al modelo).
+      - Recorta cada mensaje a `max_chars` caracteres.
+    """
+    if not chat_history:
+        return []
+
+    cleaned: List[Dict[str, str]] = []
+    for msg in chat_history[-max_msgs:]:
+        content = (msg.get("content") or "").strip()
+        content = _APPLY_WMS_RE.sub("", content).strip()
+        if not content:
+            continue
+        if len(content) > max_chars:
+            content = content[:max_chars].rstrip() + " […]"
+        cleaned.append({"role": msg.get("role", "user"), "content": content})
+    return cleaned
+
+
+def _normalize_usage(raw: Any) -> Dict[str, int]:
+    """Unifica el bloque de consumo de tokens de OpenAI/Groq, Anthropic y Gemini."""
+    if not isinstance(raw, dict):
+        return {}
+    prompt_tokens = raw.get("prompt_tokens") or raw.get("input_tokens") or raw.get("promptTokenCount") or 0
+    completion_tokens = raw.get("completion_tokens") or raw.get("output_tokens") or raw.get("candidatesTokenCount") or 0
+    total_tokens = raw.get("total_tokens") or raw.get("totalTokenCount") or (prompt_tokens + completion_tokens)
+    if not (prompt_tokens or completion_tokens or total_tokens):
+        return {}
+    return {
+        "prompt_tokens": int(prompt_tokens),
+        "completion_tokens": int(completion_tokens),
+        "total_tokens": int(total_tokens),
+    }
+
+
+def _format_usage(usage: Optional[Dict[str, int]]) -> str:
+    """Devuelve una etiqueta compacta de consumo o cadena vacía si no hay datos."""
+    if not usage:
+        return ""
+    return (
+        f"🔢 {usage.get('prompt_tokens', 0)} entrada · "
+        f"{usage.get('completion_tokens', 0)} salida · "
+        f"{usage.get('total_tokens', 0)} tokens"
+    )
+
+
+def _build_wms_system_instruction(
+    context_info: Optional[Dict[str, Any]] = None,
+    query: str = ""
+) -> str:
     """Genera la instrucción del sistema experta en WMS y CAD compartida para todos los proveedores de IA."""
+    services = _select_prompt_services(query)
     catalog_summary = []
-    for item in WMS_DATABASE[:40]:
+    for item in services:
+        description = (item.get("description") or "").strip()
+        if len(description) > 140:
+            description = description[:140].rstrip() + "…"
         catalog_summary.append(
-            f"- {item['name']} ({item['region']}): URL={item['url']} | Capa={item['default_layer']} | {item['description']}"
+            f"- {item['name']} ({item['region']}): URL={item['url']} | Capa={item['default_layer']} | {description}"
         )
     catalog_text = "\n".join(catalog_summary)
 
@@ -2066,8 +2182,9 @@ Tu objetivo es ayudar al usuario a encontrar las URLs y capas exactas de servici
 
 {ctx_str}
 
-Dispones de este catálogo verificado de referencia:
+Catálogo verificado más relevante para esta consulta (la app tiene muchos más servicios oficiales):
 {catalog_text}
+Si el servicio que pide el usuario no aparece en esta lista corta, respóndele con tu conocimiento general y las REGLAS ESTRICTAS DE URLS de abajo; la app buscará además en su catálogo completo.
 
 INSTRUCCIONES CLAVE Y REGLAS DE CONFIABILIDAD DE URLS:
 1. Responde de forma concisa, técnica y cordial en español.
@@ -2104,10 +2221,10 @@ def query_openai_compatible_wms(
     if not clean_key and not is_local:
         return {"success": False, "text": f"⚠️ Por favor, introduce tu API Key para {provider_name}."}
 
-    system_instruction = _build_wms_system_instruction(context_info)
+    system_instruction = _build_wms_system_instruction(context_info, prompt)
     messages = [{"role": "system", "content": system_instruction}]
 
-    for msg in chat_history[-6:]:
+    for msg in _clean_history_for_model(chat_history):
         r = "assistant" if msg.get("role") == "model" else "user"
         messages.append({"role": r, "content": msg.get("content", "")})
     messages.append({"role": "user", "content": prompt})
@@ -2141,7 +2258,13 @@ def query_openai_compatible_wms(
                 text_out = data["choices"][0]["message"]["content"]
                 st.session_state["wms_active_ai_provider"] = provider_name
                 st.session_state["wms_active_ai_model"] = model_name
-                return {"success": True, "text": text_out, "model": model_name, "provider": provider_name}
+                return {
+                    "success": True,
+                    "text": text_out,
+                    "model": model_name,
+                    "provider": provider_name,
+                    "usage": _normalize_usage(data.get("usage")),
+                }
             elif resp.status_code == 401:
                 return {
                     "success": False,
@@ -2218,9 +2341,9 @@ def query_anthropic_wms(
     if not clean_key:
         return {"success": False, "text": "⚠️ Por favor, introduce tu API Key de Anthropic (sk-ant-...)."}
 
-    system_instruction = _build_wms_system_instruction(context_info)
+    system_instruction = _build_wms_system_instruction(context_info, prompt)
     messages = []
-    for msg in chat_history[-6:]:
+    for msg in _clean_history_for_model(chat_history):
         r = "assistant" if msg.get("role") == "model" else "user"
         messages.append({"role": r, "content": msg.get("content", "")})
     messages.append({"role": "user", "content": prompt})
@@ -2251,7 +2374,13 @@ def query_anthropic_wms(
                 text_out = data["content"][0]["text"]
                 st.session_state["wms_active_ai_provider"] = "Anthropic Claude"
                 st.session_state["wms_active_ai_model"] = model_name
-                return {"success": True, "text": text_out, "model": model_name, "provider": "Anthropic Claude"}
+                return {
+                    "success": True,
+                    "text": text_out,
+                    "model": model_name,
+                    "provider": "Anthropic Claude",
+                    "usage": _normalize_usage(data.get("usage")),
+                }
             elif resp.status_code == 401:
                 return {
                     "success": False,
@@ -2297,14 +2426,14 @@ def query_gemini_wms(
     if not clean_key:
         return {"success": False, "text": "⚠️ Por favor, introduce tu Gemini API Key en el campo superior."}
 
-    system_instruction = _build_wms_system_instruction(context_info)
+    system_instruction = _build_wms_system_instruction(context_info, prompt)
 
     # Formatear el historial respetando las reglas estrictas de Gemini:
     # 1. El primer mensaje DEBE ser siempre de rol 'user'.
     # 2. Los roles deben alternar estrictamente: user -> model -> user -> model.
     # 3. Nunca dos roles iguales consecutivos (se fusionan).
     contents = []
-    raw_history = list(chat_history[-6:]) if chat_history else []
+    raw_history = _clean_history_for_model(chat_history)
     raw_history.append({"role": "user", "content": prompt})
 
     for msg in raw_history:
@@ -2370,7 +2499,13 @@ def query_gemini_wms(
                     st.session_state["wms_chosen_model_gemini"] = model_name
                     st.session_state["sb_wms_model_choice_gemini"] = model_name
                     st.session_state["wms_active_selected_model"] = model_name
-                    return {"success": True, "text": text_out, "model": model_name, "provider": "Google Gemini"}
+                    return {
+                        "success": True,
+                        "text": text_out,
+                        "model": model_name,
+                        "provider": "Google Gemini",
+                        "usage": _normalize_usage(data.get("usageMetadata")),
+                    }
             elif resp.status_code == 400:
                 err_json = resp.json().get("error", {})
                 last_error = err_json.get("message", "Petición no válida.")
@@ -2468,7 +2603,7 @@ def query_universal_ai_wms(
         models = [clean_model] if clean_model else PROVIDER_MODELS_CATALOG["deepseek"]
         return query_openai_compatible_wms(prompt, api_key, "https://api.deepseek.com", models, "DeepSeek", chat_history, context_info)
     elif prov == "groq":
-        models = [clean_model] if clean_model else PROVIDER_MODELS_CATALOG["groq"]
+        models = [clean_model] if clean_model else discover_provider_models("groq", api_key)[:5]
         return query_openai_compatible_wms(prompt, api_key, "https://api.groq.com/openai/v1", models, "Groq", chat_history, context_info)
     elif prov == "mistral":
         models = [clean_model] if clean_model else PROVIDER_MODELS_CATALOG["mistral"]
@@ -2844,6 +2979,10 @@ def render_wms_assistant_content(
                                 bot_response = f"{bot_response}\n\n{offline_help}"
 
                         _parse_and_render_wms_actions(bot_response)
+                        usage_label = _format_usage(res.get("usage"))
+                        if usage_label:
+                            st.session_state["wms_last_usage"] = res.get("usage")
+                            st.caption(usage_label)
                 else:
                     clean_run_q = _normalize_text(query_to_run)
                     is_context_q = bool(set(clean_run_q.split()).intersection(CONTEXT_PROJECT_TRIGGERS))
