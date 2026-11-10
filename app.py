@@ -3319,6 +3319,12 @@ def render_ui():
         if "sidebar_epsg_select_widget" in st.session_state:
             del st.session_state["sidebar_epsg_select_widget"]
 
+    def _on_clear_epsg_search():
+        st.session_state["sidebar_epsg_num_search"] = ""
+        st.session_state["sidebar_epsg_search_error"] = None
+        if "sidebar_epsg_select_widget" in st.session_state:
+            del st.session_state["sidebar_epsg_select_widget"]
+
     # ----------------------------------------------------------------------------------
     # BARRA LATERAL (SIDEBAR): CONFIGURACIÓN GLOBAL
     # ----------------------------------------------------------------------------------
@@ -3376,11 +3382,12 @@ def render_ui():
                 unsafe_allow_html=True
             )
         with col_btn:
-            if st.button("✖ Ver todos", key="btn_clear_epsg_filter", help="Quitar filtro y ver lista completa"):
-                st.session_state["sidebar_epsg_num_search"] = ""
-                if "sidebar_epsg_select_widget" in st.session_state:
-                    del st.session_state["sidebar_epsg_select_widget"]
-                st.rerun()
+            st.button(
+                "✖ Ver todos",
+                key="btn_clear_epsg_filter",
+                help="Quitar filtro y ver lista completa",
+                on_click=_on_clear_epsg_search
+            )
 
     if st.session_state.get("sidebar_epsg_search_error"):
         st.sidebar.warning(st.session_state["sidebar_epsg_search_error"])
