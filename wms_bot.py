@@ -2478,16 +2478,18 @@ def _parse_and_render_wms_actions(text: str):
         desc_short = f"{w_desc[:95]}..." if len(w_desc) > 95 else w_desc
         layer_disp = f"Capa: <code>{w_layer}</code>" if w_layer else ""
 
-        st.markdown(f"""
-        <div class="wms-compact-card">
-            <div class="wms-card-top">
-                <span class="wms-card-title">🏛️ {w_name}</span>
-                <span class="wms-card-tag">{tag_str}</span>
-            </div>
-            {f'<div class="wms-card-desc">{desc_short}</div>' if desc_short else ''}
-            <div class="wms-card-meta">{layer_disp}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        desc_html = f'<div class="wms-card-desc">{desc_short}</div>' if desc_short else ''
+        card_html = (
+            '<div class="wms-compact-card">'
+            '<div class="wms-card-top">'
+            f'<span class="wms-card-title">🏛️ {w_name}</span>'
+            f'<span class="wms-card-tag">{tag_str}</span>'
+            '</div>'
+            f'{desc_html}'
+            f'<div class="wms-card-meta">{layer_disp}</div>'
+            '</div>'
+        )
+        st.markdown(card_html, unsafe_allow_html=True)
 
         btn_key = f"apply_wms_ai_{abs(hash(w_url + w_layer))}"
         if st.button("Agregar WMS al visor", key=btn_key, type="primary", use_container_width=True):
@@ -2568,12 +2570,13 @@ def render_wms_assistant_content(
     ai_status = f"✨ {effective_prov.capitalize()}" if (has_key or cur_p_setting == "custom") else "🟢 Offline"
     c_top_info, c_top_gear, c_top_clear = st.columns([5.2, 0.8, 0.8])
     with c_top_info:
-        st.markdown(f"""
-        <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 2px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid rgba(56, 189, 248, 0.15);">
-            <span>📍 <b>{zone_label}</b> · <code style="color: #38bdf8;">EPSG:{epsg_disp}</code></span>
-            <span style="color: #34d399; font-weight: 600;">{ai_status}</span>
-        </div>
-        """, unsafe_allow_html=True)
+        top_info_html = (
+            '<div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 2px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid rgba(56, 189, 248, 0.15);">'
+            f'<span>📍 <b>{zone_label}</b> · <code style="color: #38bdf8;">EPSG:{epsg_disp}</code></span>'
+            f'<span style="color: #34d399; font-weight: 600;">{ai_status}</span>'
+            '</div>'
+        )
+        st.markdown(top_info_html, unsafe_allow_html=True)
     with c_top_gear:
         with st.popover("⚙️", help="Ajustes de IA, Directorio WMS e Inspector"):
             sub_tab_ai, sub_tab_dir, sub_tab_insp = st.tabs(["🔑 Clave IA", "📚 Directorio", "🔍 Inspector"])
@@ -2908,7 +2911,6 @@ def render_floating_assistant_button(
 
     if is_open:
         btn_label = "✕"
-        bubble_html = ""
         btn_state_css = """
         div.st-key-btn_floating_assistant button {
             width: 58px !important;
@@ -2937,11 +2939,6 @@ def render_floating_assistant_button(
         """
     else:
         btn_label = " "
-        bubble_html = """
-        <div class="bot-speech-bubble">
-            <span>✨ GeoBot WMS</span>
-        </div>
-        """
         btn_state_css = f"""
         div.st-key-btn_floating_assistant button {{
             width: 66px !important;
@@ -2986,12 +2983,6 @@ def render_floating_assistant_button(
         }}
     }}
 
-    @keyframes bubbleFloat {{
-        0% {{ transform: translateY(0px); opacity: 0.95; }}
-        50% {{ transform: translateY(-4px); opacity: 1; }}
-        100% {{ transform: translateY(0px); opacity: 0.95; }}
-    }}
-
     @keyframes slideUpWidget {{
         from {{
             opacity: 0;
@@ -3014,39 +3005,6 @@ def render_floating_assistant_button(
     }}
 
     {btn_state_css}
-
-    /* Bocadillo animado flotante sobre el botón */
-    .bot-speech-bubble {{
-        position: fixed;
-        bottom: 100px;
-        right: 24px;
-        z-index: 999998;
-        background: rgba(15, 23, 42, 0.92);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(56, 189, 248, 0.5);
-        border-radius: 16px 16px 4px 16px;
-        padding: 6px 12px;
-        color: #f0f9ff;
-        font-size: 12px;
-        font-weight: 700;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 16px rgba(56, 189, 248, 0.3);
-        animation: bubbleFloat 3.8s ease-in-out infinite;
-        pointer-events: none;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }}
-    .bot-speech-bubble::after {{
-        content: '';
-        position: absolute;
-        bottom: -7px;
-        right: 28px;
-        width: 0;
-        height: 0;
-        border-left: 7px solid transparent;
-        border-right: 7px solid transparent;
-        border-top: 7px solid rgba(15, 23, 42, 0.92);
-    }}
 
     /* ------------------------------------------------------------------------- */
     /* VENTANA EMERGENTE TIPO WIDGET (TIPO ESRI COLOMBIA / INTERCOM)            */
@@ -3479,7 +3437,6 @@ def render_floating_assistant_button(
         }}
     }}
     </style>
-    {bubble_html}
     """, unsafe_allow_html=True)
 
     if st.button(btn_label, key="btn_floating_assistant", help="Haz clic para abrir/cerrar GeoBot WMS"):
