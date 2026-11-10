@@ -50,6 +50,7 @@ if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 # Streamlit Page Config debe ser la primera llamada de Streamlit
 st.set_page_config(
@@ -1419,32 +1420,57 @@ def identify_zone_country(
 
 
 POPULAR_EPSG_PRESETS: List[Tuple[str, int]] = [
-    ("🇪🇸 España - ETRS89 / UTM 30N (EPSG:25830)", 25830),
-    ("🇪🇸 España - ETRS89 / UTM 29N (Galicia) (EPSG:25829)", 25829),
-    ("🇪🇸 España - ETRS89 / UTM 31N (Cataluña/Baleares) (EPSG:25831)", 25831),
-    ("🇪🇸 Canarias - WGS 84 / UTM 28N (EPSG:32628)", 32628),
-    ("🇪🇸 España - ED50 / UTM 30N (Histórico) (EPSG:23030)", 23030),
-    ("🇨🇴 Colombia - MAGNA-SIRGAS Origen Nacional (EPSG:9377)", 9377),
-    ("🇨🇴 Colombia - Bogotá / MAGNA Bogotá (EPSG:3116)", 3116),
-    ("🇲🇽 México - ITRF2008 / UTM 14N (EPSG:6369)", 6369),
-    ("🇲🇽 México - ITRF2008 / UTM 13N (EPSG:6368)", 6368),
-    ("🇲🇽 México - ITRF2008 / UTM 15N (EPSG:6370)", 6370),
-    ("🇨🇱 Chile - SIRGAS-Chile / UTM 19S (EPSG:5361)", 5361),
-    ("🇨🇱 Chile - SIRGAS-Chile / UTM 18S (EPSG:5362)", 5362),
-    ("🇦🇷 Argentina - POSGAR 07 / Faja 4 (EPSG:5346)", 5346),
-    ("🇦🇷 Argentina - POSGAR 07 / Faja 5 (EPSG:5347)", 5347),
-    ("🇵🇪 Perú - WGS 84 / UTM 18S (EPSG:32718)", 32718),
-    ("🇵🇪 Perú - WGS 84 / UTM 17S (EPSG:32717)", 32717),
-    ("🇦🇺 Australia - GDA2020 / MGA zone 55 (EPSG:7855)", 7855),
-    ("🇦🇺 Australia - GDA2020 / MGA zone 56 (EPSG:7856)", 7856),
-    ("🇦🇺 Australia - GDA2020 / MGA zone 54 (EPSG:7854)", 7854),
-    ("🇦🇺 Australia - GDA94 / MGA zone 55 (EPSG:28355)", 28355),
-    ("🇦🇺 Australia - GDA94 / MGA zone 56 (EPSG:28356)", 28356),
-    ("🇺🇸 USA - NAD83 / UTM zone 18N (EPSG:26918)", 26918),
-    ("🇺🇸 USA - NAD83 / UTM zone 10N (EPSG:26910)", 26910),
-    ("🌎 Global - WGS 84 / UTM 30N (EPSG:32630)", 32630),
-    ("🌎 Global - WGS 84 / Web Mercator (EPSG:3857)", 3857),
-    ("🌎 Global - WGS 84 Geográficas (EPSG:4326)", 4326)
+    # España
+    ("🇪🇸 EPSG:25830 — España UTM 30N (Península / Centro / Madrid) [⭐ Oficial]", 25830),
+    ("🇪🇸 EPSG:25829 — España UTM 29N (Galicia / Asturias / Huelva) [⭐ Oficial]", 25829),
+    ("🇪🇸 EPSG:25831 — España UTM 31N (Cataluña / Baleares / C. Valenciana) [⭐ Oficial]", 25831),
+    ("🇪🇸 EPSG:32628 — Canarias UTM 28N (Islas Canarias) [⭐ Oficial]", 32628),
+    ("🇪🇸 EPSG:23030 — España ED50 UTM 30N (Cartografía Histórica pre-2007)", 23030),
+    # Colombia
+    ("🇨🇴 EPSG:9377 — Colombia Origen Nacional (MAGNA-SIRGAS) [⭐ Oficial Único CAD]", 9377),
+    ("🇨🇴 EPSG:3116 — Colombia Zona Bogotá / Central (MAGNA)", 3116),
+    ("🇨🇴 EPSG:3115 — Colombia Zona Oeste (Medellín / Cali / Valle)", 3115),
+    ("🇨🇴 EPSG:3117 — Colombia Zona Este Central (Boyacá / Meta / Santander)", 3117),
+    ("🇨🇴 EPSG:3118 — Colombia Zona Este (Orinoquía / Amazonía)", 3118),
+    ("🇨🇴 EPSG:3114 — Colombia Zona Oeste Lejano (Pacífico / Nariño)", 3114),
+    # México
+    ("🇲🇽 EPSG:6369 — México ITRF2008 / UTM 14N (CDMX / Centro / Puebla) [⭐ Oficial]", 6369),
+    ("🇲🇽 EPSG:6368 — México ITRF2008 / UTM 13N (Jalisco / Guadalajara) [⭐ Oficial]", 6368),
+    ("🇲🇽 EPSG:6370 — México ITRF2008 / UTM 15N (Veracruz / Sureste / Yucatán) [⭐ Oficial]", 6370),
+    ("🇲🇽 EPSG:6367 — México ITRF2008 / UTM 12N (Sonora / Chihuahua) [⭐ Oficial]", 6367),
+    ("🇲🇽 EPSG:6366 — México ITRF2008 / UTM 11N (Baja California / Tijuana) [⭐ Oficial]", 6366),
+    ("🇲🇽 EPSG:4484 — México ITRF92 / UTM 11N (Baja California Ovest)", 4484),
+    # Panamá
+    ("🇵🇦 EPSG:32618 — Panamá WGS 84 / UTM 18N (Ciudad de Panamá / Canal / Colón) [⭐ Oficial]", 32618),
+    ("🇵🇦 EPSG:32617 — Panamá WGS 84 / UTM 17N (Chiriquí / Bocas del Toro / Veraguas) [⭐ Oficial]", 32617),
+    ("🇵🇦 EPSG:5469 — Panamá-Colón 1911 / Lambert (Histórico)", 5469),
+    # Perú
+    ("🇵🇪 EPSG:32718 — Perú WGS 84 / UTM 18S (Lima / Centro) [⭐ Oficial]", 32718),
+    ("🇵🇪 EPSG:32717 — Perú WGS 84 / UTM 17S (Norte / Piura) [⭐ Oficial]", 32717),
+    ("🇵🇪 EPSG:32719 — Perú WGS 84 / UTM 19S (Sur / Arequipa / Cusco) [⭐ Oficial]", 32719),
+    # Chile
+    ("🇨🇱 EPSG:5361 — Chile SIRGAS-Chile / UTM 19S (Santiago / Centro) [⭐ Oficial]", 5361),
+    ("🇨🇱 EPSG:5362 — Chile SIRGAS-Chile / UTM 18S (Norte / Antofagasta) [⭐ Oficial]", 5362),
+    # Argentina
+    ("🇦🇷 EPSG:5345 — Argentina POSGAR 07 / Faja 4 (Buenos Aires / Centro) [⭐ Oficial]", 5345),
+    ("🇦🇷 EPSG:5346 — Argentina POSGAR 07 / Faja 5 (Litoral / Mesopotamia) [⭐ Oficial]", 5346),
+    ("🇦🇷 EPSG:5344 — Argentina POSGAR 07 / Faja 3 (Cuyo / Mendoza) [⭐ Oficial]", 5344),
+    # Bélgica
+    ("🇧🇪 EPSG:3812 — Bélgica ETRS89 / Belgian Lambert 2008 [⭐ Oficial]", 3812),
+    ("🇧🇪 EPSG:31370 — Bélgica BD72 / Belgian Lambert 72 [Histórico]", 31370),
+    # Australia
+    ("🇦🇺 EPSG:7855 — Australia GDA2020 / MGA 55 (Sydney / Melbourne) [⭐ Oficial]", 7855),
+    ("🇦🇺 EPSG:7856 — Australia GDA2020 / MGA 56 (Brisbane / Gold Coast) [⭐ Oficial]", 7856),
+    ("🇦🇺 EPSG:7854 — Australia GDA2020 / MGA 54 (Adelaide) [⭐ Oficial]", 7854),
+    ("🇦🇺 EPSG:28355 — Australia GDA94 / MGA 55 (Histórico)", 28355),
+    ("🇦🇺 EPSG:28356 — Australia GDA94 / MGA 56 (Histórico)", 28356),
+    # USA
+    ("🇺🇸 EPSG:26918 — USA NAD83 / UTM 18N (Nueva York / Washington DC)", 26918),
+    ("🇺🇸 EPSG:26910 — USA NAD83 / UTM 10N (California / San Francisco)", 26910),
+    # Global
+    ("🌎 EPSG:32630 — Global WGS 84 / UTM 30N (Métrico CAD)", 32630),
+    ("🌎 EPSG:3857 — Global WGS 84 / Web Mercator (Google / OSM)", 3857),
+    ("🌎 EPSG:4326 — Global WGS 84 (Geográficas Lat/Lon en Grados)", 4326)
 ]
 
 
@@ -3265,6 +3291,101 @@ def generate_preview_map(
     return m
 
 
+def render_crs_zone_helper(active_code: Any, search_query: str = "") -> None:
+    """
+    Muestra una guía visual interactiva en la barra lateral para orientar al usuario
+    sobre qué huso/zona EPSG oficial debe utilizar según la región o ciudad de su proyecto.
+    """
+    code_str = str(active_code).strip()
+    sq_norm = normalize_search_text(search_query)
+
+    is_colombia = (
+        code_str in {"9377", "3114", "3115", "3116", "3117", "3118", "4686", "6247"}
+        or any(k in sq_norm for k in ["colombia", "bogota", "medellin", "cali", "antioquia", "magna"])
+    )
+    is_spain = (
+        code_str in {"25828", "25829", "25830", "25831", "32628", "23028", "23029", "23030", "23031", "4258"}
+        or any(k in sq_norm for k in ["espana", "spain", "madrid", "galicia", "canarias", "cataluna", "barcelona"])
+    )
+    is_mexico = (
+        code_str in {"6366", "6367", "6368", "6369", "6370", "6371", "4484"}
+        or any(k in sq_norm for k in ["mexico", "cdmx", "jalisco", "guadalajara", "yucatan"])
+    )
+    is_panama = (
+        code_str in {"32617", "32618", "5469", "5472", "5368", "5370", "5371"}
+        or "panama" in sq_norm
+    )
+    is_peru = (
+        code_str in {"32717", "32718", "32719", "24877", "24878", "24879"}
+        or any(k in sq_norm for k in ["peru", "lima", "arequipa", "cusco"])
+    )
+
+    if is_colombia:
+        with st.sidebar.expander("🗺️ ¿Qué zona de Colombia debo elegir?", expanded=True):
+            st.markdown("""
+            <div style="font-size: 0.85rem; line-height: 1.45; color: #cbd5e1;">
+                <div style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🇨🇴 Guía oficial para Colombia:</div>
+                <div style="margin-bottom: 6px; padding: 4px 8px; background: rgba(56, 189, 248, 0.12); border-left: 3px solid #38bdf8; border-radius: 4px;">
+                    <b>⭐ EPSG:9377 (Origen Nacional):</b> Norma oficial única del IGAC (Res. 471/2020) para <u>toda Colombia</u>. Recomendado para todos los planos nuevos.
+                </div>
+                <b>Sistemas tradicionales de 5 orígenes (pre-2020):</b><br/>
+                • <b>EPSG:3116 (Bogotá / Central):</b> Bogotá D.C., Cundinamarca, Huila, Tolima.<br/>
+                • <b>EPSG:3115 (Oeste):</b> Medellín, Cali, Antioquia, Valle del Cauca, Cauca, Eje Cafetero.<br/>
+                • <b>EPSG:3117 (Este Central):</b> Boyacá, Meta (Villavicencio), Santander, Casanare.<br/>
+                • <b>EPSG:3118 (Este):</b> Arauca, Vichada, Guainía, Vaupés, Amazonas.<br/>
+                • <b>EPSG:3114 (Oeste Lejano):</b> Nariño (Pasto), Chocó pacífico.
+            </div>
+            """, unsafe_allow_html=True)
+
+    elif is_spain:
+        with st.sidebar.expander("🗺️ ¿Qué huso de España debo elegir?", expanded=True):
+            st.markdown("""
+            <div style="font-size: 0.85rem; line-height: 1.45; color: #cbd5e1;">
+                <div style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🇪🇸 Husos oficiales UTM ETRS89 (IGN):</div>
+                • <b>⭐ EPSG:25830 (UTM 30N):</b> Península Central, Madrid, Castilla y León, Castilla-La Mancha, Andalucía central, País Vasco, Cantabria, Navarra, La Rioja, Aragón oeste.<br/>
+                • <b>EPSG:25829 (UTM 29N):</b> Galicia (A Coruña, Pontevedra, Lugo, Ourense), Asturias occidental, Extremadura / Huelva oeste.<br/>
+                • <b>EPSG:25831 (UTM 31N):</b> Cataluña (Barcelona, Girona, Lleida, Tarragona), Islas Baleares, Comunidad Valenciana este.<br/>
+                • <b>EPSG:32628 (UTM 28N):</b> Islas Canarias (Tenerife, Gran Canaria, Lanzarote, etc.).<br/>
+                • <i>EPSG:23030 (ED50 UTM 30N):</i> Solo para cartografía histórica pre-2007.
+            </div>
+            """, unsafe_allow_html=True)
+
+    elif is_mexico:
+        with st.sidebar.expander("🗺️ ¿Qué zona de México debo elegir?", expanded=True):
+            st.markdown("""
+            <div style="font-size: 0.85rem; line-height: 1.45; color: #cbd5e1;">
+                <div style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🇲🇽 Zonas oficiales UTM ITRF2008 (INEGI):</div>
+                • <b>⭐ EPSG:6369 (UTM 14N):</b> Ciudad de México (CDMX), Edo. de México, Puebla, Querétaro, Guanajuato, Hidalgo, Morelos, San Luis Potosí.<br/>
+                • <b>EPSG:6368 (UTM 13N):</b> Jalisco (Guadalajara), Michoacán, Colima, Nayarit, Sinaloa, Durango, Zacatecas.<br/>
+                • <b>EPSG:6370 (UTM 15N):</b> Veracruz, Tabasco, Chiapas, Campeche, Yucatán (Mérida), Quintana Roo (Cancún).<br/>
+                • <b>EPSG:6367 (UTM 12N):</b> Sonora (Hermosillo), Chihuahua oeste, Baja California Sur.<br/>
+                • <b>EPSG:6366 (UTM 11N):</b> Baja California (Tijuana, Mexicali, Ensenada).
+            </div>
+            """, unsafe_allow_html=True)
+
+    elif is_panama:
+        with st.sidebar.expander("🗺️ ¿Qué zona de Panamá debo elegir?", expanded=True):
+            st.markdown("""
+            <div style="font-size: 0.85rem; line-height: 1.45; color: #cbd5e1;">
+                <div style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🇵🇦 Zonas UTM métricas para Panamá (WGS 84):</div>
+                • <b>⭐ EPSG:32618 (UTM 18N):</b> Ciudad de Panamá, Zona del Canal, Colón, Darién, Guna Yala, Panamá Oeste.<br/>
+                • <b>EPSG:32617 (UTM 17N):</b> Chiriquí (David), Bocas del Toro, Veraguas, Herrera, Los Santos.<br/>
+                <i>Nota: EPSG:5368, 5370 y 5371 (Macario Solís) son geocéntricos y angulares (grados); para planos CAD métricos se recomienda UTM 18N o 17N.</i>
+            </div>
+            """, unsafe_allow_html=True)
+
+    elif is_peru:
+        with st.sidebar.expander("🗺️ ¿Qué zona de Perú debo elegir?", expanded=True):
+            st.markdown("""
+            <div style="font-size: 0.85rem; line-height: 1.45; color: #cbd5e1;">
+                <div style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🇵🇪 Zonas UTM métricas para Perú (WGS 84):</div>
+                • <b>⭐ EPSG:32718 (UTM 18S):</b> Lima, Callao, Junín, Pasco, Huánuco, Ica, Huancavelica, Ayacucho, Áncash.<br/>
+                • <b>EPSG:32717 (UTM 17S):</b> Piura, Lambayeque, Tumbes, La Libertad, Cajamarca.<br/>
+                • <b>EPSG:32719 (UTM 19S):</b> Arequipa, Cusco, Puno, Moquegua, Tacna, Madre de Dios.
+            </div>
+            """, unsafe_allow_html=True)
+
+
 # --------------------------------------------------------------------------------------
 # 5. INTERFAZ GRÁFICA STREAMLIT
 # --------------------------------------------------------------------------------------
@@ -3362,19 +3483,18 @@ def render_ui():
         }
 
         /* Menú desplegable amplio y sin truncamiento para los sistemas EPSG */
-        div[data-baseweb="popover"]:has(li[role="option"]) {
-            min-width: 520px !important;
-            max-width: 780px !important;
-            width: max-content !important;
-            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 20px rgba(56, 189, 248, 0.3) !important;
-            border: 1.5px solid rgba(56, 189, 248, 0.5) !important;
-            border-radius: 12px !important;
-            background-color: #0b1329 !important;
-        }
+        div[data-baseweb="popover"],
+        div[data-baseweb="popover"] > div,
+        div[data-baseweb="popover"] ul,
         div[data-baseweb="popover"] ul[role="listbox"] {
             min-width: 520px !important;
-            max-width: 780px !important;
-            max-height: 440px !important;
+            max-width: 850px !important;
+            width: max-content !important;
+            box-shadow: 0 16px 45px rgba(0, 0, 0, 0.9), 0 0 24px rgba(56, 189, 248, 0.4) !important;
+            border: 1.5px solid rgba(56, 189, 248, 0.55) !important;
+            border-radius: 12px !important;
+            background-color: #0b1329 !important;
+            z-index: 9999999 !important;
         }
         div[data-baseweb="popover"] li[role="option"] {
             white-space: normal !important;
@@ -3383,23 +3503,86 @@ def render_ui():
             padding: 10px 14px !important;
             line-height: 1.4 !important;
             font-size: 13px !important;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
             cursor: pointer !important;
         }
-        div[data-baseweb="popover"] li[role="option"] > div {
+        div[data-baseweb="popover"] li[role="option"] * {
             white-space: normal !important;
+            word-break: break-word !important;
             overflow: visible !important;
             text-overflow: unset !important;
         }
         div[data-baseweb="popover"] li[role="option"]:hover {
-            background-color: rgba(56, 189, 248, 0.18) !important;
+            background-color: rgba(56, 189, 248, 0.22) !important;
             color: #38bdf8 !important;
         }
     </style>
-    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
-         onload="if(!window._epsg_hover_initialized){window._epsg_hover_initialized=true;document.addEventListener('mouseover',function(e){var t=e.target;if(!t)return;var o=t.closest('li[role=\'option\'], div[data-baseweb=\'select\']');if(o){var s=(o.innerText||o.textContent||'').trim();if(s&&o.getAttribute('title')!==s){o.setAttribute('title',s);}}},true);}"
-         style="display:none;" />
     """, unsafe_allow_html=True)
+
+    components.html("""
+    <script>
+    (function() {
+        const doc = window.parent.document;
+        if (!doc) return;
+
+        // Inyectar estilos directamente en el head del documento principal
+        if (!doc.getElementById('_epsg_dropdown_style')) {
+            const st = doc.createElement('style');
+            st.id = '_epsg_dropdown_style';
+            st.innerHTML = `
+                div[data-baseweb="popover"],
+                div[data-baseweb="popover"] > div,
+                div[data-baseweb="popover"] ul,
+                div[data-baseweb="popover"] ul[role="listbox"] {
+                    min-width: 520px !important;
+                    max-width: 850px !important;
+                    width: max-content !important;
+                    box-shadow: 0 16px 45px rgba(0, 0, 0, 0.9), 0 0 24px rgba(56, 189, 248, 0.4) !important;
+                    border: 1.5px solid rgba(56, 189, 248, 0.55) !important;
+                    border-radius: 12px !important;
+                    background-color: #0b1329 !important;
+                    z-index: 9999999 !important;
+                }
+                div[data-baseweb="popover"] li[role="option"] {
+                    white-space: normal !important;
+                    word-break: break-word !important;
+                    overflow: visible !important;
+                    padding: 10px 14px !important;
+                    line-height: 1.4 !important;
+                    font-size: 13px !important;
+                    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+                    cursor: pointer !important;
+                }
+                div[data-baseweb="popover"] li[role="option"] * {
+                    white-space: normal !important;
+                    word-break: break-word !important;
+                    overflow: visible !important;
+                    text-overflow: unset !important;
+                }
+                div[data-baseweb="popover"] li[role="option"]:hover {
+                    background-color: rgba(56, 189, 248, 0.22) !important;
+                    color: #38bdf8 !important;
+                }
+            `;
+            doc.head.appendChild(st);
+        }
+
+        // Listener para asignar tooltip nativo completo en hover
+        if (!window.parent._epsg_tooltip_installed) {
+            window.parent._epsg_tooltip_installed = true;
+            doc.addEventListener('mouseover', function(e) {
+                const el = e.target.closest('li[role="option"], div[data-baseweb="select"]');
+                if (el) {
+                    const fullText = (el.innerText || el.textContent || '').trim();
+                    if (fullText && el.getAttribute('title') !== fullText) {
+                        el.setAttribute('title', fullText);
+                    }
+                }
+            }, true);
+        }
+    })();
+    </script>
+    """, height=0, width=0)
 
     # Sincronización segura de estados pendientes antes de instanciar widgets de Streamlit
     if "pending_detected_zone" in st.session_state:
@@ -3453,9 +3636,13 @@ def render_ui():
             except Exception:
                 st.session_state["sidebar_epsg_search_error"] = f"⚠️ El código EPSG:{num_code} no existe en la base de datos oficial."
         elif raw_val:
-            st.session_state["sidebar_epsg_search_error"] = f"⚠️ '{raw_val}' no es un código numérico EPSG válido."
+            st.session_state["sidebar_epsg_search_error"] = None
+            if "sidebar_epsg_select_widget" in st.session_state:
+                del st.session_state["sidebar_epsg_select_widget"]
         else:
             st.session_state["sidebar_epsg_search_error"] = None
+            if "sidebar_epsg_select_widget" in st.session_state:
+                del st.session_state["sidebar_epsg_select_widget"]
 
     def _on_sidebar_epsg_select_change():
         selected_item = st.session_state.get("sidebar_epsg_select_widget")
@@ -3562,16 +3749,20 @@ def render_ui():
         </div>
         """, unsafe_allow_html=True)
 
-    # Sincronización proactiva del valor en sesión para evitar cualquier fallback accidental a índice 0
+    # Sincronización limpia del índice seleccionado para evitar advertencias de Streamlit
     curr_epsg_widget_val = st.session_state.get("sidebar_epsg_select_widget")
-    if not curr_epsg_widget_val or curr_epsg_widget_val not in epsg_options:
-        st.session_state["sidebar_epsg_select_widget"] = epsg_options[default_epsg_idx]
+    if curr_epsg_widget_val and curr_epsg_widget_val in epsg_options:
+        sel_idx = epsg_options.index(curr_epsg_widget_val)
+    else:
+        sel_idx = default_epsg_idx
+        if "sidebar_epsg_select_widget" in st.session_state:
+            del st.session_state["sidebar_epsg_select_widget"]
 
     # Lista desplegable completa de Sistemas de Coordenadas
     selected_epsg_item = st.sidebar.selectbox(
         "📋 O selecciona de la lista desplegable:",
         options=epsg_options,
-        index=default_epsg_idx,
+        index=sel_idx,
         key="sidebar_epsg_select_widget",
         help="Pasa el mouse por encima de cualquier opción para ver su nombre completo y ámbito territorial.",
         on_change=_on_sidebar_epsg_select_change
@@ -3604,6 +3795,9 @@ def render_ui():
             )
     except Exception as crs_err:
         st.sidebar.error(f"⚠️ {crs_str} no reconocido: {crs_err}")
+
+    # Guía interactiva de recomendación de zonas oficiales para orientar al usuario
+    render_crs_zone_helper(epsg_code, active_search_query)
 
     # Herramienta para Instalar / Agregar un nuevo código EPSG o sistema personalizado
     with st.sidebar.expander("➕ Instalar / Agregar Nuevo EPSG", expanded=False):
