@@ -1879,7 +1879,7 @@ def discover_provider_models(
     if not force_refresh:
         cached = st.session_state.get(cache_key)
         if cached:
-            if provider == "gemini" and any(any(old in str(m).lower() for old in ["2.5", "2.0", "1.5", "1.0"]) for m in cached):
+            if provider == "gemini" and any(any(fake in str(m).lower() for fake in ["3.8", "3.6", "3.5", "4-argon", "1.5-pro", "2.5"]) for m in cached):
                 pass
             else:
                 return cached

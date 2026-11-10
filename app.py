@@ -4674,7 +4674,7 @@ def render_ui():
                 break
 
         auto_include_stitched = False
-        if has_any_multi and "mosaico" in large_area_mode.lower():
+        if has_any_multi and ("dividir" in large_area_mode.lower() or "teselas" in large_area_mode.lower()):
             auto_include_stitched = st.checkbox(
                 "📦 Incluir de una vez ambas opciones en el ZIP (teselas separadas + imagen unida)",
                 value=False,
@@ -4709,7 +4709,7 @@ def render_ui():
             # Pre-calcular el plan de descarga para conocer el total exacto de imágenes/teselas a descargar
             planned_downloads = []
             is_stitch_mode_global = ("unir" in large_area_mode.lower()) or ("cosido" in large_area_mode.lower())
-            is_tiled_mode_global = ("mosaico" in large_area_mode.lower()) or ("teselas" in large_area_mode.lower())
+            is_tiled_mode_global = ("dividir" in large_area_mode.lower()) or ("teselas" in large_area_mode.lower())
 
             for r in selected_rows:
                 r_bounds = r["bounds"]
