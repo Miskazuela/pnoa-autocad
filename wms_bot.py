@@ -2657,13 +2657,15 @@ def _render_single_wms_card(data: Dict[str, Any], idx_suffix: str = ""):
         )
     with c_btn:
         st.write("")
-        btn_key = f"apply_wms_ai_{abs(hash(w_url + w_layer + idx_suffix))}"
+        clean_suffix = re.sub(r"[^a-zA-Z0-9_]", "_", str(idx_suffix))
+        url_hash = abs(hash(f"{w_url}_{w_layer}"))
+        btn_key = f"apply_wms_ai_{clean_suffix}_{url_hash}"
         if st.button("➕ Usar", key=btn_key, type="primary", use_container_width=True, help=f"Cargar '{w_name}' directamente en el visor"):
             apply_wms_to_application(w_url, w_layer, w_name, region=w_region)
     st.markdown('<div class="wms-row-divider"></div>', unsafe_allow_html=True)
 
 
-def _parse_and_render_wms_actions(text: str):
+def _parse_and_render_wms_actions(text: str, scope_id: str = "wms"):
     """Detecta bloques [APPLY_WMS: {...}] y renderiza tarjetas visuales compactas e interactivas con botones directos."""
     pattern = r"\[APPLY_WMS:\s*(\{.*?\})\s*\]"
     matches = re.findall(pattern, text)
@@ -2689,13 +2691,13 @@ def _parse_and_render_wms_actions(text: str):
     # Si hay 5 o más, mostrar las primeras 3 y las demás en un expander para optimizar el espacio vertical
     direct_limit = 3 if len(parsed_layers) >= 5 else len(parsed_layers)
     for i, data in enumerate(parsed_layers[:direct_limit]):
-        _render_single_wms_card(data, idx_suffix=str(i))
+        _render_single_wms_card(data, idx_suffix=f"{scope_id}_{i}")
 
     if len(parsed_layers) > direct_limit:
         extra_count = len(parsed_layers) - direct_limit
         with st.expander(f"📂 Ver {extra_count} capa(s) más encontradas...", expanded=False):
             for i, data in enumerate(parsed_layers[direct_limit:]):
-                _render_single_wms_card(data, idx_suffix=f"ext_{i}")
+                _render_single_wms_card(data, idx_suffix=f"{scope_id}_ext_{i}")
 
     last_bracket = text.rfind("]")
     if last_bracket != -1 and last_bracket < len(text) - 1:
@@ -3367,12 +3369,12 @@ def render_wms_assistant_content(
     chat_box = st.container(height=395, border=False)
     bot_avatar_img = get_bot_avatar_path()
     with chat_box:
-        for msg in st.session_state["wms_chat_history"]:
+        for msg_idx, msg in enumerate(st.session_state["wms_chat_history"]):
             role = msg["role"]
             av = bot_avatar_img if role == "model" else None
             with st.chat_message(role, avatar=av):
                 if role == "model":
-                    _parse_and_render_wms_actions(msg["content"])
+                    _parse_and_render_wms_actions(msg["content"], scope_id=f"hist_{msg_idx}")
                 else:
                     st.markdown(msg["content"])
 
@@ -3444,7 +3446,8 @@ def render_wms_assistant_content(
                                 )
                                 bot_response = f"{bot_response}\n\n{offline_help}"
 
-                        _parse_and_render_wms_actions(bot_response)
+                        turn_scope = f"turn_{len(st.session_state['wms_chat_history'])}"
+                        _parse_and_render_wms_actions(bot_response, scope_id=turn_scope)
                         usage_label = _format_usage(res.get("usage"))
                         if usage_label:
                             st.session_state["wms_last_usage"] = res.get("usage")
@@ -3481,9 +3484,11 @@ def render_wms_assistant_content(
                             zone_disp=zone_disp,
                             is_context_q=is_context_q
                         )
-                    _parse_and_render_wms_actions(bot_response)
+                    turn_scope = f"turn_{len(st.session_state['wms_chat_history'])}"
+                    _parse_and_render_wms_actions(bot_response, scope_id=turn_scope)
 
             st.session_state["wms_chat_history"].append({"role": "model", "content": bot_response})
+            st.rerun()
 
 
 # --------------------------------------------------------------------------------------
