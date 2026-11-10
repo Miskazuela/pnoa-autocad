@@ -2628,58 +2628,79 @@ query_openai_wms = lambda p, k, h, c=None: query_universal_ai_wms(p, k, h, c, pr
 # --------------------------------------------------------------------------------------
 # 5. PARSEO DE ACCIONES WMS Y COMPONENTE MODAL / FLOTANTE
 # --------------------------------------------------------------------------------------
+def _render_single_wms_card(data: Dict[str, Any], idx_suffix: str = ""):
+    """Renderiza una fila horizontal ultra-compacta para una capa WMS con su botón de carga directa."""
+    w_name = data.get("name", "Servicio WMS")
+    w_url = data.get("url", "")
+    w_layer = data.get("layer", "")
+    w_region = data.get("region", "")
+    w_desc = data.get("description", "")
+    w_cat = data.get("category", "")
+
+    tag_parts = [p for p in [w_region, w_cat] if p]
+    tag_str = " · ".join(tag_parts) if tag_parts else "Oficial"
+    desc_short = f"{w_desc[:120]}..." if len(w_desc) > 120 else w_desc
+    layer_disp = f"<code>{w_layer}</code>" if w_layer else ""
+
+    c_inf, c_btn = st.columns([3.4, 1.2])
+    with c_inf:
+        st.markdown(
+            f'<div class="wms-compact-row">'
+            f'<div class="wms-row-title">🏛️ {w_name}</div>'
+            f'<div class="wms-row-meta">'
+            f'<span class="wms-card-tag">{tag_str}</span>'
+            f'{f" · <span class=\\\"wms-card-layer\\\">Capa: {layer_disp}</span>" if layer_disp else ""}'
+            f'</div>'
+            f'{f"<div class=\\\"wms-card-desc\\\">{desc_short}</div>" if desc_short else ""}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+    with c_btn:
+        st.write("")
+        btn_key = f"apply_wms_ai_{abs(hash(w_url + w_layer + idx_suffix))}"
+        if st.button("➕ Usar", key=btn_key, type="primary", use_container_width=True, help=f"Cargar '{w_name}' directamente en el visor"):
+            apply_wms_to_application(w_url, w_layer, w_name)
+    st.markdown('<div class="wms-row-divider"></div>', unsafe_allow_html=True)
+
+
 def _parse_and_render_wms_actions(text: str):
-    """Detecta bloques [APPLY_WMS: {...}] y renderiza tarjetas visuales compactas e interactivas."""
+    """Detecta bloques [APPLY_WMS: {...}] y renderiza tarjetas visuales compactas e interactivas con botones directos."""
     pattern = r"\[APPLY_WMS:\s*(\{.*?\})\s*\]"
     matches = re.findall(pattern, text)
     if not matches:
         st.markdown(text)
         return
 
-    # Si hay bloques [APPLY_WMS:], conservamos el texto introductorio y reemplazamos
-    # las listas gigantes de texto '###' por tarjetas visuales estilizadas y ultra-compactas.
+    # Limpiar etiquetas y avisos residuales de texto estático
     no_tags = re.sub(pattern, "", text)
     intro_text = no_tags.split("###")[0].strip() if "###" in no_tags else no_tags.strip()
+    intro_text = re.sub(r"\n?\*?💡\s*\+\d+\s*capas más.*?\*?", "", intro_text, flags=re.IGNORECASE).strip()
     if intro_text:
         st.markdown(intro_text)
 
+    parsed_layers = []
     for m in matches:
         try:
-            data = json.loads(m)
-            w_name = data.get("name", "Servicio WMS")
-            w_url = data.get("url", "")
-            w_layer = data.get("layer", "")
-            w_region = data.get("region", "")
-            w_desc = data.get("description", "")
-            w_cat = data.get("category", "")
+            parsed_layers.append(json.loads(m))
         except Exception:
             continue
 
-        tag_parts = [p for p in [w_region, w_cat] if p]
-        tag_str = " · ".join(tag_parts) if tag_parts else "Oficial"
-        desc_short = f"{w_desc[:95]}..." if len(w_desc) > 95 else w_desc
-        layer_disp = f"Capa: <code>{w_layer}</code>" if w_layer else ""
+    # Si hay hasta 4 capas, renderizarlas todas directamente
+    # Si hay 5 o más, mostrar las primeras 3 y las demás en un expander para optimizar el espacio vertical
+    direct_limit = 3 if len(parsed_layers) >= 5 else len(parsed_layers)
+    for i, data in enumerate(parsed_layers[:direct_limit]):
+        _render_single_wms_card(data, idx_suffix=str(i))
 
-        desc_html = f'<div class="wms-card-desc">{desc_short}</div>' if desc_short else ''
-        card_html = (
-            '<div class="wms-compact-card">'
-            '<div class="wms-card-top">'
-            f'<span class="wms-card-title">🏛️ {w_name}</span>'
-            f'<span class="wms-card-tag">{tag_str}</span>'
-            '</div>'
-            f'{desc_html}'
-            f'<div class="wms-card-meta">{layer_disp}</div>'
-            '</div>'
-        )
-        st.markdown(card_html, unsafe_allow_html=True)
-
-        btn_key = f"apply_wms_ai_{abs(hash(w_url + w_layer))}"
-        if st.button("Agregar WMS al visor", key=btn_key, type="primary", use_container_width=True):
-            apply_wms_to_application(w_url, w_layer, w_name)
+    if len(parsed_layers) > direct_limit:
+        extra_count = len(parsed_layers) - direct_limit
+        with st.expander(f"📂 Ver {extra_count} capa(s) más encontradas...", expanded=False):
+            for i, data in enumerate(parsed_layers[direct_limit:]):
+                _render_single_wms_card(data, idx_suffix=f"ext_{i}")
 
     last_bracket = text.rfind("]")
     if last_bracket != -1 and last_bracket < len(text) - 1:
         trailing = text[last_bracket+1:].strip()
+        trailing = re.sub(r"\*?💡\s*\+\d+\s*capas más.*?\*?", "", trailing, flags=re.IGNORECASE).strip()
         if trailing and not trailing.startswith("###") and not trailing.startswith("-"):
             st.caption(trailing)
 
@@ -2897,8 +2918,8 @@ def render_wms_assistant_content(
             st.session_state["wms_chat_history"] = []
             st.rerun()
 
-    # Contenedor principal de conversación: altura calculada para que TODO quepa siempre en pantalla
-    chat_box = st.container(height=330, border=False)
+    # Contenedor principal de conversación: altura calculada para aprovechar el nuevo espacio del widget
+    chat_box = st.container(height=395, border=False)
     bot_avatar_img = get_bot_avatar_path()
     with chat_box:
         for msg in st.session_state["wms_chat_history"]:
@@ -2953,7 +2974,7 @@ def render_wms_assistant_content(
                             effective_fallback = project_geo_keys if not q_detected_geos else None
                             local_matches = search_wms_catalog(query_to_run, project_geo_fallback=effective_fallback)
                             if local_matches:
-                                top = local_matches[:3]
+                                top = local_matches[:8]
                                 lines = [
                                     bot_response,
                                     "\n\n🔍 **Capas oficiales recomendadas:**\n"
@@ -2991,7 +3012,7 @@ def render_wms_assistant_content(
                     matches = search_wms_catalog(query_to_run, project_geo_fallback=effective_geo_fallback)
 
                     if matches:
-                        top = matches[:3]
+                        top = matches[:8]
                         if is_context_q and zone_disp:
                             header_lbl = f"🔍 **{len(matches)} capas oficiales para {zone_disp}:**\n"
                         else:
@@ -3007,8 +3028,6 @@ def render_wms_assistant_content(
                                 "description": m.get("description", "")
                             }
                             lines.append(f"[APPLY_WMS: {json.dumps(payload)}]")
-                        if len(matches) > 3:
-                            lines.append(f"\n*💡 +{len(matches) - 3} capas más en Ajustes.*")
                         bot_response = "\n".join(lines)
                     else:
                         bot_response = build_smart_offline_response(
@@ -3227,13 +3246,13 @@ def render_floating_assistant_button(
         pointer-events: none !important;
     }}
 
-    /* 2. Tarjeta del widget: altura EXACTA para que TODO quede en pantalla y la barra de chat NUNCA se corte */
+    /* 2. Tarjeta del widget: dimensiones optimizadas para amplio aprovechamiento del espacio */
     div[data-testid="stDialog"] > div,
     div.stDialog > div {{
-        width: 385px !important;
+        width: 480px !important;
         max-width: calc(100vw - 20px) !important;
-        height: min(485px, calc(100vh - 95px)) !important;
-        max-height: calc(100vh - 95px) !important;
+        height: min(560px, calc(100vh - 85px)) !important;
+        max-height: calc(100vh - 85px) !important;
         margin: 0 !important;
         padding: 0 !important;
         background-color: #0b1329 !important;
@@ -3485,71 +3504,72 @@ def render_floating_assistant_button(
         border-top: 1px solid rgba(56, 189, 248, 0.2) !important;
     }}
 
-    /* Tarjetas visuales interactivas para capas WMS recomendadas */
-    .wms-compact-card {{
-        background: rgba(15, 23, 42, 0.85);
-        border: 1px solid rgba(56, 189, 248, 0.32);
-        border-radius: 8px;
-        padding: 5px 8px;
-        margin-top: 4px;
-        margin-bottom: 2px;
+    /* Filas compactas e interactivas para capas WMS recomendadas */
+    .wms-compact-row {{
+        padding: 2px 0 3px 0;
     }}
-    .wms-card-top {{
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 6px;
-        margin-bottom: 2px;
+    .wms-row-title {{
+        font-weight: 700 !important;
+        color: #38bdf8 !important;
+        font-size: 11.5px !important;
+        line-height: 1.3 !important;
+        margin-bottom: 2px !important;
+        word-break: break-word !important;
     }}
-    .wms-card-title {{
-        font-weight: 700;
-        color: #38bdf8;
-        font-size: 12px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+    .wms-row-meta {{
+        display: flex !important;
+        align-items: center !important;
+        gap: 5px !important;
+        flex-wrap: wrap !important;
+        margin-bottom: 3px !important;
+        font-size: 9.5px !important;
     }}
     .wms-card-tag {{
-        font-size: 9.5px;
-        background: rgba(56, 189, 248, 0.18);
-        color: #7dd3fc;
-        padding: 1px 5px;
-        border-radius: 4px;
-        font-weight: 600;
-        white-space: nowrap;
+        font-size: 9.5px !important;
+        background: rgba(56, 189, 248, 0.18) !important;
+        color: #7dd3fc !important;
+        padding: 1px 5px !important;
+        border-radius: 4px !important;
+        font-weight: 600 !important;
+        white-space: nowrap !important;
+    }}
+    .wms-card-layer {{
+        font-size: 9.5px !important;
+        color: #94a3b8 !important;
+    }}
+    .wms-card-layer code {{
+        color: #34d399 !important;
+        font-size: 9.5px !important;
+        background: rgba(15, 23, 42, 0.7) !important;
+        padding: 1px 4px !important;
+        border-radius: 3px !important;
     }}
     .wms-card-desc {{
-        font-size: 10.5px;
-        color: #cbd5e1;
-        line-height: 1.3;
-        margin-bottom: 2px;
+        font-size: 10px !important;
+        color: #cbd5e1 !important;
+        line-height: 1.25 !important;
+        margin-bottom: 2px !important;
     }}
-    .wms-card-meta {{
-        font-size: 9.5px;
-        color: #94a3b8;
-        font-family: monospace;
-    }}
-    .wms-card-meta code {{
-        color: #34d399;
-        font-size: 9.5px;
-        background: rgba(15, 23, 42, 0.6);
-        padding: 1px 4px;
-        border-radius: 3px;
+    .wms-row-divider {{
+        height: 1px;
+        background: rgba(56, 189, 248, 0.14);
+        margin: 4px 0 5px 0;
     }}
 
-    /* Botón de cargar capa compacto y estilizado */
+    /* Botón de cargar capa compacto y alineado */
     div[data-testid="stDialog"] button[kind="primary"] {{
-        height: 28px !important;
-        min-height: 28px !important;
-        font-size: 11.5px !important;
+        height: 27px !important;
+        min-height: 27px !important;
+        font-size: 11px !important;
         font-weight: 700 !important;
-        padding: 0 8px !important;
+        padding: 0 6px !important;
         border-radius: 6px !important;
-        margin-bottom: 5px !important;
+        margin: 2px 0 0 0 !important;
         background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
         border: 1px solid #38bdf8 !important;
         box-shadow: 0 2px 6px rgba(2, 132, 199, 0.3) !important;
         transition: all 0.15s ease !important;
+        white-space: nowrap !important;
     }}
     div[data-testid="stDialog"] button[kind="primary"]:hover {{
         background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%) !important;
