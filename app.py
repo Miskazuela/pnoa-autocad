@@ -2507,6 +2507,12 @@ def get_compatible_crs_codes(crs_str: str) -> List[str]:
         if 48 <= z <= 58:
             candidates.extend([f"EPSG:{7800 + z}", f"EPSG:{28300 + z}"])
 
+    # Colombia: Interoperabilidad entre Origen Nacional 9377 y Bogotá/Regionales 3116
+    elif code == 9377:
+        candidates.extend(["EPSG:3116", "EPSG:4326", "CRS:84"])
+    elif code == 3116:
+        candidates.extend(["EPSG:9377", "EPSG:4326", "CRS:84"])
+
     seen = set()
     res = []
     for c in candidates:

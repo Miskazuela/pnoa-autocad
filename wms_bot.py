@@ -105,14 +105,28 @@ WMS_DATABASE: List[Dict[str, Any]] = [
     # 🌎 AMÉRICA LATINA
     # ==========================================
     {
+        "id": "bogota_ideca_ortofoto_2020",
+        "name": "Bogotá - Ortofoto Oficial 2020 (IDECA / Catastro Distrital)",
+        "category": "🌎 América Latina",
+        "region": "Bogotá (Colombia)",
+        "url": "https://serviciosgis.catastrobogota.gov.co/image/services/imagenesfunciones/ortho2020funcion/ImageServer/WMSServer",
+        "default_layer": "ortho2020funcion",
+        "description": "Ortofotomosaico oficial aéreo de alta resolución de Bogotá D.C. (vuelo 2020) publicado por la Infraestructura de Datos Espaciales de Bogotá (IDECA / Catastro Distrital).",
+        "tags": ["bogota", "colombia", "ortofoto", "ortofotos", "2020", "ortho2020", "ideca", "catastro", "reciente", "aereo", "foto", "satelite"],
+        "layers": [
+            ("ortho2020funcion", "Ortofoto Bogotá 2020 (Color Verdadero)"),
+            ("ortho2020funcion:2020_NDVI", "NDVI Vegetación 2020")
+        ]
+    },
+    {
         "id": "bogota_ideca_ortofoto",
-        "name": "Bogotá - Ortofoto Oficial de Alta Resolución (IDECA / Catastro Distrital)",
+        "name": "Bogotá - Ortofoto Oficial 2017 (IDECA / Catastro Distrital)",
         "category": "🌎 América Latina",
         "region": "Bogotá (Colombia)",
         "url": "https://serviciosgis.catastrobogota.gov.co/arcgis/services/imagenes/Ortho2017/MapServer/WMSServer",
         "default_layer": "0",
-        "description": "Ortofotomosaico oficial aéreo de máxima resolución de Bogotá D.C. publicado por la Infraestructura de Datos Espaciales de Bogotá (IDECA / Catastro Distrital).",
-        "tags": ["bogota", "colombia", "ortofoto", "ortofotos", "ortoimagen", "ortoimagenes", "satelite", "aereo", "foto", "ideca", "catastro"],
+        "description": "Ortofotomosaico oficial aéreo de máxima resolución de Bogotá D.C. (vuelo 2017) publicado por la Infraestructura de Datos Espaciales de Bogotá (IDECA / Catastro Distrital).",
+        "tags": ["bogota", "colombia", "ortofoto", "ortofotos", "2017", "ortho2017", "ideca", "catastro", "foto", "aereo"],
         "layers": [("0", "Ortofotomosaico Bogotá D.C. 2017")]
     },
     {
@@ -1402,6 +1416,11 @@ def search_wms_catalog(
             if any(g in item_reg or g in item_name or g in item_tags for g in project_geo_fallback):
                 score += 45
 
+        # Bonificación a coincidencia exacta de año o versión (ej: 2020, 2017)
+        for qw in q_words:
+            if qw.isdigit() and len(qw) == 4 and qw in item_words:
+                score += 90
+
         if thematic_tokens:
             coverage_ratio = matched_tokens_count / max(len(thematic_tokens), 1)
             if coverage_ratio >= 1.0:
@@ -2193,7 +2212,10 @@ INSTRUCCIONES CLAVE Y REGLAS DE CONFIABILIDAD DE URLS:
    [APPLY_WMS: {{"name": "Nombre descriptivo", "url": "https://url-del-servicio...", "layer": "nombre_capa"}}]
 4. REGLA ESTRICTA DE URLS OFICIALES:
    - Para Colombia IGAC: Utiliza SIEMPRE 'https://mapas2.igac.gov.co/server/services/carto/carto100000colombia2019/MapServer/WMSServer' (capa 34 para vías, 0 para base) o 'https://mapas2.igac.gov.co/server/services/carto/municipios/MapServer/WMSServer'. NUNCA uses 'mapas.igac.gov.co' porque ese servidor antiguo ya no existe.
-   - Para Bogotá: Ortofoto oficial IDECA 'https://serviciosgis.catastrobogota.gov.co/arcgis/services/imagenes/Ortho2017/MapServer/WMSServer' (capa 0).
+   - Para Bogotá Ortofoto:
+     * Vuelo 2020 (más reciente oficial IDECA): 'https://serviciosgis.catastrobogota.gov.co/image/services/imagenesfunciones/ortho2020funcion/ImageServer/WMSServer' (capa 'ortho2020funcion').
+     * Vuelo 2017: 'https://serviciosgis.catastrobogota.gov.co/arcgis/services/imagenes/Ortho2017/MapServer/WMSServer' (capa '0').
+     * Si el usuario pide ortofoto de Bogotá en general o menciona 2020, prioriza la versión 2020.
    - Para Cali: IDESC 'https://ws-idesc.cali.gov.co/geoserver/wms'.
    - Para España Catastro: 'https://ovc.catastro.meh.es/Cartografia/WMS/ServidorWMS.aspx' (capa Catastro) o INSPIRE 'https://ovc.catastro.meh.es/cartografia/INSPIRE/spadgcwms.aspx'.
    - Si no estás 100% seguro de una URL fuera del catálogo, utiliza las del catálogo oficial verificado.
