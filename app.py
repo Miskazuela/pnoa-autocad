@@ -3015,17 +3015,141 @@ def fetch_xyz_ortho(
 # --------------------------------------------------------------------------------------
 # 4. MAPA INTERACTIVO DE CONFIRMACIÓN DE UBICACIÓN
 # --------------------------------------------------------------------------------------
+CRS_REGIONAL_CENTROIDS: Dict[int, Tuple[float, float, int]] = {
+    # 🇪🇸 España (Península, Islas y husos oficiales)
+    25830: (40.4168, -3.7038, 6),    # Península Central / Madrid (ETRS89 UTM 30N)
+    25829: (42.5000, -7.8000, 7),    # Galicia / Asturias / Huelva (ETRS89 UTM 29N)
+    25831: (41.4000, 1.8000, 7),     # Cataluña / Baleares / C. Valenciana (ETRS89 UTM 31N)
+    25828: (28.4500, -15.5000, 7),   # Islas Canarias (ETRS89 UTM 28N)
+    32628: (28.3000, -15.5000, 8),   # Islas Canarias Oficial (WGS 84 UTM 28N)
+    23030: (40.4168, -3.7038, 6),    # España ED50 UTM 30N
+    23029: (42.5000, -7.8000, 7),    # España ED50 UTM 29N
+    23031: (41.4000, 1.8000, 7),     # España ED50 UTM 31N
+    4258:  (40.4168, -3.7038, 6),    # ETRS89 Geográficas Lat/Lon España
+    4230:  (40.4168, -3.7038, 6),    # ED50 Geográficas Lat/Lon España
+    # 🇨🇴 Colombia
+    9377: (4.6500, -74.1000, 6),     # Colombia Origen Nacional Oficial
+    3116: (4.7110, -74.0721, 9),     # Bogotá D.C. / Cundinamarca (MAGNA Bogotá)
+    3115: (5.0000, -75.8000, 8),     # Medellín / Cali / Antioquia / Valle (MAGNA Oeste)
+    3117: (6.5000, -73.1000, 8),     # Bucaramanga / Boyacá / Santander (MAGNA Este Central)
+    3118: (4.0000, -71.0000, 7),     # Orinoquía / Llanos / Amazonía (MAGNA Este)
+    3114: (2.2000, -78.0000, 8),     # Nariño / Pasto / Chocó (MAGNA Oeste Lejano)
+    4686: (4.6500, -74.1000, 6),     # MAGNA-SIRGAS Geográficas
+    # 🇲🇽 México
+    6369: (19.4326, -99.1332, 8),    # Ciudad de México / Centro / Puebla (UTM 14N)
+    6368: (20.6597, -103.3496, 8),   # Jalisco / Guadalajara / Nayarit (UTM 13N)
+    6370: (19.8000, -90.5000, 7),    # Veracruz / Tabasco / Yucatán / Cancún (UTM 15N)
+    6367: (29.0730, -110.9559, 7),   # Sonora / Hermosillo / Chihuahua (UTM 12N)
+    6366: (32.5149, -117.0382, 8),   # Baja California / Tijuana (UTM 11N)
+    4484: (31.5000, -115.5000, 7),   # Baja California ITRF92 (UTM 11N)
+    # 🇵🇦 Panamá
+    32618: (8.9824, -79.5199, 9),    # Ciudad de Panamá / Canal / Colón (UTM 18N)
+    32617: (8.4273, -82.4309, 9),    # Chiriquí / David / Bocas del Toro (UTM 17N)
+    5368:  (8.9824, -79.5199, 9),    # MACARIO SOLIS Panamá
+    5370:  (8.9824, -79.5199, 9),    # MACARIO SOLIS Panamá
+    5371:  (8.9824, -79.5199, 9),    # MACARIO SOLIS Panamá
+    5469:  (8.9824, -79.5199, 9),    # Panamá-Colón 1911
+    # 🇵🇪 Perú
+    32718: (-12.0464, -77.0428, 9),  # Lima / Callao / Junín (UTM 18S)
+    32717: (-5.1945, -80.6328, 8),   # Piura / Trujillo / Norte (UTM 17S)
+    32719: (-14.5000, -72.0000, 7),  # Cusco / Arequipa / Sur (UTM 19S)
+    # 🇨🇱 Chile
+    5361: (-33.4489, -70.6693, 8),   # Santiago / Valparaíso / Centro (UTM 19S)
+    5362: (-23.6509, -70.3975, 7),   # Antofagasta / Norte (UTM 18S)
+    # 🇦🇷 Argentina
+    5346: (-34.6037, -58.3816, 7),   # Buenos Aires / Faja 4
+    5347: (-35.0000, -57.5000, 7),   # La Plata / Faja 5
+    # 🇧🇪 Bélgica
+    31370: (50.8503, 4.3517, 8),     # Bruselas / Bélgica Lambert 72
+    3812:  (50.8503, 4.3517, 8),     # Bélgica Lambert 2008
+    # 🇸🇪 Suecia (Únicamente si se selecciona expresamente SWEREF99 TM)
+    3006: (59.3293, 18.0686, 6),     # Estocolmo / SWEREF99 TM
+    # 🇦🇺 Australia
+    7855: (-37.8136, 144.9631, 8),   # Melbourne (MGA zone 55)
+    7856: (-33.8688, 151.2093, 8),   # Sydney (MGA zone 56)
+    7854: (-31.9505, 115.8605, 8),   # Perth (MGA zone 54)
+    28355: (-37.8136, 144.9631, 8),
+    28356: (-33.8688, 151.2093, 8),
+    # 🇺🇸 Estados Unidos
+    26918: (40.7128, -74.0060, 8),   # Nueva York / NAD83 zone 18N
+    26910: (37.7749, -122.4194, 8),  # California / San Francisco (NAD83 zone 10N)
+    # 🌎 Sistemas Globales (Inician en España como vista de bienvenida predeterminada)
+    3857: (40.4168, -3.7038, 6),     # Web Mercator
+    4326: (40.4168, -3.7038, 6),     # WGS 84 Geográficas
+    32630: (40.4168, -3.7038, 6),    # WGS 84 UTM 30N
+}
+
+
 def get_crs_default_center(crs_str: str) -> Tuple[float, float, int]:
-    """Obtiene latitud, longitud y nivel de zoom aproximados para centrar el mapa según el CRS activo."""
+    """
+    Obtiene latitud, longitud y nivel de zoom precisos para centrar el visor
+    según la región y el sistema de coordenadas de referencia (CRS) activo.
+    Inicia por defecto en España (Península Ibérica / Madrid) para EPSG:25830.
+    """
     try:
+        clean_num_str = re.sub(r"[^\d]", "", str(crs_str))
+        if clean_num_str.isdigit():
+            num_code = int(clean_num_str)
+            if num_code in CRS_REGIONAL_CENTROIDS:
+                return CRS_REGIONAL_CENTROIDS[num_code]
+
         c = CRS.from_user_input(crs_str)
+        epsg_resolved = c.to_epsg()
+        if epsg_resolved and epsg_resolved in CRS_REGIONAL_CENTROIDS:
+            return CRS_REGIONAL_CENTROIDS[epsg_resolved]
+
+        c_name = (c.name or "").lower()
+        area_name = (c.area_of_use.name if c.area_of_use else "").lower()
+        full_text = f"{c_name} {area_name}"
+
+        # Reconocimiento inteligente por país en metadatos oficiales del CRS
+        if any(k in full_text for k in ["spain", "españa", "etrs89", "ed50", "canary", "canarias", "balearic"]):
+            if "canary" in full_text or "canarias" in full_text:
+                return 28.3000, -15.5000, 8
+            if "galicia" in full_text or "29n" in full_text:
+                return 42.5000, -7.8000, 7
+            if "catal" in full_text or "balearic" in full_text or "31n" in full_text:
+                return 41.4000, 1.8000, 7
+            return 40.4168, -3.7038, 6
+
+        if "colombia" in full_text or "magna" in full_text:
+            return 4.6500, -74.1000, 6
+
+        if "mexic" in full_text or "méxic" in full_text:
+            return 19.4326, -99.1332, 7
+
+        if "panam" in full_text:
+            return 8.9824, -79.5199, 9
+
+        if "peru" in full_text or "perú" in full_text:
+            return -12.0464, -77.0428, 8
+
+        if "chile" in full_text:
+            return -33.4489, -70.6693, 7
+
+        if "argentin" in full_text or "posgar" in full_text:
+            return -34.6037, -58.3816, 6
+
+        if "belgi" in full_text:
+            return 50.8503, 4.3517, 8
+
+        if "sweden" in full_text or "sweref" in full_text:
+            return 59.3293, 18.0686, 6
+
         a = c.area_of_use
         if a and a.west is not None and a.east is not None and a.south is not None and a.north is not None:
-            lat = max(-80.0, min(84.0, (a.south + a.north) / 2.0))
+            lat_south = max(-80.0, a.south)
+            lat_north = min(84.0, a.north)
+            if lat_north > 70.0 and lat_south < 45.0:
+                lat = lat_south + (min(55.0, lat_north) - lat_south) * 0.5
+            else:
+                lat = (lat_south + lat_north) / 2.0
             lon = (a.west + a.east) / 2.0
             return lat, lon, 7
     except Exception:
         pass
+
+    # Fallback predeterminado de bienvenida: España Peninsular / Madrid
     return 40.4168, -3.7038, 6
 
 
